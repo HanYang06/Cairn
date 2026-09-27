@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.core import Core, Managed
 from core.storage import Block, BodyField
-from core.types import Oid
+from core.types import ValueUuid
 from core.types.attr import Attr
 
 from ..shared.base import UNSET, normalize_tags
@@ -78,7 +78,7 @@ class Project(Managed):
         self.core.put(data)
         return data
 
-    def load(self, oid: Oid | str) -> ProjectData:
+    def load(self, oid: str) -> ProjectData:
         """按 oid 载入项目数据（经内核）。"""
         data: ProjectData = self.core.get(ProjectData, str(oid))
         data.core = self.core
@@ -113,18 +113,18 @@ class Project(Managed):
     def add_member(
         self,
         data: ProjectData,
-        member: Oid | str,
+        member: str,
         *,
         relation: str = CONTAINS,
     ) -> Relation:
         """把一个对象加为项目成员（已存在则返回既有边，保证幂等）。"""
-        target = Oid.parse(str(member))
+        target = str(ValueUuid.parse(str(member)))
         for edge in Relation.outbound(self.core, data.oid, relation=relation):
             if edge.target == target:
                 return edge
         return Relation.create(self.core, data.oid, member, relation=relation, domain="project")
 
-    def members(self, data: ProjectData) -> list[Oid]:
+    def members(self, data: ProjectData) -> list[str]:
         """项目成员（``contains`` 边的目标）。"""
         return [edge.target for edge in Relation.outbound(self.core, data.oid, relation=CONTAINS)]
 

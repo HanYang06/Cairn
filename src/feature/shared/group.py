@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from core.storage import Block, BodyField
-from core.types import Oid
+from core.types import ValueUuid
 from core.types.attr import Attr  # noqa: TC001 — 标注工具在类体里被解析器扫描，运行期必须存在
 
 from .base import DomainError
@@ -65,7 +65,7 @@ class GroupData(Block):
         """新建一个组并落盘；给了 ``parent`` 则同时加入父组。"""
         data = cls()
         data.core = core  # 数据对象身上带内核（它继承 Block，不继承 Managed）
-        data.gid = str(Oid.new())
+        data.gid = str(ValueUuid.new())
         data.title = title
         data.key = key
         data.owner = owner

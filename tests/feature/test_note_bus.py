@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from core import Core, ObjectNotFoundError
 from core.core import Managed
-from core.types import Oid
+from core.types import ValueUuid
 from core.types.event import Action, Intent
 from feature import Note
 
@@ -75,7 +75,7 @@ def test_action_error_propagates_to_outcome(core: Core) -> None:
     notes = Note(core)
     outcome = core.send(
         Intent.GET,
-        Action(role_obj=notes, call_function="load", call_args={"oid": str(Oid.new())}),
+        Action(role_obj=notes, call_function="load", call_args={"oid": str(ValueUuid.new())}),
     )
     assert not outcome.ok
     assert isinstance(outcome.failed[0].error, ObjectNotFoundError)

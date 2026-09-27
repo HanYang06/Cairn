@@ -9,7 +9,7 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from core.types import Oid
+from core.types import ValueUuid
 
 Line = dict[str, Any]
 Marker = dict[str, int]
@@ -22,7 +22,7 @@ OVERLONG_WEIGHT = 300.0
 
 def new_id() -> str:
     """生成一个行身份（ULID）。"""
-    return str(Oid.new())
+    return str(ValueUuid.new())
 
 
 def is_marker(value: Any) -> bool:

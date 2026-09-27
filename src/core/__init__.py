@@ -28,7 +28,6 @@ from .types import (
     CorruptObjectError,
     ObjectInfo,
     ObjectNotFoundError,
-    Oid,
 )
 
 
@@ -59,6 +58,5 @@ __all__ = [
     "Managed",
     "ObjectInfo",
     "ObjectNotFoundError",
-    "Oid",
     "Signal",
 ]

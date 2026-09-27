@@ -55,8 +55,8 @@ from core.types import (
     ROLE_DATA,
     CairnError,
     CorruptObjectError,
-    Oid,
     TypeInfo,
+    ValueUuid,
     collect_fields,
     register,
 )
@@ -65,10 +65,12 @@ from core.types.attr import Attr, Data
 if TYPE_CHECKING:
     import builtins
 
-BLOCK_VERSION = 1
-
 INDEX_TYPE = "index"
 PART_TYPE = "part"
+"""分片用到的两个块类型（大 body 切成 part、由 index 块聚合）。
+
+**预留**：分片尚未接到块面（见设计篇 §5.6 的分片粒度与 §12），此处只留词表。
+"""
 
 _MISSING = object()
 
@@ -303,18 +305,6 @@ class Block:
                 )
             )
 
-    # ---- 领域自描述与绑定（由桶在挂载 / 写入时调用）----
-    @classmethod
-    def tables(cls) -> dict[str, dict[str, str]]:
-        """领域自描述的业务表：``{表名: {列名: 类型/约束}}``，可含关联表。"""
-        return {}
-
-    @classmethod
-    def bind_tables(cls, bucket: Any) -> None:
-        """领域建表：默认把 ``tables()`` 声明建出来；子类可重写加关联动作。"""
-        for name, columns in cls.tables().items():
-            bucket.table(name, **columns)
-
     def __init__(  # noqa: PLR0913 — 块记录的扁平字段构造器，拆包反而更绕
         self,
         *,
@@ -330,7 +320,7 @@ class Block:
         size: int = 0,
     ) -> None:
         self._id: str | None = None
-        self.id = id if id is not None else str(Oid.new())
+        self.id = id if id is not None else str(ValueUuid.new())
         self.type = _type_name(type if type is not None else self.__class__.type)
         if body is not _MISSING:
             self.body = body
@@ -445,8 +435,9 @@ class Block:
     # ---- 挂门户之后的通用读写（save / delete / info）----
     # 领域结构直接继承本类，不再有中间层；这些方法对任何块都通用。
     @property
-    def oid(self) -> Oid:
-        return Oid.parse(self.id)
+    def oid(self) -> str:
+        """对象身份的字符串形态（与 `ObjectInfo.oid` 同名同义）。"""
+        return str(ValueUuid.parse(self.id))
 
     @property
     def info(self) -> Any:
@@ -524,7 +515,7 @@ class Block:
         return self.core
 
     @classmethod
-    def load(cls, portal: Any, oid: Oid | str) -> Self:
+    def load(cls, portal: Any, oid: str) -> Self:
         """经门户载入对象并挂接（``portal`` 是 `Core`）。"""
         block: Self = portal.storage.get(cls, str(oid))
         block.attach(portal)
@@ -555,7 +546,6 @@ register(
 
 
 __all__ = [
-    "BLOCK_VERSION",
     "INDEX_TYPE",
     "PART_TYPE",
     "Attr",

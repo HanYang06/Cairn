@@ -31,7 +31,7 @@ from core.conf import (
 from core.conf import conf as engine_conf
 from core.conf.params import conf as kernel_conf
 from core.conf.schema import type_schema
-from core.storage import Bucket, BucketConfig, CarrierFile
+from core.storage import CarrierFile, Vault
 from core.storage.conf import conf as storage_conf
 from core.types import CairnError
 from core.types.cfg import Cfg, clear, item, items, register
@@ -401,21 +401,13 @@ def test_repo_projections_match_declarations() -> None:
 # ---- 接线：声明的默认值真的生效 ----
 
 
-def test_bucket_config_defaults_come_from_declarations() -> None:
-    """桶配置的默认值来自存储自己的声明（不是写死在 `BucketConfig` 里）。"""
-    resolved = BucketConfig()
-    assert resolved.block_max_bytes == storage_conf.block_max_bytes
-    assert resolved.pack_max_bytes == storage_conf.pack_max_bytes
-
-
-def test_config_file_drives_bucket_config(tmp_path: Path) -> None:
-    """改配置文件 → 桶跟着变（**文件说了算**），改完还原。"""
+def test_vault_takes_the_seal_line_from_config(tmp_path: Path) -> None:
+    """封口线是**策略**，每次写入按当前配置判（旧层那种"桶存一份配置"已退役）。"""
     original = engine_conf.get("storage.pack.max_bytes")
     try:
         engine_conf.set("storage.pack.max_bytes", 4096)
-        assert BucketConfig().pack_max_bytes == 4096
-        bucket = Bucket.create(tmp_path / "bucket")
-        assert bucket.config.pack_max_bytes == 4096
+        with Vault.open(tmp_path / "vault") as vault:
+            assert vault.bucket("main").pack_max_bytes == 4096
     finally:
         engine_conf.set("storage.pack.max_bytes", original)
 
@@ -434,15 +426,27 @@ def test_carrier_slot_bytes_default_comes_from_declaration(tmp_path: Path) -> No
         engine_conf.set("storage.pack.slot_bytes", original)
 
 
-def test_bucket_config_rejects_non_integer_value() -> None:
-    """值文件里的整数项被改成字符串 → 在配置边界报清楚，不在分片关键路径上抛 `TypeError`。"""
-    original = engine_conf.get("storage.block.max_bytes")
+def test_config_decides_the_slot_bytes_of_a_new_carrier(tmp_path: Path) -> None:
+    """新建的载体按**当前**配置的槽长建（改完配置，新载体用新槽长）。"""
+    original = engine_conf.get("storage.pack.slot_bytes")
     try:
-        engine_conf.set("storage.block.max_bytes", "1048576")
-        with pytest.raises(CairnError, match="必须是正整数"):
-            BucketConfig()
+        engine_conf.set("storage.pack.slot_bytes", 4096)
+        with Vault.open(tmp_path / "vault") as vault:
+            carrier = vault.bucket("main").new_pack()
+            assert carrier.layout.slot_bytes == 4096
     finally:
-        engine_conf.set("storage.block.max_bytes", original)
+        engine_conf.set("storage.pack.slot_bytes", original)
+
+
+def test_seal_line_rejects_non_integer_value(tmp_path: Path) -> None:
+    """值文件里的整数项被改成字符串 → 在配置边界报清楚，不带进比较表达式抛 `TypeError`。"""
+    original = engine_conf.get("storage.pack.max_bytes")
+    try:
+        engine_conf.set("storage.pack.max_bytes", "1048576")
+        with Vault.open(tmp_path / "vault") as vault, pytest.raises(CairnError, match="正整数"):
+            _ = vault.bucket("main").pack_max_bytes
+    finally:
+        engine_conf.set("storage.pack.max_bytes", original)
 
 
 def test_kernel_log_level_is_applied() -> None:

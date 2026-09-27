@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.types import Oid
+from core.types import ValueUuid
 from feature.note import (
     CanvasBody,
     CanvasData,
@@ -164,7 +164,7 @@ def test_note_typed_canvas_and_marker() -> None:
 
 
 def test_note_typed_access_and_marker() -> None:
-    oid = str(Oid.new())
+    oid = str(ValueUuid.new())
     note = NoteData()
     note.body = ["图：", access_ref(0)]
     note.access = [oid]
@@ -178,7 +178,7 @@ def test_add_access_embeds_into_body() -> None:
     note = NoteData()
     note.body = ["看图"]
     note.access = []
-    entry = str(Oid.new())
+    entry = str(ValueUuid.new())
     note.access = [*note.access, entry]
     SVC._append_marker(note, access_ref(0))
     assert note.body[-1]["v"] == {"access": 0}
@@ -201,7 +201,7 @@ def test_reorder_keeps_style_by_line_id() -> None:
 def test_set_text_preserves_line_ids_and_markers() -> None:
     note = NoteData()
     note.body = ["前面", {"access": 0}, "后面"]
-    note.access = [str(Oid.new())]
+    note.access = [str(ValueUuid.new())]
     marker_id = note.body[1]["id"]
 
     SVC.set_text(note, "前面后面改")
@@ -264,7 +264,7 @@ def test_normalize_body_bare_string_splits_lines() -> None:
 
 def test_references_skips_invalid_ids() -> None:
     note = NoteData()
-    valid = Oid.new()
+    valid = ValueUuid.new()
     note.access = [str(valid), "not-an-oid", ""]
 
     assert note.references == (valid,)

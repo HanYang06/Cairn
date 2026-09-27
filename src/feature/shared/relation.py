@@ -18,7 +18,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, ClassVar
 
 from core.storage import canonical, decode_canonical
-from core.types import ObjectNotFoundError, Oid, now_ms
+from core.types import ObjectNotFoundError, ValueUuid, now_ms
 
 RELATION_KIND = "relation"
 RELATION_SCHEMA = 1
@@ -71,16 +71,16 @@ class Relation:
 
     # ---- 视图 ----
     @property
-    def oid(self) -> Oid:
-        return Oid.parse(self.id)
+    def oid(self) -> str:
+        return str(ValueUuid.parse(self.id))
 
     @property
-    def source(self) -> Oid:
-        return Oid.parse(self._src)
+    def source(self) -> str:
+        return str(ValueUuid.parse(self._src))
 
     @property
-    def target(self) -> Oid:
-        return Oid.parse(self._dst)
+    def target(self) -> str:
+        return str(ValueUuid.parse(self._dst))
 
     @property
     def relation(self) -> str:
@@ -107,15 +107,15 @@ class Relation:
     def create(  # noqa: PLR0913 — 建边入口：描述字段均有默认值
         cls,
         core: Any,
-        source: Oid | str,
-        target: Oid | str,
+        source: str,
+        target: str,
         relation: str = REFERENCES,
         *,
         domain: str = "",
         tags: Iterable[str] | Mapping[str, Any] | None = None,
         props: dict[str, Any] | None = None,
     ) -> Relation:
-        rid = str(Oid.new())
+        rid = str(ValueUuid.new())
         attrs = dict(props or {})
         at = attrs.pop("at", None)
         if tags:
@@ -128,8 +128,8 @@ class Relation:
         _table(core).insert(
             {
                 "id": rid,
-                "src": str(Oid.parse(str(source))),
-                "dst": str(Oid.parse(str(target))),
+                "src": str(ValueUuid.parse(str(source))),
+                "dst": str(ValueUuid.parse(str(target))),
                 "kind": str(relation),
                 "domain": str(domain),
                 "at": None if at is None else str(at),
@@ -145,8 +145,8 @@ class Relation:
         cls,
         core: Any,
         *,
-        source: Oid | str,
-        target: Oid | str,
+        source: str,
+        target: str,
         relation: str | None = None,
     ) -> int:
         """删掉匹配的关系行（返回条数）——与 ``create`` 对称，别留下过期边。
@@ -154,8 +154,8 @@ class Relation:
         关系是一等 DB 行，建边与拆边都归这里；``relation`` 省略时删该对端点的全部边。
         """
         where: dict[str, Any] = {
-            "src": str(Oid.parse(str(source))),
-            "dst": str(Oid.parse(str(target))),
+            "src": str(ValueUuid.parse(str(source))),
+            "dst": str(ValueUuid.parse(str(target))),
         }
         if relation is not None:
             where["kind"] = str(relation)
@@ -166,7 +166,7 @@ class Relation:
 
     # ---- 读 ----
     @classmethod
-    def load(cls, core: Any, oid: Oid | str) -> Relation:
+    def load(cls, core: Any, oid: str) -> Relation:
         rows = _table(core).select(id=str(oid))
         if not rows:
             raise ObjectNotFoundError(f"{oid} 不是关系")
@@ -196,11 +196,11 @@ class Relation:
     def outbound(
         cls,
         core: Any,
-        source: Oid | str,
+        source: str,
         *,
         relation: str | None = None,
     ) -> Iterator[Relation]:
-        where: dict[str, Any] = {"src": str(Oid.parse(str(source)))}
+        where: dict[str, Any] = {"src": str(ValueUuid.parse(str(source)))}
         if relation is not None:
             where["kind"] = relation
         for row in _table(core).select(**where):
@@ -210,11 +210,11 @@ class Relation:
     def backlinks(
         cls,
         core: Any,
-        target: Oid | str,
+        target: str,
         *,
         relation: str | None = None,
     ) -> Iterator[Relation]:
-        where: dict[str, Any] = {"dst": str(Oid.parse(str(target)))}
+        where: dict[str, Any] = {"dst": str(ValueUuid.parse(str(target)))}
         if relation is not None:
             where["kind"] = relation
         for row in _table(core).select(**where):

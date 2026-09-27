@@ -16,14 +16,12 @@ from .relation import Relation
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from core.types import Oid
-
 DERIVED_FROM = "derived-from"
 
 
 def derivatives(
     vault: Any,
-    oid: Oid | str,
+    oid: str,
     *,
     relation: str = DERIVED_FROM,
 ) -> Iterator[Relation]:
@@ -33,7 +31,7 @@ def derivatives(
 
 def lineage(
     vault: Any,
-    oid: Oid | str,
+    oid: str,
     *,
     relation: str = DERIVED_FROM,
 ) -> Iterator[Relation]:
@@ -43,14 +41,14 @@ def lineage(
 
 def descendants(
     vault: Any,
-    oid: Oid | str,
+    oid: str,
     *,
     relation: str = DERIVED_FROM,
-) -> tuple[Oid, ...]:
+) -> tuple[str, ...]:
     """所有（递归）派生自 ``oid`` 的对象。"""
     origin = str(oid)
     seen: set[str] = {origin}
-    order: list[Oid] = []
+    order: list[str] = []
     frontier = deque([origin])
     while frontier:
         current = frontier.popleft()
@@ -65,14 +63,14 @@ def descendants(
 
 def ancestors(
     vault: Any,
-    oid: Oid | str,
+    oid: str,
     *,
     relation: str = DERIVED_FROM,
-) -> tuple[Oid, ...]:
+) -> tuple[str, ...]:
     """``oid`` 的（递归）来源对象。"""
     origin = str(oid)
     seen: set[str] = {origin}
-    order: list[Oid] = []
+    order: list[str] = []
     frontier = deque([origin])
     while frontier:
         current = frontier.popleft()

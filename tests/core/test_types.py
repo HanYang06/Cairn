@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
+"""类型层的通用契约（身份凭证的形状与校验由 `test_id.py` 覆盖，此处不再重复）。"""
+
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
@@ -8,66 +10,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from core.types import (
-    Cid,
-    InvalidIdError,
-    ObjectInfo,
-    Oid,
-)
+from core.types import ObjectInfo, ValueUuid
 from core.types.attr import Attr
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-
-_CROCKFORD = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
-
-
-def test_oid_new_shape() -> None:
-    oid = Oid.new()
-    assert len(oid) == 26
-    assert set(oid) <= _CROCKFORD
-    assert oid[0] <= "7"
-
-
-def test_oid_new_is_unique() -> None:
-    oids = {Oid.new() for _ in range(1000)}
-    assert len(oids) == 1000
-    for oid in oids:
-        assert Oid.parse(oid) == oid
-
-
-def test_oid_parse_roundtrip() -> None:
-    oid = Oid.new()
-    assert Oid.parse(oid) == oid
-    assert Oid.parse(str(oid).lower()) == oid
-
-
-@pytest.mark.parametrize(
-    "bad",
-    ["", "SHORT", "0" * 25, "8" + "0" * 25, "0" * 25 + "!", "0" * 25 + "I"],
-)
-def test_oid_parse_rejects(bad: str) -> None:
-    with pytest.raises(InvalidIdError):
-        Oid.parse(bad)
-
-
-def test_cid_from_digest_and_parse() -> None:
-    digest = bytes(range(32))
-    cid = Cid.from_digest(digest)
-    assert len(cid) == 64
-    assert Cid.parse(str(cid)) == cid
-
-
-def test_cid_parse_rejects() -> None:
-    with pytest.raises(InvalidIdError):
-        Cid.parse("abc")
-    with pytest.raises(InvalidIdError):
-        Cid.parse("g" * 64)
-
-
-def test_cid_from_digest_rejects_wrong_length() -> None:
-    with pytest.raises(InvalidIdError):
-        Cid.from_digest(b"short")
 
 
 class _AttrsBox:
@@ -146,7 +93,7 @@ def test_attr_factory_gives_each_instance_its_own_container() -> None:
 
 
 def test_object_info_is_hashable_and_ignores_tags() -> None:
-    oid = Oid.new()
+    oid = ValueUuid.new()
     first = ObjectInfo(
         oid=oid, type="note", mime=None, size=0, created=0, updated=0, tags={"a": None}
     )
@@ -160,7 +107,7 @@ def test_object_info_is_hashable_and_ignores_tags() -> None:
 
 def test_value_types_are_frozen() -> None:
     info = ObjectInfo(
-        oid=Oid.new(),
+        oid=ValueUuid.new(),
         type="note",
         mime=None,
         size=0,

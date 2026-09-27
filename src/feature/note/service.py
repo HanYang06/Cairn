@@ -45,8 +45,6 @@ from .edit import (
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
-    from core.types import Oid
-
 
 class Note(Managed):
     """笔记域服务：创建 / 读写 / 落盘 / 关系 / 编辑操作。
@@ -86,7 +84,7 @@ class Note(Managed):
         self.save(data)
         return data
 
-    def load(self, oid: Oid | str) -> NoteData:
+    def load(self, oid: str) -> NoteData:
         """按 oid 载入一条笔记数据（经内核）。"""
         data: NoteData = self.core.get(NoteData, str(oid))
         data.core = self.core
@@ -313,7 +311,7 @@ class Note(Managed):
         self.save(data)
         return data
 
-    def link(self, data: NoteData, target: Oid | str, relation: str = "references") -> Any:
+    def link(self, data: NoteData, target: str, relation: str = "references") -> Any:
         """从本笔记向目标建一条关系。"""
         from ..shared.relation import Relation  # noqa: PLC0415 — 延迟导入，避免领域间加载期环
 
@@ -330,7 +328,7 @@ class Note(Managed):
     def add_access(
         self,
         data: NoteData,
-        oid: Oid | str,
+        oid: str,
         *,
         mime: str = "",
         name: str = "",

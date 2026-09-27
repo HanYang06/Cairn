@@ -1,28 +1,30 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-"""存储层：桶 + 块（新载体层已在位）。
+"""存储层：块 + 桶（四层一条线，见 `docs/architecture/storage-design.md`）。
 
-    Bucket      载体——受管的文件系统，**类**，不是数据结构（旧层，待退役）
-    Block       存储单元——``{id, checksum, type, body, attrs}``
-    CarrierFile 载体文件——定长槽 + 自框定记录；顺扫即可重建
-    Record      载体中的一条记录——头四项（总长 / 校验和 / ID / 槽数）+ 载荷
+    Storage     引擎角色——对象进 / 出 / 删（坐在块面与库之上）
+    BlockStore  块面——块 ⇄ 记录（内容记录 ＋ 块记录）
     Vault       多桶——一个库一个索引库；桶名是库里的一列
+    Bucket      一个桶——`vault/<桶名>/packs/` 下的一串载体
+    Record      载体中的一条记录——自框定（总长在最前）、自校验、自描述
+    CarrierFile 载体文件——定长槽 + 记录；顺扫即可重建
+    Index       索引库——对比 → 分类 → 处置；表声明编译成语句
 
 其余一切（笔记 / 项目 / 多媒体 / 索引 / 变更）都是块的一种 ``type`` / ``body``。
 
 > 字段标注（``Attr`` / ``Data``）**不在这里**：它们是**声明**，见 `core.types.attr`。
 > 存储只负责"放得进、取得出、找得到"，标注不属于它。
 >
-> 新旧两层**暂时并存**（接线与退役见 `docs/architecture/storage-design.md` §11）：
-> 新层的桶类与旧 ``Bucket`` 同名，过渡期只在 `core.storage.vault` 内可见
-> （``from core.storage.vault import Bucket``）；旧层退役后它就是 `core.storage.Bucket`。
+> 旧层（旧 `Bucket` / `Catalog` / `Oid` / `Cid`）**已退役**：载体、目录与身份都换成上面这一套，
+> 旧格式的库不予读取（`Vault.open` 会显式拒绝）。
 """
 
 from __future__ import annotations
 
+from core.types import BucketExistsError, BucketNotFoundError
+
 from .block import (
-    BLOCK_VERSION,
     INDEX_TYPE,
     PART_TYPE,
     Block,
@@ -32,16 +34,17 @@ from .block import (
     decode_canonical,
 )
 from .blocks import BlockStore
-from .bucket import CATALOG_NAME, Bucket, BucketConfig
 from .carrier import CARRIER_HEADER_BYTES, CARRIER_MAGIC, CarrierLayout
-from .catalog import BlockLocation, Catalog
 from .engine import Storage
 from .index import INDEX_NAME, Difference, Index, RebuildPlan
 from .io import CarrierFile
 from .record import Record, RecordHeader
-from .table import Table
+from .table import Table, create_table
 from .tables import Column, ColumnType, Owned, RebuildTier, declared_tables
 from .vault import (
+    DEFAULT_BUCKET,
+    PACKS_DIR,
+    Bucket,
     BucketRole,
     BucketState,
     Finding,
@@ -52,25 +55,24 @@ from .vault import (
 )
 
 __all__ = [
-    "BLOCK_VERSION",
     "CARRIER_HEADER_BYTES",
     "CARRIER_MAGIC",
-    "CATALOG_NAME",
+    "DEFAULT_BUCKET",
     "INDEX_NAME",
     "INDEX_TYPE",
+    "PACKS_DIR",
     "PART_TYPE",
     "Block",
-    "BlockLocation",
     "BlockStore",
     "Body",
     "BodyField",
     "Bucket",
-    "BucketConfig",
+    "BucketExistsError",
+    "BucketNotFoundError",
     "BucketRole",
     "BucketState",
     "CarrierFile",
     "CarrierLayout",
-    "Catalog",
     "Column",
     "ColumnType",
     "Difference",
@@ -88,6 +90,7 @@ __all__ = [
     "Table",
     "Vault",
     "canonical",
+    "create_table",
     "declared_tables",
     "decode_canonical",
 ]

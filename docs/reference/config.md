@@ -37,6 +37,6 @@
 
 - 用法契约与两个投影的由来：[配置引擎](../architecture/config.md)
 - 值文件与词表分别落在 `config/<hub>/…` 与 `schema/<hub>/…`；总词表是 `schema/settings.json`。
-- 格式版本号（`CATALOG_VERSION` / `BLOCK_VERSION` 这类改了会坏库的）**故意不进配置**，留在实现处。
+- 格式常量（载体魔数、文件头长度、记录头布局这类改了会坏库的）**故意不进配置**，留在实现处。
 - 想加一条配置：在**用到它的那个包**里声明（例：`src/core/storage/conf.py`），
   然后跑 `uv run python tools/gen_conf.py` 与 `uv run python tools/docgen.py --write`。
