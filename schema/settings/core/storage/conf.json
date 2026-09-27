@@ -18,229 +18,132 @@
     "storage.db.tables": {
       "type": "array",
       "items": {
-        "type": "object"
+        "title": "表声明",
+        "description": "一张表：名字、列、索引、重建档与归属",
+        "type": "object",
+        "required": [
+          "name",
+          "tier",
+          "columns"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "表名（小写字母 / 数字 / 下划线）"
+          },
+          "doc": {
+            "type": "string",
+            "description": "这张表是干什么的"
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "tier1",
+              "tier2",
+              "tier3"
+            ],
+            "description": "重建档：tier1 可扫载体重建 / tier2 需领域逻辑 / tier3 只能备份"
+          },
+          "owner": {
+            "type": "string",
+            "enum": [
+              "core",
+              "domain"
+            ],
+            "description": "归属：core 开库即对齐 / domain 挂载该域时才对齐"
+          },
+          "rebuild_from": {
+            "type": "string",
+            "description": "重建来源；tier3 留空"
+          },
+          "columns": {
+            "type": "array",
+            "description": "列：顺序即建表顺序",
+            "items": {
+              "title": "列",
+              "type": "object",
+              "required": [
+                "name",
+                "type"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "列名"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "integer",
+                    "real",
+                    "blob",
+                    "boolean"
+                  ],
+                  "description": "中立类型（不写方言）"
+                },
+                "primary_key": {
+                  "type": "boolean",
+                  "description": "主键（每表恰好一个）"
+                },
+                "not_null": {
+                  "type": "boolean",
+                  "description": "非空"
+                },
+                "unique": {
+                  "type": "boolean",
+                  "description": "唯一"
+                },
+                "default": {
+                  "type": [
+                    "string",
+                    "integer",
+                    "number",
+                    "boolean"
+                  ],
+                  "description": "默认值；只收标量"
+                },
+                "doc": {
+                  "type": "string",
+                  "description": "这一列是干什么的"
+                }
+              }
+            }
+          },
+          "indexes": {
+            "type": "array",
+            "description": "索引；名字由列组合推出，不手写",
+            "items": {
+              "title": "索引",
+              "type": "object",
+              "required": [
+                "columns"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "列组合"
+                },
+                "unique": {
+                  "type": "boolean",
+                  "description": "唯一索引"
+                },
+                "doc": {
+                  "type": "string",
+                  "description": "这个索引给哪种查询用"
+                }
+              }
+            }
+          }
+        }
       },
       "description": "索引库的表声明（**本体在这**：改它即改表；列项顺序即建表顺序）",
-      "default": [
-        {
-          "name": "bucket",
-          "doc": "桶登记：桶目录是存在证明，本表是登记",
-          "tier": "tier1",
-          "owner": "core",
-          "rebuild_from": "桶目录：扫 vault 下的桶目录",
-          "columns": [
-            {
-              "name": "name",
-              "type": "text",
-              "primary_key": true,
-              "doc": "桶名（即目录名）"
-            },
-            {
-              "name": "role",
-              "type": "text",
-              "default": "main",
-              "doc": "形态：主/归档/临时",
-              "not_null": true
-            },
-            {
-              "name": "state",
-              "type": "text",
-              "default": "mounted",
-              "doc": "挂载状态",
-              "not_null": true
-            },
-            {
-              "name": "created",
-              "type": "integer",
-              "default": 0,
-              "doc": "建立时刻",
-              "not_null": true
-            }
-          ]
-        },
-        {
-          "name": "record",
-          "doc": "身份到位置：一行一条记录（块记录与内容记录同表）",
-          "tier": "tier1",
-          "owner": "core",
-          "rebuild_from": "载体：顺扫全部记录，读记录头重建",
-          "columns": [
-            {
-              "name": "value_uuid",
-              "type": "text",
-              "primary_key": true,
-              "doc": "分配形态凭证"
-            },
-            {
-              "name": "value_hash",
-              "type": "text",
-              "doc": "摘要形态凭证（指向内容）",
-              "not_null": true
-            },
-            {
-              "name": "kind",
-              "type": "text",
-              "default": "",
-              "doc": "类型名（由程序给出）",
-              "not_null": true
-            },
-            {
-              "name": "bucket",
-              "type": "text",
-              "default": "",
-              "doc": "所在桶",
-              "not_null": true
-            },
-            {
-              "name": "pack",
-              "type": "text",
-              "default": "",
-              "doc": "所在载体名",
-              "not_null": true
-            },
-            {
-              "name": "slot_start",
-              "type": "integer",
-              "default": 0,
-              "doc": "起始槽",
-              "not_null": true
-            },
-            {
-              "name": "slot_head",
-              "type": "integer",
-              "default": 0,
-              "doc": "槽内偏移",
-              "not_null": true
-            },
-            {
-              "name": "slot_count",
-              "type": "integer",
-              "default": 1,
-              "doc": "跨槽数",
-              "not_null": true
-            },
-            {
-              "name": "size",
-              "type": "integer",
-              "default": 0,
-              "doc": "记录字节数",
-              "not_null": true
-            },
-            {
-              "name": "issued",
-              "type": "integer",
-              "default": 0,
-              "doc": "ID 签发时刻",
-              "not_null": true
-            },
-            {
-              "name": "created",
-              "type": "integer",
-              "default": 0,
-              "doc": "落盘时刻",
-              "not_null": true
-            },
-            {
-              "name": "updated",
-              "type": "integer",
-              "default": 0,
-              "doc": "最近写入时刻",
-              "not_null": true
-            }
-          ],
-          "indexes": [
-            {
-              "columns": [
-                "value_hash"
-              ],
-              "doc": "地址反查：这份内容被哪些记录引用"
-            },
-            {
-              "columns": [
-                "kind"
-              ],
-              "doc": "按类型筛选"
-            },
-            {
-              "columns": [
-                "bucket",
-                "pack"
-              ],
-              "doc": "按载体归拢"
-            },
-            {
-              "columns": [
-                "updated"
-              ],
-              "doc": "按时间排序"
-            }
-          ]
-        },
-        {
-          "name": "edge",
-          "doc": "关系边：一等行，src --kind--> dst",
-          "tier": "tier1",
-          "owner": "core",
-          "rebuild_from": "块记录：关系数据落在块内时由其派生",
-          "columns": [
-            {
-              "name": "id",
-              "type": "text",
-              "primary_key": true,
-              "doc": "边身份（由四元组算摘要）"
-            },
-            {
-              "name": "src",
-              "type": "text",
-              "doc": "源身份",
-              "not_null": true
-            },
-            {
-              "name": "dst",
-              "type": "text",
-              "doc": "目标身份",
-              "not_null": true
-            },
-            {
-              "name": "kind",
-              "type": "text",
-              "default": "",
-              "doc": "关系种类",
-              "not_null": true
-            },
-            {
-              "name": "domain",
-              "type": "text",
-              "default": "",
-              "doc": "归属域",
-              "not_null": true
-            },
-            {
-              "name": "created",
-              "type": "integer",
-              "default": 0,
-              "doc": "建立时刻",
-              "not_null": true
-            }
-          ],
-          "indexes": [
-            {
-              "columns": [
-                "src",
-                "kind"
-              ],
-              "doc": "出边（正向遍历）"
-            },
-            {
-              "columns": [
-                "dst",
-                "kind"
-              ],
-              "doc": "入边（反查 / backlinks）"
-            }
-          ]
-        }
-      ],
       "x-cairn-owner": "core.storage.conf.StorageConf",
       "x-cairn-fillable": true,
       "x-cairn-empty-ok": false

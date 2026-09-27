@@ -154,4 +154,73 @@ DEFAULT_TABLES: list[dict[str, Any]] = [
     },
 ]
 
-__all__ = ["DEFAULT_TABLES"]
+__all__ = ["DEFAULT_TABLES", "TABLE_SHAPE"]
+
+TABLE_SHAPE: dict[str, Any] = {
+    "title": "表声明",
+    "description": "一张表：名字、列、索引、重建档与归属",
+    "type": "object",
+    "required": ["name", "tier", "columns"],
+    "additionalProperties": False,
+    "properties": {
+        "name": {"type": "string", "description": "表名（小写字母 / 数字 / 下划线）"},
+        "doc": {"type": "string", "description": "这张表是干什么的"},
+        "tier": {
+            "type": "string",
+            "enum": ["tier1", "tier2", "tier3"],
+            "description": "重建档：tier1 可扫载体重建 / tier2 需领域逻辑 / tier3 只能备份",
+        },
+        "owner": {
+            "type": "string",
+            "enum": ["core", "domain"],
+            "description": "归属：core 开库即对齐 / domain 挂载该域时才对齐",
+        },
+        "rebuild_from": {"type": "string", "description": "重建来源；tier3 留空"},
+        "columns": {
+            "type": "array",
+            "description": "列：顺序即建表顺序",
+            "items": {
+                "title": "列",
+                "type": "object",
+                "required": ["name", "type"],
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string", "description": "列名"},
+                    "type": {
+                        "type": "string",
+                        "enum": ["text", "integer", "real", "blob", "boolean"],
+                        "description": "中立类型（不写方言）",
+                    },
+                    "primary_key": {"type": "boolean", "description": "主键（每表恰好一个）"},
+                    "not_null": {"type": "boolean", "description": "非空"},
+                    "unique": {"type": "boolean", "description": "唯一"},
+                    "default": {
+                        "type": ["string", "integer", "number", "boolean"],
+                        "description": "默认值；只收标量",
+                    },
+                    "doc": {"type": "string", "description": "这一列是干什么的"},
+                },
+            },
+        },
+        "indexes": {
+            "type": "array",
+            "description": "索引；名字由列组合推出，不手写",
+            "items": {
+                "title": "索引",
+                "type": "object",
+                "required": ["columns"],
+                "additionalProperties": False,
+                "properties": {
+                    "columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "列组合",
+                    },
+                    "unique": {"type": "boolean", "description": "唯一索引"},
+                    "doc": {"type": "string", "description": "这个索引给哪种查询用"},
+                },
+            },
+        },
+    },
+}
+"""表声明的**形状**（不是数据）：进词表供 IDE 补全与校验。"""

@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .errors import CairnError
@@ -68,6 +68,12 @@ class CfgItem:
     """``empty_ok=True`` 的增强写法：空值（``None`` / 空串 / 空容器）也按默认处理。"""
     fillable: bool = False
     """是否带值注册（带值才能补进 ``config/``）。"""
+    structure: dict[str, Any] = field(default_factory=dict)
+    """结构提示：这类值的**形状**（嵌套对象的 JSON Schema），供词表给 IDE 补全与校验。
+
+    给了它就不再往词表写 ``default``——那种键的值本身就是一份数据（如索引库的表声明），
+    整份抄进词表等于把词表变成第二份配置。
+    """
 
     def __post_init__(self) -> None:
         """路径必须是点分形式：空段会让文件归属算不出来。"""
@@ -115,7 +121,7 @@ class Cfg:
     默认值也没有 → 报错（不猜）。
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — 声明参数对应语义各异的槽位，合并反而更绕
         self,
         path: str,
         default: Any = _MISSING,
@@ -123,6 +129,7 @@ class Cfg:
         doc: str = "",
         empty_ok: bool = False,
         item_type: Any = None,
+        structure: dict[str, Any] | None = None,
     ) -> None:
         if not empty_ok and _is_empty_default(default):
             raise ValueError(
@@ -133,6 +140,7 @@ class Cfg:
         self.doc = doc
         self.empty_ok = empty_ok
         self._item_type = item_type
+        self.structure: dict[str, Any] = dict(structure or {})
         self.key = path
         self.owner = ""
         self.field = ""
@@ -167,6 +175,7 @@ class Cfg:
                 doc=self.doc or self._doc_of(owner),
                 empty_ok=self.empty_ok,
                 fillable=self.fillable,
+                structure=self.structure,
             )
         )
 

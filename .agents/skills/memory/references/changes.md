@@ -3,6 +3,20 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **词表补结构提示：词表写形状、值文件写数据**
+  （作者指出两点：① 这样生成词表恐怕生不出有效内容；② 词表里塞进整份表数据，看着像"标准配置"，
+  等于把可扩展性瞬间锁死）：
+  核实成立——生成的词表里 ``storage.db.tables`` 的 ``items`` 只有 ``{"type":"object"}``
+  （等于没写结构），而 266 行的词表里 220 行是把三张表的数据当 ``default`` 抄了一遍。
+  修法：`Cfg` / `CfgItem` 新增 **`structure`（结构提示）**，`core/conf/schema.py` 的
+  ``property_of`` 把它并入 ``items``（数组型）或 ``additionalProperties``（对象型），
+  **给了结构提示就不再往词表写 default**——那种键的值本身就是数据，抄进词表会让词表变成第二份配置。
+  新增 `core/storage/_defaults.py` 的 `TABLE_SHAPE`：表 / 列 / 索引三层的 JSON Schema
+  （required + 枚举：中立五型、三档重建档、core/domain 归属），`conf.py` 以
+  `Cfg("storage.db.tables", DEFAULT_TABLES, structure=TABLE_SHAPE)` 声明。
+  结果：词表里那一段现在有真结构可校验、**不含任何具体表数据**；值文件仍是数据本体。
+  并明确"这不锁死扩展性"：解析器与编译器内**无任何表名 / 列名硬编码**，
+  加表加列都只是改配置。核心 260 通过，`gen_conf --check` / `docgen --check` 全绿。
 - 2026-09-28 · 已定 · **表声明的方向改正：配置是本体，代码只读 / 校验 / 编译**
   （作者指出两处：① 生成的 JSON 压成一整行没法看；② **既然写进配置就该是人写人改的**，
   不该是机器塞进去的一个字符串）：

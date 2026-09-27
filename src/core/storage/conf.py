@@ -32,7 +32,7 @@ from typing import Any
 
 from core.types.cfg import Cfg
 
-from ._defaults import DEFAULT_TABLES
+from ._defaults import DEFAULT_TABLES, TABLE_SHAPE
 
 
 class StorageConf:
@@ -57,6 +57,7 @@ class StorageConf:
         "storage.db.tables",
         DEFAULT_TABLES,
         item_type=list[dict[str, Any]],
+        structure=TABLE_SHAPE,
         doc="索引库的表声明（**本体在这**：改它即改表；列项顺序即建表顺序）",
     )
 
