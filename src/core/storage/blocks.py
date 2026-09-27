@@ -160,20 +160,22 @@ class BlockStore:
         return self.vault.index.record_row(str(oid)) is not None
 
     def iter_blocks(self) -> Iterator[Block]:
-        """遍历全部块：读回每条记录，跳过内容记录。
+        """遍历全部块：**按索引走**，一个身份一次。
 
-        **一趟全读**：索引里放不下"标题 / 标签"（那是属性，不是定位信息），
-        故列举块必须读回每条记录。要不要把属性投影进库是表声明的字段问题（§12）。
+        为什么不是顺扫：同一次身份重写会在载体里留下旧副本（更新即留旧副本，等压实回收），
+        顺扫会把同一个身份读出来两次；**索引里的那一行才代表"这个对象现在在哪一份"**。
+        行丢了的字节不在这儿兜底——那是巡检与重建的活（`Vault.patrol` / `Vault.repair`）。
 
-        内容缺了就**显式报错**，不跳过：一次列举悄悄少一个对象，比报错难查得多。
+        代价写明：``attrs`` 不在索引里（它属于载荷），故每条都要读回记录。
+        要不要把属性投影进库是表声明的字段问题（设计篇 §12）。
         """
-        for _place, record in self.vault.records():
+        rows = self.vault.index.conn.execute("SELECT * FROM record ORDER BY value_uuid").fetchall()
+        for row in rows:
+            value_uuid = str(row["value_uuid"])
+            record = self.vault.get(value_uuid)
             if not _is_block(record):
-                continue
-            row = self.vault.index.record_row(str(record.id.value_uuid))
-            kind = str(row["kind"]) if row is not None else ""
-            block = self._block_of(record, kind=kind)
-            yield block if row is None else self._finish(block, row)
+                continue  # 内容记录不是块
+            yield self._finish(self._block_of(record, kind=str(row["kind"])), row)
 
     # ---- 内部 ----
     def _finish(self, block: Block, row: sqlite3.Row) -> Block:
@@ -201,12 +203,17 @@ class BlockStore:
                 f"块的内容缺失：{record.id.value_uuid}（地址 {pointer}；可由巡检重建补回）"
             )
         blob = _decode_blob(record.payload)
-        return Block.decode(
+        block = Block.decode(
             content.payload,
             id=str(record.id.value_uuid),
             attrs=dict(blob.get("attrs") or {}),
             type=kind,
         )
+        # `author` 与 `config` 是块的**顶层字段**（不在 attrs 里），`Block.decode` 不收它们，
+        # 故在这里补回：漏掉它们会让"写进去的作者"读回来变成空串。
+        block.author = str(blob.get("author") or "")
+        block.config = dict(blob.get("config") or {})
+        return block
 
     def _content_of(self, digest: ValueHash | str) -> Record | None:
         """按地址找**内容记录**；找不到即 ``None``。

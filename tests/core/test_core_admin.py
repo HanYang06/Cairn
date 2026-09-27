@@ -40,10 +40,10 @@ def test_unimplemented_maintenance_fails_loudly(core: Core) -> None:
 def test_query_and_execute_go_through_storage(core: Core) -> None:
     core.put(Block(body=b"x", type="blob"))
 
-    rows = core.query("SELECT oid FROM block")
-    assert len(rows) == 1
+    rows = core.query("SELECT value_uuid FROM record WHERE kind = ?", ("blob",))
+    assert len(rows) == 1  # 内容记录的类型为空，故按类型筛只剩块记录
 
-    changed = core.execute("UPDATE block SET updated = 0")
+    changed = core.execute("UPDATE record SET updated = 0 WHERE kind = ?", ("blob",))
     assert changed == 1
 
 

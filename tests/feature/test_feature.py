@@ -132,8 +132,9 @@ def test_body_pool_dedupes_across_attrs(core: Core) -> None:
     second = notes.create("same body", title="B")
 
     assert first.body.hash == second.body.hash
-    assert core.storage.catalog.count_bodies() == 1  # body 内容池里只有一份
-    assert core.storage.catalog.count_blocks() == 2  # 属性各自独立
+    stored = list(core.storage.blocks.iter_blocks())
+    assert len(stored) == 2  # 两个块：属性各自独立
+    assert len({block.checksum for block in stored}) == 1  # 两条指向同一份内容
 
 
 def test_same_content_different_line_ids_coexist(core: Core) -> None:
@@ -148,7 +149,8 @@ def test_same_content_different_line_ids_coexist(core: Core) -> None:
     notes.save(second)
 
     assert first.body.hash == second.body.hash  # 内容签名（剥离行 id）一致
-    assert core.storage.catalog.count_bodies() == 2  # 负载口径不同 → 各存一份
+    # 负载口径不同 → 两个块指向两份内容
+    assert len({block.checksum for block in core.storage.blocks.iter_blocks()}) == 2
     loaded = notes.load(second.oid)
     assert loaded.body[0]["id"] == "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 

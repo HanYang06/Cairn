@@ -105,10 +105,16 @@ class Core:
 
         换下时把旧对象从三种身份格里一并摘净：只覆盖 ``role_name`` 会留下
         查得到的陈旧引用（``lookup("role_obj", 旧存储)`` 仍然命中）。
+
+        **换下即释放**：旧挂件若有 ``close`` 就调一次——被覆盖的存储如果没人关，
+        它的 sqlite 连接与载体文件句柄不会有第二次释放机会（要等到垃圾回收才报资源警告）。
         """
         previous = self._internal["role_name"].get(name)
         if previous is not None and previous is not obj:
             _forget(self._internal, previous)
+            close = getattr(previous, "close", None)
+            if callable(close):
+                close()
         self._internal["role_name"][name] = obj
         self._internal["role_id"][str(getattr(obj, "id", "") or name)] = obj
         self._internal["role_obj"][identity_key("role_obj", obj)] = obj

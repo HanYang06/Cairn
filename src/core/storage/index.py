@@ -68,6 +68,16 @@ class Difference:
         """是否必须重建表并搬运数据（SQLite 改不了列型 / 约束）。"""
         return self.kind == "column_mismatch"
 
+    @property
+    def warning(self) -> bool:
+        """是否只是**告警**（多出的列 / 多出的表）。
+
+        这两类**不删不拦**：库里的东西不是我们建的，就不动它（§8.4）。
+        它们与"缺表 / 缺列 / 列型不符"性质不同——后者开库必须处置或拒绝，
+        故开库时只对非告警的剩余差异报错。
+        """
+        return self.kind in {"extra_column", "extra_table"}
+
 
 @dataclass(frozen=True, slots=True)
 class RebuildPlan:

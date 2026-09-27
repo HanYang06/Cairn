@@ -90,11 +90,12 @@ def test_two_databases_by_switching_storage(core: Core, tmp_path: Path) -> None:
     """换库 = 换存储挂件；内核本身仍是同一个。"""
     import core.storage as storage_mod  # noqa: PLC0415
 
-    other = storage_mod.Storage.create(tmp_path / "other")
+    other = storage_mod.Storage.open(tmp_path / "other")
     core.mount("storage", other)
     notes = Note(core)
     notes.create("在另一个库里")
     assert len(notes.list_notes()) == 1
+    other.close()  # 换下来的那份也要关：不关就是泄漏一个 sqlite 连接
 
 
 def test_role_lookup_returns_the_service(core: Core) -> None:

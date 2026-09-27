@@ -51,6 +51,7 @@ from core.types import (
     now_ms,
 )
 
+from .carrier import CARRIER_MAGIC
 from .index import INDEX_NAME, Index, RebuildPlan
 from .io import CarrierFile
 from .record import Record
@@ -222,6 +223,41 @@ def _pack_path(packs_dir: Path, name: str) -> Path:
     if not name or name != Path(name).name or name in {".", ".."}:
         raise StorageError(f"载体名非法: {name!r}")
     return packs_dir / name
+
+
+def _is_carrier(path: Path) -> bool:
+    """这个文件是不是**本格式的载体**（只认文件头那 8 字节魔数）。"""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(len(CARRIER_MAGIC)) == CARRIER_MAGIC
+    except OSError:
+        return False
+
+
+def _refuse_foreign_packs(root: Path) -> None:
+    """建新索引时的护栏：目录里已有载体文件，却**一个都不是本格式** → 拒开。
+
+    旧格式的库（`<桶>/packs/` 下的老载体）在新层眼里是"空桶"——顺扫一片空，
+    于是"读不了"被伪装成"本来就没有"。宁可拒开，也不给这种静默。
+    混放（既有我们的载体、也有杂物）不在此拦：那时顺扫会在坏点上如实报错。
+    """
+    if not root.is_dir():
+        return
+    seen = 0
+    ours = 0
+    for child in sorted(root.iterdir()):
+        packs = child / PACKS_DIR
+        if not packs.is_dir():
+            continue
+        for path in sorted(packs.iterdir()):
+            if path.is_file():
+                seen += 1
+                ours += _is_carrier(path)
+    if seen and not ours:
+        raise StorageError(
+            f"{root} 里有 {seen} 个载体文件，却没有一个是本格式的（旧格式的库不予读取）："
+            "换一个目录，或先把旧库导出"
+        )
 
 
 def _configured_pack_max_bytes() -> int:
@@ -402,11 +438,17 @@ class Vault:
 
         对齐只在开库时发生（§8.4）：热路径上反复执行 DDL 与提交是设计事故。
         破坏性差异**默认拒绝**，须由调用方显式给出 :class:`RebuildPlan`。
+
+        只有**非告警**的剩余差异才算失败：多出的列 / 多出的表是"库里有别的东西"，
+        设计上不删不拦（§8.4），拿它当开库失败会让"库里建过一张领域表"变成打不开库。
         """
         target = Path(root)
+        fresh = not (target / INDEX_NAME).exists()
         target.mkdir(parents=True, exist_ok=True)
+        if fresh:
+            _refuse_foreign_packs(target)
         vault = cls(target, pack_max_bytes=pack_max_bytes)
-        remaining = vault.index.align(rebuild=rebuild)
+        remaining = [item for item in vault.index.align(rebuild=rebuild) if not item.warning]
         if remaining:
             vault.close()
             raise CairnError(f"索引库对齐后仍有差异（不假装成功）：{remaining}")

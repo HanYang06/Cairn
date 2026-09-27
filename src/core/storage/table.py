@@ -1,20 +1,54 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-"""表：受桶管的业务表，供上层查询用。
+"""表：**领域自描述的业务表**的读写封装（受索引库管的普通表）。
 
-上层不需要 import sqlite，也不需要手写连接与事务——拿到 ``Table`` 句柄后
-用方法操作即可。表由领域对象自描述（``Block.table`` / ``Block.columns``），
-经 ``Bucket.mount`` 建出来。
+上层不需要 import sqlite，也不必手写连接与事务：拿到 ``Table`` 句柄后按方法操作即可。
+表结构由调用方（领域）给出：``create_table(conn, name, columns)`` 建，校验在**这一处**——
+表名 / 列名 / 列定义都会进 SQL，故用白名单正则卡死，拼错与注入都在解析口被拒。
+
+与索引库声明的关系：内核自己的表由 `config/settings/core/storage/tables.yaml` 声明
+（见 `core/storage/tables.py`）；这里管的是**领域表**——落同一个索引库、同一个连接，
+但不在内核声明里。所以它们开库时会被如实报成"多出的表"（告警，不删）。
 """
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
+
+from core.types import CairnError
 
 if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Mapping
+
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SPEC_RE = re.compile(
+    r"^[A-Za-z][A-Za-z0-9_]*"
+    r"(?:\s*\([0-9,\s]+\))?"
+    r"(?:\s+(?:PRIMARY\s+KEY|NOT\s+NULL|UNIQUE))?"
+    r"(?:\s+DEFAULT\s+('[^']*'|[0-9.+-]+))?$",
+    re.IGNORECASE,
+)
+"""列定义白名单：``类型[(长度)] [PRIMARY KEY|NOT NULL|UNIQUE] [DEFAULT 值]``，其余一律拒绝。"""
+
+
+def create_table(conn: sqlite3.Connection, name: str, columns: Mapping[str, str]) -> None:
+    """建一张领域表（已存在即不动）；表名 / 列名 / 列定义不合法即抛 ``CairnError``。
+
+    校验只在这一处：它们都会拼进 SQL，靠"调用方自觉"不如靠这一道白名单。
+    """
+    if not _IDENT_RE.match(name):
+        raise CairnError(f"非法表名: {name}")
+    bad = next((column for column in columns if not _IDENT_RE.match(column)), None)
+    if bad is not None:
+        raise CairnError(f"非法列名: {bad}")
+    bad_spec = next((spec for spec in columns.values() if not _SPEC_RE.match(spec.strip())), None)
+    if bad_spec is not None:
+        raise CairnError(f"非法列定义: {bad_spec!r}")
+    parts = [f'"{column}" {spec}'.strip() for column, spec in columns.items()]
+    conn.execute(f'CREATE TABLE IF NOT EXISTS "{name}" ({", ".join(parts)})')
 
 
 def _quote(name: str) -> str:
@@ -117,4 +151,4 @@ class Table:
         return int(row["n"])
 
 
-__all__ = ["Table"]
+__all__ = ["Table", "create_table"]

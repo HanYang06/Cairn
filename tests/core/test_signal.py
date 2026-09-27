@@ -191,7 +191,7 @@ def test_engine_is_part_of_the_kernel() -> None:
 
 def test_short_api_put_get_drop(core: Core, tmp_path: Path) -> None:
     """**目标 5 行以内办完一件事**：存 / 取 / 删各一行。"""
-    core.mount("storage", Storage.create(tmp_path / "vault"))
+    core.mount("storage", Storage.open(tmp_path / "vault"))
     from core.storage import Block  # noqa: PLC0415 — 就地用
 
     block = Block(body=b"hi")

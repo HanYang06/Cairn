@@ -6,10 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from .ids import Oid
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,9 +16,12 @@ class ObjectInfo:
     ``tags`` 是 ``dict``，故标 ``compare=False``：不参与 ``__eq__`` / ``__hash__``，
     ``ObjectInfo`` 才能真的可哈希（否则一放进 set 就 ``TypeError: unhashable``）。
     ``frozen`` 只锁字段本身——``tags`` 的内容仍可就地改，深不可变不在承诺内。
+
+    ``oid`` 是身份的**字符串形态**（`ValueUuid` 就是字符串，故这里不收窄类型）：
+    视图是给界面与领域用的，它们不该为此认识身份层的具体类。
     """
 
-    oid: Oid
+    oid: str
     type: str
     mime: str | None
     size: int

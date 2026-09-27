@@ -30,7 +30,7 @@ __all__ = ["make_kernel"]
 def make_kernel(tmp_path: Path) -> Core:
     """装一个连到临时库的内核：挂引擎 + 挂存储 + 建域服务。"""
     core = Core()
-    core.mount("storage", Storage.create(tmp_path / "vault"))
+    core.mount("storage", Storage.open(tmp_path / "vault"))
     Note(core)
     Project(core)
     return core

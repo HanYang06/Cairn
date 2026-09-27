@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import QMainWindow
 
 from app.win import CairnApp
 from app.win.backend import fmt_time
-from core import CairnError, Core
+from core import CairnError
 from tests.conftest import make_kernel
 from ui_tools.core.qt import build_window
 
@@ -37,16 +38,17 @@ def test_app_open_creates_then_loads(tmp_path: Path) -> None:
     CairnApp.open(root).close()  # 已存在 → 加载
 
 
-def test_app_open_propagates_newer_catalog(tmp_path: Path) -> None:
+def test_app_open_refuses_a_library_it_does_not_know(tmp_path: Path) -> None:
+    """开库遇到**不认识的库**要 fail closed，且不得掩盖成"库已存在"之类的别的话。"""
     root = tmp_path / "Core"
-    core = Core()
-    core.open(root)
-    core.storage.catalog.set_meta("catalog_version", "999")
-    core.storage.catalog.commit()
-    core.close()
+    root.mkdir()
+    stranger = sqlite3.connect(str(root / "catalog.db"))
+    stranger.execute("CREATE TABLE strangers(x INTEGER)")
+    stranger.commit()
+    stranger.close()
 
-    with pytest.raises(CairnError, match="目录版本过新"):
-        CairnApp.open(root)  # 不得掩盖成「桶已存在」
+    with pytest.raises(CairnError, match="不接管"):
+        CairnApp.open(root)
 
 
 def test_fmt_time_tolerates_bad_values() -> None:

@@ -101,6 +101,41 @@ def test_open_refuses_a_foreign_sqlite_file(tmp_path: Path) -> None:
         Vault.open(root)
 
 
+def test_open_tolerates_tables_this_program_did_not_declare(tmp_path: Path) -> None:
+    """库里多出来的表是**告警**，不是开库失败：领域表就是这么进去的（§8.4）。"""
+    with _vault(tmp_path) as vault:
+        vault.index.conn.execute("CREATE TABLE relation(id TEXT PRIMARY KEY, src TEXT)")
+        vault.index.commit()
+
+    with _vault(tmp_path) as reopened:  # 再开一次：不得因为多了一张表就打不开
+        assert [item.kind for item in reopened.index.differences()] == ["extra_table"]
+
+
+def test_open_refuses_a_vault_written_in_an_older_format(tmp_path: Path) -> None:
+    """旧格式的库**显式拒开**：不顺扫成"空桶"，也不静默无视里面的数据。"""
+    root = tmp_path / "vault"
+    legacy = root / "main" / PACKS_DIR
+    legacy.mkdir(parents=True)
+    (legacy / "oldpack").write_bytes(b"\x00\x01\x02 not a carrier")
+
+    with pytest.raises(StorageError, match="本格式"):
+        Vault.open(root)
+
+
+def test_open_still_adopts_our_carriers_when_the_index_is_gone(tmp_path: Path) -> None:
+    """载体是我们自己的、索引丢了 → 照旧开（正是"档一可重建"要支持的场景）。"""
+    with _vault(tmp_path) as vault:
+        vault.put(_record(b"x"))
+
+    (tmp_path / "vault" / "catalog.db").unlink()
+
+    with _vault(tmp_path) as reopened:
+        # 载体在、行没了；桶目录在、登记也没了 —— 两样都可由重建补回
+        assert reopened.patrol().counts() == {"unregistered_bucket": 1, "missing_row": 1}
+        assert len(reopened.repair()) == 2
+        assert reopened.patrol().unfixable == ()
+
+
 # ---- 桶：目录是事实 ----
 
 

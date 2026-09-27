@@ -72,12 +72,27 @@ def test_persistence_across_reopen(core: Core, tmp_path: Path) -> None:
 
 def test_identical_content_dedupes(core: Core) -> None:
     data = b"same bytes " * 50_000
+    first = _put(core, data)
+    before = _copies_of(core, first.checksum)
     _put(core, data)
-    before = core.storage.catalog.count_bodies()
-    _put(core, data)
-    after = core.storage.catalog.count_bodies()
+    after = _copies_of(core, first.checksum)
 
-    assert before == after  # 同 body 只存一份
+    assert before == after == 1  # 同 body 只存一份
+
+
+def _copies_of(core: Core, address: str) -> int:
+    """按地址数一数盘上有几份内容。
+
+    内容记录的地址就是它自己的载荷摘要，故"按地址找"找到的就是内容本体；
+    块记录的地址是它自身载荷的摘要，不会与内容撞上（撞上等于摘要碰撞）。
+    """
+    return len(
+        [
+            record
+            for _place, record in core.storage.vault.records()
+            if record.id.value_hash == address
+        ]
+    )
 
 
 def test_update_keeps_id_and_changes_content(core: Core) -> None:
