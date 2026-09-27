@@ -91,11 +91,22 @@ class Index:
     # ---- 生命周期 ----
     @classmethod
     def open(cls, path: Path | str) -> Index:
-        """打开（不存在即建）索引库；只建 ``meta``，其余表由 :meth:`align` 按声明处置。"""
+        """打开（不存在即建）索引库；只建 ``meta``，其余表由 :meth:`align` 按声明处置。
+
+        **不接管别人的 SQLite 文件**：文件已存在、里面有表、却没有本库的 ``meta``，
+        说明它不是本程序建的（或来自别的格式）。此时拒开，而不是往里建表——
+        与配置端的口径一致：绝不覆盖别人的文件。
+        """
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(target))
         conn.row_factory = sqlite3.Row
+        foreign = _foreign_tables(conn)
+        if foreign:
+            conn.close()
+            raise IndexSchemaError(
+                f"索引库里有本程序不认识的表 {foreign}，不接管：{target}（换目录或人工处置）"
+            )
         conn.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         return cls(path=target, conn=conn)
 
@@ -321,6 +332,20 @@ class Index:
             (identifier, src, dst, kind, domain, now_ms()),
         )
         return identifier
+
+
+def _foreign_tables(conn: sqlite3.Connection) -> list[str]:
+    """本程序不认识的表：里面已有表、却没有本库的 ``meta``，即"这不是我们的库"。
+
+    空库（一个表都没有）不算：那正是新建索引库时的样子。
+    """
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    names = [str(row["name"]) for row in rows]
+    if not names or "meta" in names:
+        return []
+    return sorted(names)
 
 
 def _canonical_declarations() -> dict[str, object]:

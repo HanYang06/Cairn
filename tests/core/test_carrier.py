@@ -334,11 +334,12 @@ def test_read_rejects_zero_count() -> None:
 def test_scan_rebuilds_every_record_in_order(tmp_path: Path) -> None:
     carrier = _carrier(tmp_path)
     records = [_record(payload) for payload in (b"first", b"", b"x" * 300, b"last")]
-    for record in records:
-        carrier.append(record)
+    spans = [carrier.append(record) for record in records]
     scanned = list(carrier.scan())
-    assert scanned == records
-    assert [item.payload for item in scanned] == [item.payload for item in records]
+    assert [record for _span, record in scanned] == records
+    # 顺扫给出的位置必须与写入时算出的那个一致：重建正是靠这一条把索引接回去。
+    assert [span for span, _record in scanned] == spans
+    assert [item.payload for _span, item in scanned] == [item.payload for item in records]
 
 
 def test_scan_of_empty_carrier_is_empty(tmp_path: Path) -> None:

@@ -137,11 +137,14 @@ class CarrierFile:
             )
         return buffered[:total_len]
 
-    def scan(self) -> Iterator[Record]:
-        """顺扫全部记录（重建的入口）。
+    def scan(self) -> Iterator[tuple[SlotRange, Record]]:
+        """顺扫全部记录，交出**每条的位置与记录**（重建的入口）。
 
         每条由头里的总长自框定；文件尾若残留不足一条的字节，
         说明载体被截断，**报错而不是静默丢弃**。
+
+        位置一并给出：重建要把"这条记录落在哪"写回索引，而偏移的累加只在这里做一次
+        （调用方再算一遍就会与这里分家，且分家之后两边的错都看不出来）。
         """
         offset = 0
         limit = self.used_bytes
@@ -157,7 +160,8 @@ class CarrierFile:
                     raise RecordFormatError(
                         f"载体尾部截断: {self.path} @ 偏移 {offset}（声明 {total_len} 字节）"
                     )
-                yield Record.decode(head + rest, self.layout)
+                span = self.layout.span_of(self.layout.header_bytes + offset, total_len)
+                yield span, Record.decode(head + rest, self.layout)
                 offset += total_len
 
 
