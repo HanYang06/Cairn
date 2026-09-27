@@ -19,12 +19,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import yaml
 
 from core.types.errors import CairnError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
+
+TABLES_FILE = "config/tables.yaml"
+"""表声明文件（相对仓根）；它是**本体**，不是生成物。"""
 
 _IDENT_ALLOWED = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
@@ -215,9 +221,7 @@ class Table:
         keys = [column.name for column in self.columns if column.primary_key]
         if len(keys) != 1:
             raise CairnError(f"表 {self.name} 必须恰好一个主键，得到 {keys!r}")
-        missing = [
-            name for index in self.indexes for name in index.columns if name not in names
-        ]
+        missing = [name for index in self.indexes for name in index.columns if name not in names]
         if missing:
             raise CairnError(f"表 {self.name} 的索引列不存在: {sorted(set(missing))}")
         if self.tier is RebuildTier.TIER3 and self.rebuild_from:
@@ -392,12 +396,38 @@ def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[Table, ...]:
     return parsed
 
 
-def declared_tables() -> tuple[Table, ...]:
-    """读配置里的表声明（**运行时的唯一入口**）：配置是本体，这里只解析与校验。"""
-    from .conf import conf  # noqa: PLC0415 — 与声明模块同包，运行时取
+def tables_file() -> Path:
+    """表声明文件的路径（**本体**）：仓根的 ``config/tables.yaml``。
 
-    raw: list[dict[str, Any]] = conf.db_tables
+    路径由本模块的位置推出（``<仓根>/src/core/storage/tables.py`` 往上四级），
+    故打包后只要目录结构不变即可定位；仓根在别处时用 :func:`load_tables` 显式传路径。
+    """
+    return Path(__file__).resolve().parents[3] / TABLES_FILE
+
+
+def load_tables(path: Path | str | None = None) -> tuple[Table, ...]:
+    """从 ``tables.yaml`` 读入并校验表声明（**运行时唯一入口**）。
+
+    读不出或结构不对即抛错，绝不静默退回出厂初值：
+    "文件写坏了"与"文件没写"必须可分，否则一张表的丢失会被伪装成正常启动。
+    """
+    source = Path(path) if path is not None else tables_file()
+    if not source.is_file():
+        raise CairnError(f"表声明文件不存在: {source}")
+    try:
+        raw: Any = yaml.safe_load(source.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise CairnError(f"表声明文件解析失败: {source}（{exc}）") from exc
+    if raw is None:
+        raise CairnError(f"表声明文件是空的: {source}")
+    if not isinstance(raw, list):
+        raise CairnError(f"表声明文件顶层必须是列表: {source}")
     return parse_tables(raw)
+
+
+def declared_tables() -> tuple[Table, ...]:
+    """当前生效的表声明（本体在 ``config/tables.yaml``）。"""
+    return load_tables()
 
 
 def core_tables() -> tuple[Table, ...]:
@@ -419,6 +449,7 @@ def table(name: str) -> Table | None:
 
 
 __all__ = [
+    "TABLES_FILE",
     "Column",
     "ColumnType",
     "Index",
@@ -428,8 +459,10 @@ __all__ = [
     "core_tables",
     "declared_tables",
     "domain_tables",
+    "load_tables",
     "parse_table",
     "parse_tables",
     "sql_type_name",
     "table",
+    "tables_file",
 ]

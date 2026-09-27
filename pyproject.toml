@@ -23,6 +23,7 @@ dependencies = [
     "cryptography>=50.0.1",
     "fastcdc>=1.7.0",
     "pyside6>=6.8",
+    "pyyaml>=6.0.3",
     "tomli-w>=1.2.0",
 ]
 
@@ -39,6 +40,8 @@ dev = [
     "modelscope>=1.40.1",
     "mkdocs-material>=9.7",
     "mkdocstrings[python]>=0.30",
+    # mypy strict 下 PyYAML 需要类型存根
+    "types-pyyaml>=6.0.12",
 ]
 
 [build-system]

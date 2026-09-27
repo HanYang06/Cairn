@@ -28,15 +28,16 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from core.types.cfg import Cfg
-
-from ._defaults import DEFAULT_TABLES, TABLE_SHAPE
 
 
 class StorageConf:
-    """存储参数（分片粒度 / 载体封口 / 槽长 / **表声明**）。"""
+    """存储的**标量参数**（分片粒度 / 载体封口 / 槽长）。
+
+    表声明不在这里：它是**结构**，人手写在 `config/tables.yaml`（见 `core/storage/tables.py`）。
+    把结构塞进点分配置键，词表就长不出有意义的形状，值文件也会被工具重排——
+    两者形态不同，就该分开放。
+    """
 
     block_max_bytes: Cfg = Cfg(
         "storage.block.max_bytes",
@@ -52,13 +53,6 @@ class StorageConf:
         "storage.pack.slot_bytes",
         64 * 1024,
         doc="槽长：载体内的定长分配与定位单位，建载体时写进文件头",
-    )
-    db_tables: Cfg = Cfg(
-        "storage.db.tables",
-        DEFAULT_TABLES,
-        item_type=list[dict[str, Any]],
-        structure=TABLE_SHAPE,
-        doc="索引库的表声明（**本体在这**：改它即改表；列项顺序即建表顺序）",
     )
 
 

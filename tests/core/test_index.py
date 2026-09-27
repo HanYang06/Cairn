@@ -21,6 +21,7 @@ from core.storage.tables import (
     Table,
     core_tables,
     declared_tables,
+    load_tables,
     parse_tables,
 )
 from core.types.errors import CairnError, IndexSchemaError
@@ -197,6 +198,46 @@ def test_declaration_round_trips_through_config_shape() -> None:
     for table in declared_tables():
         again = parse_tables([table.to_config()])[0]
         assert again.signature() == table.signature()
+
+
+def test_shipped_tables_file_loads() -> None:
+    """出货的那份 `config/tables.yaml` 必须能读进来（语法错、结构错都在这里拦下）。"""
+    loaded = load_tables()
+    assert loaded
+    assert {table.name for table in loaded} >= {"bucket", "record", "edge"}
+
+
+def test_shipped_tables_file_declares_core_owner() -> None:
+    for table in load_tables():
+        assert table.owner is Owned.CORE
+        assert table.tier is RebuildTier.TIER1
+
+
+def test_missing_tables_file_fails_loudly(tmp_path: Path) -> None:
+    """文件不在就报错，不静默退回出厂初值（否则"表丢了"会被伪装成正常启动）。"""
+    with pytest.raises(CairnError, match="不存在"):
+        load_tables(tmp_path / "nope.yaml")
+
+
+def test_broken_tables_file_fails_loudly(tmp_path: Path) -> None:
+    broken = tmp_path / "tables.yaml"
+    broken.write_text("- name: t\n  tier: [未闭合\n", encoding="utf-8")
+    with pytest.raises(CairnError, match="解析失败"):
+        load_tables(broken)
+
+
+def test_empty_tables_file_fails_loudly(tmp_path: Path) -> None:
+    empty = tmp_path / "tables.yaml"
+    empty.write_text("# 只有注释\n", encoding="utf-8")
+    with pytest.raises(CairnError, match="空的"):
+        load_tables(empty)
+
+
+def test_tables_file_must_be_a_list(tmp_path: Path) -> None:
+    mapping = tmp_path / "tables.yaml"
+    mapping.write_text("name: t\n", encoding="utf-8")
+    with pytest.raises(CairnError, match="必须是列表"):
+        load_tables(mapping)
 
 
 # ---- 对比与分类 ----

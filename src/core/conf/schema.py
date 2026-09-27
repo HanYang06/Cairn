@@ -74,38 +74,19 @@ def folder_schema(declared: list[CfgItem]) -> dict[str, Any]:
 
 
 def property_of(item: CfgItem) -> dict[str, Any]:
-    """一条声明的 JSON Schema 片段。
-
-    ``structure``：**结构提示**——声明的是"这类值的形状"（嵌套对象的 schema），
-    由 :func:`type_schema` 放进 ``items`` / ``additionalProperties``，供 IDE 补全与校验。
-    给了结构提示时**不再写 default**：那种键的值本身就是一份数据（例如表声明），
-    把它整份抄进词表会把词表变成第二份配置——词表写形状，值文件写数据，两者不重复。
-    """
+    """一条声明的 JSON Schema 片段。"""
     schema: dict[str, Any] = {}
     typed = type_schema(item.type)
     if typed:
         schema.update(typed)
-    if item.structure:
-        _merge_structure(schema, item.structure)
     if item.doc:
         schema["description"] = item.doc
-    if item.fillable and not item.structure:
+    if item.fillable:
         schema["default"] = item.default
     schema["x-cairn-owner"] = f"{item.module}.{item.owner}"
     schema["x-cairn-fillable"] = item.fillable
     schema["x-cairn-empty-ok"] = item.empty_ok
     return schema
-
-
-def _merge_structure(schema: dict[str, Any], structure: dict[str, Any]) -> None:
-    """把结构提示并入类型骨架：数组型填 ``items``，对象型填 ``additionalProperties``。"""
-    if schema.get("type") == "array":
-        schema["items"] = structure
-        return
-    if schema.get("type") == "object" and "additionalProperties" not in schema:
-        schema["additionalProperties"] = structure
-        return
-    schema["x-cairn-structure"] = structure
 
 
 # 逐类识别、各自提前返回：比层层嵌套好读（故放行 PLR0911）。

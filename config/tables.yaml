@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 HanYang06
+# SPDX-License-Identifier: Apache-2.0
+#
+# 索引库的表声明（**本体就是这份文件**）。
+#
+# 改表即改这里：加一张表、加一列、改类型或索引，都不必碰 Python。
+# 代码只负责读它、校验它、把它编译成建表语句（见 core/storage/tables.py）。
+#
+# 字段速查（未知字段会直接报错，不静默忽略）：
+#   name         表名（小写字母 / 数字 / 下划线）
+#   tier         重建档：tier1 可扫载体重建 / tier2 需领域逻辑重算 / tier3 只能靠备份
+#   rebuild_from 重建来源；tier3 必须留空（写不出来源的表就是不可重建表）
+#   owner        core = 开库即对齐；domain = 挂载该域时才对齐
+#   columns      列；**顺序即建表顺序**；每表恰好一个 primary_key
+#   indexes      索引；名字由列组合推出，不手写
+#
+# 类型只用这五个中立词：text / integer / real / blob / boolean（方言由编译器映射）。
+
+- name: bucket
+  doc: 桶登记：桶目录是存在证明，本表是登记
+  tier: tier1
+  owner: core
+  rebuild_from: 桶目录：扫 vault 下的桶目录
+  columns:
+    - { name: name, type: text, primary_key: true, doc: 桶名（即目录名） }
+    - { name: role, type: text, not_null: true, default: main, doc: 形态：主/归档/临时 }
+    - { name: state, type: text, not_null: true, default: mounted, doc: 挂载状态 }
+    - { name: created, type: integer, not_null: true, default: 0, doc: 建立时刻 }
+
+- name: record
+  doc: 身份到位置：一行一条记录（块记录与内容记录同表）
+  tier: tier1
+  owner: core
+  rebuild_from: 载体：顺扫全部记录，读记录头重建
+  columns:
+    - { name: value_uuid, type: text, primary_key: true, doc: 分配形态凭证 }
+    - { name: value_hash, type: text, not_null: true, doc: 摘要形态凭证（指向内容） }
+    - { name: kind, type: text, not_null: true, default: "", doc: 类型名（由程序给出） }
+    - { name: bucket, type: text, not_null: true, default: "", doc: 所在桶 }
+    - { name: pack, type: text, not_null: true, default: "", doc: 所在载体名 }
+    - { name: slot_start, type: integer, not_null: true, default: 0, doc: 起始槽 }
+    - { name: slot_head, type: integer, not_null: true, default: 0, doc: 槽内偏移 }
+    - { name: slot_count, type: integer, not_null: true, default: 1, doc: 跨槽数 }
+    - { name: size, type: integer, not_null: true, default: 0, doc: 记录字节数 }
+    - { name: issued, type: integer, not_null: true, default: 0, doc: ID 签发时刻 }
+    - { name: created, type: integer, not_null: true, default: 0, doc: 落盘时刻 }
+    - { name: updated, type: integer, not_null: true, default: 0, doc: 最近写入时刻 }
+  indexes:
+    - { columns: [value_hash], doc: 地址反查：这份内容被哪些记录引用 }
+    - { columns: [kind], doc: 按类型筛选 }
+    - { columns: [bucket, pack], doc: 按载体归拢 }
+    - { columns: [updated], doc: 按时间排序 }
+
+- name: edge
+  doc: 关系边：一等行，src --kind--> dst
+  tier: tier1
+  owner: core
+  rebuild_from: 块记录：关系数据落在块内时由其派生
+  columns:
+    - { name: id, type: text, primary_key: true, doc: 边身份（由四元组算摘要） }
+    - { name: src, type: text, not_null: true, doc: 源身份 }
+    - { name: dst, type: text, not_null: true, doc: 目标身份 }
+    - { name: kind, type: text, not_null: true, default: "", doc: 关系种类 }
+    - { name: domain, type: text, not_null: true, default: "", doc: 归属域 }
+    - { name: created, type: integer, not_null: true, default: 0, doc: 建立时刻 }
+  indexes:
+    - { columns: [src, kind], doc: 出边（正向遍历） }
+    - { columns: [dst, kind], doc: 反查（backlinks） }
