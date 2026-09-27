@@ -157,6 +157,41 @@ def test_open_rejects_foreign_file(tmp_path: Path) -> None:
         CarrierFile.open(path)
 
 
+# ---- 槽长来自配置，此后按文件头读 ----
+
+
+def test_slot_bytes_comes_from_declaration(tmp_path: Path) -> None:
+    from core.storage.conf import conf as storage_conf  # noqa: PLC0415 — 按需取声明
+
+    declared: int = storage_conf.pack_slot_bytes
+    assert CarrierFile.create(tmp_path / "pack").layout.slot_bytes == declared
+
+
+def test_explicit_slot_bytes_overrides_config(tmp_path: Path) -> None:
+    carrier = CarrierFile.create(tmp_path / "pack", slot_bytes=4096)
+    assert carrier.layout.slot_bytes == 4096
+    assert CarrierFile.open(tmp_path / "pack").layout.slot_bytes == 4096
+
+
+def test_changing_config_does_not_reinterpret_existing_carrier(tmp_path: Path) -> None:
+    """槽长只在**建载体**时读一次配置；已落盘的载体永远按自己文件头解释。
+
+    否则改一次配置，老载体的偏移全部错位——这是"物理坐标是投影"的前提。
+    """
+    from core.conf import conf as engine_conf  # noqa: PLC0415
+
+    original = engine_conf.get("storage.pack.slot_bytes")
+    carrier = CarrierFile.create(tmp_path / "pack", slot_bytes=4096)
+    try:
+        engine_conf.set("storage.pack.slot_bytes", 8192)
+        assert CarrierFile.open(tmp_path / "pack").layout.slot_bytes == 4096
+        record = _record(b"still readable")
+        span = carrier.append(record)
+        assert Record.decode(carrier.read(span), carrier.layout) == record
+    finally:
+        engine_conf.set("storage.pack.slot_bytes", original)
+
+
 # ---- 记录编解码 ----
 
 

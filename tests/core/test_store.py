@@ -192,9 +192,10 @@ def test_small_content_is_one_block(tmp_path: Path) -> None:
 
 
 def test_pack_seals_and_rolls_over(tmp_path: Path) -> None:
-    bucket = _bucket(tmp_path, pack_max_blocks=2, block_max_bytes=1024)
-    ids = [bucket.put(Block(type="test.note", body=[str(i)])).id for i in range(5)]
-    assert bucket.catalog.count_packs() == 3  # 2 + 2 + 1
+    # 封口只看字节线（块数不再是旋钮）：上限压到 1 字节，每写一块就换一个载体。
+    bucket = _bucket(tmp_path, pack_max_bytes=1, block_max_bytes=1024)
+    ids = [bucket.put(Block(type="test.note", body=[str(i)])).id for i in range(3)]
+    assert bucket.catalog.count_packs() == 3
     for block_id in ids:
         assert bucket.get(Block, block_id).id == block_id
 
@@ -213,11 +214,11 @@ def test_persistence_across_reopen(tmp_path: Path) -> None:
 
 
 def test_config_persists_across_reopen(tmp_path: Path) -> None:
-    bucket = _bucket(tmp_path, block_max_bytes=32, pack_max_blocks=7)
+    bucket = _bucket(tmp_path, block_max_bytes=32, pack_max_bytes=4096)
     bucket.close()
     reopened = Bucket.open(tmp_path / "bucket")
     assert reopened.config.block_max_bytes == 32
-    assert reopened.config.pack_max_blocks == 7
+    assert reopened.config.pack_max_bytes == 4096
 
 
 def test_delete_removes_object(tmp_path: Path) -> None:

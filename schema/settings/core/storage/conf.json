@@ -15,26 +15,18 @@
       "x-cairn-fillable": true,
       "x-cairn-empty-ok": false
     },
-    "storage.pack.max_blocks": {
-      "type": "integer",
-      "description": "单个载体最多装多少块，写满即封口",
-      "default": 4096,
-      "x-cairn-owner": "core.storage.conf.StorageConf",
-      "x-cairn-fillable": true,
-      "x-cairn-empty-ok": false
-    },
     "storage.pack.max_bytes": {
       "type": "integer",
-      "description": "单个载体字节上限，写满即封口",
-      "default": 1073741824,
+      "description": "单个载体的字节上限，写满即封口（只管封口线，不定槽长）",
+      "default": 2147483648,
       "x-cairn-owner": "core.storage.conf.StorageConf",
       "x-cairn-fillable": true,
       "x-cairn-empty-ok": false
     },
-    "storage.version.retention_days": {
+    "storage.pack.slot_bytes": {
       "type": "integer",
-      "description": "版本保留窗（天）：**预留**——惰性压实尚未实现，当前无读取点",
-      "default": 30,
+      "description": "槽长：载体内的定长分配与定位单位，建载体时写进文件头",
+      "default": 65536,
       "x-cairn-owner": "core.storage.conf.StorageConf",
       "x-cairn-fillable": true,
       "x-cairn-empty-ok": false

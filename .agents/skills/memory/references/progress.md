@@ -20,6 +20,10 @@
 - [x] **片 2 · 载体与记录层**：`core/storage/carrier.py`（槽布局与载体文件头）、
   `record.py`（记录头四项 + 编解码）、`io.py`（`CarrierFile`：追加写 / 按槽区间读 / 顺扫重建）
   ＋ `tests/core/test_carrier.py`（48 例，含篡改、截断、同槽记录错位）。
+- [x] **片 2b · 参数接配置**：`storage.pack.slot_bytes` 新声明（默认 64 KiB）；
+  `pack.max_bytes` 收窄为**只管封口线**（默认 2 GiB）；**删** `pack.max_blocks` 与
+  `version.retention_days`；两份投影与配置参考页重生成；建载体时读一次配置、此后按文件头读。
+  **规矩**：格式常量（魔数 / 头长 / 记录头布局）不进配置。
 - [ ] **片 3 · 索引库**：`record` 表（`value_uuid` 主键 ＋ `value_hash` 非唯一索引）＋
   `bucket` / `edge` 表；表声明配置化（不写 SQL）；开库与挂载时对比与分档；重建档写进声明。
 - [ ] **片 4 · 桶与多桶**：`Bucket` 接载体与索引库（替换 `catalog.db` 与旧 pack 逻辑）、

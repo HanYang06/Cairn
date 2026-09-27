@@ -3,6 +3,19 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **存储参数接入配置引擎（片 2 补：作者指出"写了参数却一个都没走配置"）**
+  （分支 `feat/storage-redesign`）：`core/storage/conf.py` 重定三键——
+  新增 `storage.pack.slot_bytes`（默认 64 KiB）、`storage.pack.max_bytes` 语义收窄为**只管封口线**
+  （默认 2 GiB）、**删** `storage.pack.max_blocks`（容量改由槽计量，块数是派生视图）与
+  `storage.version.retention_days`（版本已裁定归领域，存储不该再声明它）；
+  重生成两份投影（`config/` 与 `schema/`）与 `docs/reference/config.md`，值文件中已删键的残留一并清掉
+  （健在键按"用户改过的值永不覆写"保留）。
+  `CarrierFile.create` 的槽长改为**建载体时向声明取一次、写进文件头**，读取永远从文件头读
+  （`test_changing_config_does_not_reinterpret_existing_carrier` 钉住这条）；
+  `BucketConfig` 去掉 `pack_max_blocks`，封口只看字节线。
+  设计篇 §5.5 / §5.6 补"配置面"三条规矩与一条边界：**格式常量不进配置**
+  （魔数 / 文件头长度 / 记录头布局改了就坏库），配置里出现代码不读的键比没有更坏。
+  测试：`tests/core/test_conf.py` 与 `tests/core/test_carrier.py` 各补接线用例；核心 225 通过。
 - 2026-09-28 · 已定 · **存储重设计：第 1 阶段落地（设计篇 + 身份层 + 载体与记录层）**
   （分支 `feat/storage-redesign`，基于 `8d3d1c0`）：
   **设计篇**新增 `docs/architecture/storage-design.md`（12 节，草案 v1.1；`mkdocs.yml` 已登记）

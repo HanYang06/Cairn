@@ -69,11 +69,13 @@ class BucketConfig:
     声明改了，这里跟着改；已建好的桶把自己那份值存在目录里（重开时读回来），
     所以老库不会被新默认值悄悄改掉。
 
-    用法：``BucketConfig()``（全默认）/ ``BucketConfig(pack_max_blocks=7)``（只覆盖一项）。
+    用法：``BucketConfig()``（全默认）/ ``BucketConfig(pack_max_bytes=7)``（只覆盖一项）。
+
+    没有"每载体最多多少块"这一项：新设计里载体的容量由**槽**计量，
+    封口只按字节线判断（块数不再是旋钮，它是派生视图）。
     """
 
     block_max_bytes: int | None = None
-    pack_max_blocks: int | None = None
     pack_max_bytes: int | None = None
 
     def __post_init__(self) -> None:
@@ -87,7 +89,6 @@ class BucketConfig:
 
         filled: dict[str, int] = {
             "block_max_bytes": conf.block_max_bytes,
-            "pack_max_blocks": conf.pack_max_blocks,
             "pack_max_bytes": conf.pack_max_bytes,
         }
         for name, value in filled.items():
@@ -378,10 +379,8 @@ class Bucket:
         row = self.catalog.active_pack()
         if row is not None:
             pack_id = int(row["id"])
-            full = int(row["blocks"]) >= cast("int", self.config.pack_max_blocks) or int(
-                row["bytes"]
-            ) >= cast("int", self.config.pack_max_bytes)
-            if not full:
+            # 封口只看字节线：块数不再是旋钮（新设计里容量由槽计量，见 storage-design §5.2）。
+            if int(row["bytes"]) < cast("int", self.config.pack_max_bytes):
                 return pack_id
             self.catalog.seal_pack(pack_id)
             self._commit()

@@ -31,7 +31,7 @@ from core.conf import (
 from core.conf import conf as engine_conf
 from core.conf.params import conf as kernel_conf
 from core.conf.schema import type_schema
-from core.storage import Bucket, BucketConfig
+from core.storage import Bucket, BucketConfig, CarrierFile
 from core.storage.conf import conf as storage_conf
 from core.types import CairnError
 from core.types.cfg import Cfg, clear, item, items, register
@@ -300,20 +300,33 @@ def test_bucket_config_defaults_come_from_declarations() -> None:
     """桶配置的默认值来自存储自己的声明（不是写死在 `BucketConfig` 里）。"""
     resolved = BucketConfig()
     assert resolved.block_max_bytes == storage_conf.block_max_bytes
-    assert resolved.pack_max_blocks == storage_conf.pack_max_blocks
     assert resolved.pack_max_bytes == storage_conf.pack_max_bytes
 
 
 def test_config_file_drives_bucket_config(tmp_path: Path) -> None:
     """改配置文件 → 桶跟着变（**文件说了算**），改完还原。"""
-    original = engine_conf.get("storage.pack.max_blocks")
+    original = engine_conf.get("storage.pack.max_bytes")
     try:
-        engine_conf.set("storage.pack.max_blocks", 7)
-        assert BucketConfig().pack_max_blocks == 7
+        engine_conf.set("storage.pack.max_bytes", 4096)
+        assert BucketConfig().pack_max_bytes == 4096
         bucket = Bucket.create(tmp_path / "bucket")
-        assert bucket.config.pack_max_blocks == 7
+        assert bucket.config.pack_max_bytes == 4096
     finally:
-        engine_conf.set("storage.pack.max_blocks", original)
+        engine_conf.set("storage.pack.max_bytes", original)
+
+
+def test_carrier_slot_bytes_default_comes_from_declaration(tmp_path: Path) -> None:
+    """建载体时槽长向声明要；**读回时从文件头读**，不再问配置。"""
+    declared = storage_conf.pack_slot_bytes
+    carrier = CarrierFile.create(tmp_path / "pack")
+    assert carrier.layout.slot_bytes == declared
+    original = engine_conf.get("storage.pack.slot_bytes")
+    try:
+        engine_conf.set("storage.pack.slot_bytes", declared * 2)
+        # 已建载体不被新配置改写：仍按自己文件头里的槽长解释
+        assert CarrierFile.open(tmp_path / "pack").layout.slot_bytes == declared
+    finally:
+        engine_conf.set("storage.pack.slot_bytes", original)
 
 
 def test_bucket_config_rejects_non_integer_value() -> None:

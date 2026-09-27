@@ -1,7 +1,6 @@
 {
   "$schema": "../../../../schema/settings/core/storage/conf.json",
   "storage.block.max_bytes": 1048576,
-  "storage.pack.max_blocks": 4096,
   "storage.pack.max_bytes": 1073741824,
-  "storage.version.retention_days": 30
+  "storage.pack.slot_bytes": 65536
 }

@@ -23,15 +23,14 @@
 | 键丢、有默认值 | **补回来**（只补缺失的键） |
 | 键丢、没默认值 | **报错** |
 
-## 全部配置项（5 条）
+## 全部配置项（4 条）
 
 | 键 | 类型 | 默认值 | 说明 | 归属 |
 |---|---|---|---|---|
 | `core.log.level` | `string` | `WARNING` | 内核日志级别 | `core.conf.params.CoreConf` |
 | `storage.block.max_bytes` | `integer` | `1048576` | 单个块的字节上限，超过即分片（分片 + 索引块） | `core.storage.conf.StorageConf` |
-| `storage.pack.max_blocks` | `integer` | `4096` | 单个载体最多装多少块，写满即封口 | `core.storage.conf.StorageConf` |
-| `storage.pack.max_bytes` | `integer` | `1073741824` | 单个载体字节上限，写满即封口 | `core.storage.conf.StorageConf` |
-| `storage.version.retention_days` | `integer` | `30` | 版本保留窗（天）：**预留**——惰性压实尚未实现，当前无读取点 | `core.storage.conf.StorageConf` |
+| `storage.pack.max_bytes` | `integer` | `2147483648` | 单个载体的字节上限，写满即封口（只管封口线，不定槽长） | `core.storage.conf.StorageConf` |
+| `storage.pack.slot_bytes` | `integer` | `65536` | 槽长：载体内的定长分配与定位单位，建载体时写进文件头 | `core.storage.conf.StorageConf` |
 
 ## 另见
 

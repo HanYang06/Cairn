@@ -14,7 +14,16 @@
 
     from core.storage.conf import conf
 
-    batch = conf.pack_max_blocks
+    slot = conf.pack_slot_bytes
+
+**什么该进这里、什么不该**（判据是"谁有权改它"）：
+
+- **配置键** —— 人能调、调了不坏库的东西：分片粒度、封口线、槽长；
+- **格式常量** —— 改了就坏库或换格式的东西：载体魔数、文件头长度、记录头布局。
+  它们留在实现处（`core/storage/carrier.py`），**不进配置**：
+  配置里出现一个代码不读的键，比没有这个键更坏。
+
+槽长的取值由实验确定（设计篇 §5.6 标为待定），故此处只给可改的初值。
 """
 
 from __future__ import annotations
@@ -23,27 +32,22 @@ from core.types.cfg import Cfg
 
 
 class StorageConf:
-    """存储参数（分片粒度 / 载体 / 版本保留窗）。"""
+    """存储参数（分片粒度 / 载体封口 / 槽长）。"""
 
     block_max_bytes: Cfg = Cfg(
         "storage.block.max_bytes",
         1024 * 1024,
         doc="单个块的字节上限，超过即分片（分片 + 索引块）",
     )
-    pack_max_blocks: Cfg = Cfg(
-        "storage.pack.max_blocks",
-        4096,
-        doc="单个载体最多装多少块，写满即封口",
-    )
     pack_max_bytes: Cfg = Cfg(
         "storage.pack.max_bytes",
-        1024 * 1024 * 1024,
-        doc="单个载体字节上限，写满即封口",
+        2 * 1024 * 1024 * 1024,
+        doc="单个载体的字节上限，写满即封口（只管封口线，不定槽长）",
     )
-    version_retention_days: Cfg = Cfg(
-        "storage.version.retention_days",
-        30,
-        doc="版本保留窗（天）：**预留**——惰性压实尚未实现，当前无读取点",
+    pack_slot_bytes: Cfg = Cfg(
+        "storage.pack.slot_bytes",
+        64 * 1024,
+        doc="槽长：载体内的定长分配与定位单位，建载体时写进文件头",
     )
 
 

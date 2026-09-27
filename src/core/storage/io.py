@@ -33,6 +33,18 @@ if TYPE_CHECKING:
 _LEN_FIELD = struct.Struct(">I")
 
 
+def _configured_slot_bytes() -> int:
+    """向配置要槽长（建载体时的默认）。
+
+    **先引入声明模块再取值**：配置引擎按"谁声明谁报到"工作，没导入过的声明它不认识；
+    在别处引用本模块时，声明未必已经报到。延迟导入同时避免存储地基在加载期拉起引擎。
+    """
+    from . import conf as _declared  # noqa: PLC0415 — 先让声明报到
+
+    slot_bytes: int = _declared.conf.pack_slot_bytes
+    return slot_bytes
+
+
 class CarrierFile:
     """一个载体文件（``packs/`` 下的一个文件）。"""
 
@@ -42,13 +54,19 @@ class CarrierFile:
 
     # ---- 生命周期 ----
     @classmethod
-    def create(cls, path: Path | str, slot_bytes: int) -> CarrierFile:
+    def create(cls, path: Path | str, slot_bytes: int | None = None) -> CarrierFile:
         """新建载体：写入文件头（魔数 + 槽长 + 预留零）。
 
         槽长在**文件头里落定**，故载体自描述：只拿到这一个文件也能算偏移。
+
+        ``slot_bytes`` 不给时向配置要（``storage.pack.slot_bytes``）：**配置只在建的这一刻读一次**，
+        此后一律从文件头读——否则改一次配置，已落盘的载体就全被解释成另一个布局。
+        允许显式传参，是为了"按指定布局造一个载体"（迁移、压实、测试）。
         """
         target = Path(path)
-        layout = CarrierLayout(slot_bytes=slot_bytes)
+        layout = CarrierLayout(
+            slot_bytes=slot_bytes if slot_bytes is not None else _configured_slot_bytes()
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("wb") as handle:
             handle.write(layout.encode_header())
