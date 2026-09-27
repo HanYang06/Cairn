@@ -47,7 +47,8 @@ core.close()
 要点：
 
 - **落盘一律显式 `core.put(data)`**；领域服务内部代为实现，调用方不得直接写文件。
-- **库就是目录**：`vault/catalog.db`（目录库，位置真源）+ `vault/packs/*.pack`（内容）。
+- **库就是目录**：`vault/catalog.db`（索引库，可重建的投影）+ `vault/<桶>/packs/*.pack`（载体，真源）。
+  索引丢了能顺扫载体重建（`Vault.repair`），巡检与重建都是库级动作（`core.storage.vault`）。
 - **本地不加密**，明文落盘；加密只用于传输 / 服务端（当前未实现）。
 
 ## 3. 跑测试

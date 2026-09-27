@@ -3,7 +3,7 @@
 
 # 网络层（P2P 底层）规格
 
-> 承接 [`storage.md`](./storage.md)（桶 / 块 / 目录）与 [`access.md`](./access.md)（传输加密 / 档位）。
+> 承接 [`storage-design.md`](./storage-design.md)（桶 / 块 / 目录）与 [`access.md`](./access.md)（传输加密 / 档位）。
 > 定位：**网络是增强层，不是本体**。本地永远可用；联网只是把块连起来。
 
 状态：**草案 v0.2**（未实现；已按「无 manifest、内容按 `checksum` 寻址」修订术语，落地前整体复核）

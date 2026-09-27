@@ -4,7 +4,7 @@
 # 笔记模型（Note Model）
 
 > L3 领域概念规格。回答"笔记到底是什么"，并定死节点 / 基板 / 关系 / 组装四要素。
-> 承接内核 [`storage.md`](./storage.md)、[`domains.md`](./domains.md)、[`kernel.md`](./kernel.md)；
+> 承接内核 [`storage-design.md`](./storage-design.md)、[`domains.md`](./domains.md)、[`kernel.md`](./kernel.md)；
 > 对象模型 / 基板 / 内存态与存储态见 [`data-model.md`](./data-model.md)。
 > 注：**基础数据格式是"基板"（正文行序列），`note` 只是它的一个角色**（`data-model.md` §5.1）。
 
@@ -48,7 +48,7 @@ Composition 组装 —— 一种角色：正文里放节点引用的 note → �
 
 ## 3. 身份与不可篡改性
 
-- 节点身份 = 稳定 **OID**（ULID，创建即锁死），作为块存进桶（[`storage.md`](./storage.md)）。
+- 节点身份 = 稳定 **OID**（ULID，创建即锁死），作为块存进桶（[`storage-design.md`](./storage-design.md)）。
 - **本地不加密**：落盘明文，加密只用于传输 / 服务端（见 [`access.md`](./access.md)）。
 - **创作签名**：`Signature{alg, author, created, subject, prev, value}`（`feature/signature.py`），
   创建时锁在当时的 `body.hash` 上；当前 `alg="b3"` 是自包含的哈希链（改任一字段 `value` 即对不上），

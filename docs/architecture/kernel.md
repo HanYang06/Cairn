@@ -49,7 +49,7 @@
 | `ObjectDeleted` | `oid` |
 
 > 事件目录当前精简为这两个。旧的 `VaultUnlocked` / `VaultLocked` / `SpaceCreated` 已随
-> 「本地不加密 + 无空间」删除（见 [`storage.md`](./storage.md) §7）。
+> 「本地不加密 + 无空间」删除（见 [`storage-design.md`](./storage-design.md) §7）。
 
 ### 1.3 订阅 API
 
@@ -134,10 +134,12 @@ AppContext:
 | 层 | 位置 | 内容 |
 |---|---|---|
 | 应用级 | 各端自定（如 `%APPDATA%/cairn`） | 最近打开、主题、日志级别、监听地址 |
-| 库级 | `<bucket>/catalog.db` 的 `meta` 表 | 格式版本、桶配置 |
+| 库级 | `vault/catalog.db` 的 `meta` 表 | 声明投影（开库时与程序声明比对） |
 
-- 库级配置现已落在 `catalog.db` 的 `meta` 表（`BucketConfig`）；早先设想的 `<vault>/cairn.toml`
-  **未实现**（本地不加密后，KDF / 封装密钥等字段随之作废）。
+- 库级那份**不是可改的配置**：它由存储自己的配置声明展开而成（`config/settings/core/storage/`），
+  开库时比对，不一致即报错。存储的参数（封口线、槽长、分片粒度）走**配置文件**，
+  槽长随载体写进文件头（设计篇 §5.5–§5.6）。
+- 早先设想的 `<vault>/cairn.toml` **未实现**（本地不加密后，KDF / 封装密钥等字段随之作废）。
 - 应用级配置待 UI / 服务端出现时再定。
 - **内核不读应用级配置**，只读库级。
 

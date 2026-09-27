@@ -34,7 +34,7 @@ uv run mkdocs build --strict   # 与 CI 同口径：坏链接 / 缺页面 / 未�
   文档与代码不符的代价，是本项目最高的一项成本。
 - **代码是唯一事实**：`docs/architecture/*.md` 与实现冲突时，改实现后**回写文档**
   （回写是任务的一部分，不是后续任务）。
-- 相对链接用文件相对路径（`../architecture/storage.md`）；断链由 `--strict` 报出。
+- 相对链接用文件相对路径（`../architecture/storage-design.md`）；断链由 `--strict` 报出。
 - 图用 [Mermaid](https://mermaid.js.org/) 围栏代码块（` ```mermaid `），本站与 GitHub 都能渲染。
 
 ## 加 API 页面

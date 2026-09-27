@@ -57,8 +57,8 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
 
 - 顶层包在 `src/` 下、**一律去 `cairn.` 前缀**（`from core.storage import …`）：
   `core` / `feature` / `ui_tools` / `app`（`net` / `server` 已删，待重设）。
-- `src/core/`（L0 桶 / 块存储）是公共底座：**必须 Qt-free、传输无关**；
-  存储原语在 `core/storage/`（桶 / 块 / 目录 / 表），基础类型在 `core/types/`。
+- `src/core/`（L0 存储底座）是公共底座：**必须 Qt-free、传输无关**；
+  存储原语在 `core/storage/`（块 / 载体 / 桶 / 多桶 / 索引库），基础类型在 `core/types/`。
 - `src/feature/`（L3）只依赖 core 公共 API，内部先分两支：**域**（`note` / `project`，`Domain` 子类，
   管理型、单例、无 ID）与 **共享件**（`shared/`：数据结构 canvas / asset / group、值 signature、
   设施 relation / provenance / base / kinds）。领域之间互不依赖；领域结构**直接继承 `Block`**，
@@ -70,10 +70,10 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
   `core/conf/` 放配置与常量。
 - `src/net/`、`src/server/` 曾为 P2P / 服务端**实验顶层包**，**当前已删除、待重设**
   （`tests/net/` 与 ruff 的 per-file-ignores 里还有残引用）。新内核代码放 `src/core` 或 `src/feature`。
-- `docs/architecture/*.md` 是设计事实来源（`storage.md` 为 L0 唯一事实来源，
-  `data-model.md` 为数据结构总纲），状态均为「草案」，部分未实现。
-  **有冲突以代码为准，改实现后回写文档。**
-- 内部时间统一 unix 毫秒 int；ID 用 ULID（Oid），内容哈希用 BLAKE3 十六进制（`checksum`）。
+- `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源，
+  `data-model.md` 为数据结构总纲）。**有冲突以代码为准，改实现后回写文档。**
+- 内部时间统一 unix 毫秒 int；对象身份是 `ValueUuid`（26 字符 Crockford ULID），
+  内容哈希是 `ValueHash`（BLAKE3 十六进制）——两套凭证都在 `core/types/id.py` 的 `Id` 上。
 
 ## 测试
 

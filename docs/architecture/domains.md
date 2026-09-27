@@ -3,7 +3,7 @@
 
 # 领域层：定义与扩展约定
 
-> 承接 [`storage.md`](./storage.md)（L0 桶 / 块）与 [`data-model.md`](./data-model.md)（对象模型总纲）。
+> 承接 [`storage-design.md`](./storage-design.md)（L0 桶 / 块）与 [`data-model.md`](./data-model.md)（对象模型总纲）。
 > 本文定义**领域层是什么**、怎么扩展，以及日志的分层约定。
 
 状态：**草案 v0.4**（2026-09-22 按内核重构定向回写；旧 `cairn.<domain>.<kind>` 命名空间与「五域」表述作废）

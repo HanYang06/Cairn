@@ -4,7 +4,7 @@
 # UI 内核设计总纲（UI Kernel）
 
 > 定位：**UI 内核 ≠ Qt**。Qt 仅为实现材质；内核负责「对象 → 界面」的生成、编译、绑定与配置。
-> 关系：数据内核对侧见 [`data-model.md`](./data-model.md) / [`storage.md`](./storage.md)；
+> 关系：数据内核对侧见 [`data-model.md`](./data-model.md) / [`storage-design.md`](./storage-design.md)；
 > 横切设施见 [`kernel.md`](./kernel.md)；主题与配置细则见 [`ui-theme.md`](./ui-theme.md)（待改写）。
 
 状态：**草案 v0.3**。技术路线已定（Widgets 宿主 + QML 岛）；下述四项为目标设计，分阶段落地。
