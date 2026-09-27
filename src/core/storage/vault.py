@@ -21,6 +21,11 @@
 4. **配置只在写入的这一刻读**：槽长随载体走（写进文件头，§5.5），
    封口线是策略（每次写入按当前值判）——两者性质不同，故取用方式也不同。
 
+巡检与处置是这一层的闭合动作（§8.7）：:meth:`Vault.patrol` **只报告**——把索引库与它
+声称的真源（桶目录、载体、记录头）比一遍；:meth:`Vault.repair` **只处置**其中"可由重建修复"
+的那部分（以载体为真源补缺行、改正坐标、补登记）。内容真的没了、桶真的没了这类发现一律不动手：
+删行就等于把"丢了东西"这件事抹掉，只能报告，交由备份与人工。
+
 与旧层的关系：旧 ``core.storage.Bucket``（配 ``catalog``）是待退役的一层（§11 第 4 步），
 新层先在 ``core.storage.vault`` 落地，接线与旧层退役随后进行。
 """
@@ -39,6 +44,8 @@ from core.types import (
     CairnError,
     CorruptObjectError,
     ObjectNotFoundError,
+    RecordFormatError,
+    SlotError,
     SlotRange,
     StorageError,
     now_ms,
@@ -51,6 +58,8 @@ from .record import Record
 if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Iterator
+
+    from core.types import Id
 
 DEFAULT_BUCKET = "main"
 """默认桶名：不带桶名的写入落这里。"""
@@ -77,7 +86,7 @@ class BucketRole(Enum):
     """归档桶：以只读为主。"""
 
     TRANSIENT = "transient"
-    """短命桶：并发期承接写入，合并后销毁（**预留**：合并尚未实现，§7）。"""
+    """短命桶：并发期承接写入，合并后销毁（**未来项，短期不做**，§7）。"""
 
 
 class BucketState(Enum):
@@ -87,7 +96,90 @@ class BucketState(Enum):
     """已挂载：参与读写。"""
 
     MERGED = "merged"
-    """已并入别处（**预留**：合并尚未实现）。"""
+    """已并入别处（**未来项，短期不做**）。"""
+
+
+class FindingKind(Enum):
+    """巡检发现（§8.7）：**分类即处置依据**——可否由重建修复，决定了下一步谁来做。"""
+
+    MISSING_ROW = "missing_row"
+    """盘上有记录、库里没有行：写漏了或行被删了，可由重建补回。"""
+
+    MISPLACED = "misplaced"
+    """行在、身份对得上，但坐标与载体里的实际位置不符：可由重建改正。"""
+
+    UNREGISTERED_BUCKET = "unregistered_bucket"
+    """桶目录在、登记缺：可补登记（目录是事实，登记是投影）。"""
+
+    MISSING_RECORD = "missing_record"
+    """行在、盘上读不出来（载体没了，或盘上只剩别的版本）：**内容真的没了**，重建修不了。"""
+
+    MISSING_BUCKET = "missing_bucket"
+    """登记在、目录缺：桶没了，重建修不了。"""
+
+    CORRUPT_CARRIER = "corrupt_carrier"
+    """载体读不到底（截断 / 校验失败）：坏点在哪个字节只有人看得出来，重建修不了。"""
+
+    @property
+    def fixable(self) -> bool:
+        """可否由重建修复：档一的口径是"以载体为真源"（§8.5）。"""
+        return self in _FIXABLE_KINDS
+
+
+_FIXABLE_KINDS = frozenset(
+    {FindingKind.MISSING_ROW, FindingKind.MISPLACED, FindingKind.UNREGISTERED_BUCKET}
+)
+"""可由重建修复的种类；其余只能报告（§8.5 档一 / 档三）。"""
+
+
+@dataclass(frozen=True, slots=True)
+class Finding:
+    """一处巡检发现：种类 ＋ 定位所需的最小信息。"""
+
+    kind: FindingKind
+    """发现种类。"""
+
+    bucket: str = ""
+    """相关桶名。"""
+
+    pack: str = ""
+    """相关载体名。"""
+
+    value_uuid: str = ""
+    """相关身份（桶级发现留空）。"""
+
+    detail: str = ""
+    """补充说明（给人看，不参与判断）。"""
+
+
+@dataclass(frozen=True, slots=True)
+class PatrolReport:
+    """巡检报告：**只陈述事实，不替调用方决定怎么办**。"""
+
+    findings: tuple[Finding, ...] = ()
+    """发现（空 = 索引与真源一致）。"""
+
+    @property
+    def clean(self) -> bool:
+        """索引与真源是否一致。"""
+        return not self.findings
+
+    @property
+    def fixable(self) -> tuple[Finding, ...]:
+        """可由重建修复的部分（以载体为真源）。"""
+        return tuple(item for item in self.findings if item.kind.fixable)
+
+    @property
+    def unfixable(self) -> tuple[Finding, ...]:
+        """重建修不了的部分：只能靠备份与人工处置。"""
+        return tuple(item for item in self.findings if not item.kind.fixable)
+
+    def counts(self) -> dict[str, int]:
+        """按种类计数（日志与巡检输出用）。"""
+        tally: dict[str, int] = {}
+        for item in self.findings:
+            tally[item.kind.value] = tally.get(item.kind.value, 0) + 1
+        return tally
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,30 +481,17 @@ class Vault:
         """登记表里的全部桶行（**登记视图**；真源仍是目录）。"""
         return list(self.index.conn.execute("SELECT * FROM bucket ORDER BY name").fetchall())
 
-    def reconcile(self) -> list[str]:
-        """桶登记对账：目录里有的补登记，登记里有的**只报告不删**。
-
-        返回"有登记、无目录"的桶名：多出的登记交由人工处置（与"多出的列不静默删除"同一口径）。
-        """
-        found = self.buckets()
-        for bucket in found:
-            self.register(bucket)
-        names = {bucket.name for bucket in found}
-        return sorted(
-            str(row["name"]) for row in self.bucket_rows() if str(row["name"]) not in names
-        )
-
     # ---- 记录：写入与读取 ----
     def put(self, record: Record, *, kind: str = "", bucket: str = DEFAULT_BUCKET) -> Placement:
         """写入一条记录，返回它的物理坐标。
 
         **先落字节、后记目录**：索引行指向的位置必然已经存在。
         反过来（先记目录再落字节）只会留下空洞，且要到读的时候才发现。
-        中途失败留下的孤儿字节不影响正确性：顺扫即可发现它们（:meth:`rebuild_records`）。
+        中途失败留下的孤儿字节不影响正确性：顺扫即可发现它们（:meth:`repair`）。
         """
         target = self.bucket(bucket)
         place = target.append(record)
-        self._write_row(place, record, kind=kind)
+        self._write_row(place, record.id, kind=kind)
         self.index.commit()
         return place
 
@@ -429,28 +508,172 @@ class Vault:
         return self._read_row(row)
 
     def records(self, *, bucket: str = "") -> Iterator[tuple[Placement, Record]]:
-        """顺扫记录：``bucket`` 给了就只扫那个桶，否则扫全部桶。"""
+        """顺扫记录：``bucket`` 给了就只扫那个桶，否则扫全部桶。坏点即停并报错。"""
         targets = (self._open_bucket(bucket),) if bucket else self.buckets()
         for target in targets:
             yield from target.records()
 
-    def rebuild_records(self) -> int:
-        """档一重建：顺扫全部载体，把**缺失的定位行**补回索引库，返回补了几行。
+    # ---- 巡检与处置（§8.7）----
+    def patrol(self) -> PatrolReport:
+        """**巡检**：把索引库与它声称的真源比一遍，只报告、不动库。
 
-        只补不覆盖：``kind`` 与落盘时刻都不在记录头里（类型由程序给出，§3.5），
-        重扫无法还原它们，故已有的行一律不动——否则一次重建会把类型信息抹掉。
-        清空重扫（权威重建）需要程序按 ID 给出类型，属 ID 专项的落点。
+        比两个方向，因为两边的毛病不同：盘上有、库里没有 → 可由重建补回；
+        库里有、盘上读不出来 → **内容真的没了**，重建修不了。桶目录与登记也一并比
+        （目录是事实、登记是投影）。
+
+        代价写明：要把全库的**定位信息**读进内存（不含载荷）——这是"能否两头对齐"的代价，
+        无所谓性能，故不做增量与缓存。
         """
-        added = 0
-        for place, record in self.records():
-            if self.index.record_row(str(record.id.value_uuid)) is not None:
+        return PatrolReport(tuple(item.finding for item in self._differences()))
+
+    def repair(self) -> tuple[Finding, ...]:
+        """**处置**可修复项：以载体为真源补缺行、改正坐标，并补上缺的桶登记。
+
+        只动"能由重建修复"的那部分，返回这次处置掉的发现（不可修复项一个都不碰）：
+        内容没了、桶没了、载体坏了——这些删行就等于把"丢了东西"抹掉，
+        只能报告，交由备份与人工（§8.7）。改动坐标时**保留类型与时间**：
+        本次是修坐标，不是写数据。
+        """
+        fixed: list[Finding] = []
+        for item in self._differences():
+            if not item.finding.kind.fixable:
                 continue
-            # 记录头里有 ID 与签发时刻，故身份与 issued 能还原；类型与落盘时刻不能。
-            self._write_row(place, record, created=0, updated=0)
-            added += 1
-        if added:
+            if item.finding.kind is FindingKind.UNREGISTERED_BUCKET:
+                self.register(self._open_bucket(item.finding.bucket))
+            elif item.place is not None and item.ident is not None:
+                row = self.index.record_row(str(item.ident.value_uuid))
+                self._write_row(
+                    item.place,
+                    item.ident,
+                    created=int(row["created"]) if row is not None else 0,
+                    updated=int(row["updated"]) if row is not None else 0,
+                )
+            fixed.append(item.finding)
+        if fixed:
             self.index.commit()
-        return added
+        return tuple(fixed)
+
+    def _differences(self) -> list[_Difference]:
+        """巡检的比对：一次顺扫 ＋ 一遍定位行，两头对齐后给出差异。
+
+        对齐口径（"这条行指向的字节还在不在"）：
+        行的坐标与身份与该身份的某次出现完全一致 → 一致；坐标不符但身份对得上 → 改坐标；
+        盘上只有该身份的其他版本 → 行声称的内容没了；一次都没出现 → 内容没了。
+        同一身份在盘上出现多次本身**不是**差异：更新留下的旧副本要等压实回收（§12），
+        它不影响"行指向的那一份是否成立"。
+        """
+        rows = {
+            str(row["value_uuid"]): row
+            for row in self.index.conn.execute("SELECT * FROM record").fetchall()
+        }
+        buckets = {bucket.name: bucket for bucket in self.buckets()}
+        registered = {str(row["name"]) for row in self.bucket_rows()}
+        found: list[_Difference] = [
+            _Difference(Finding(FindingKind.UNREGISTERED_BUCKET, bucket=name))
+            for name in sorted(set(buckets) - registered)
+        ]
+        found.extend(
+            _Difference(Finding(FindingKind.MISSING_BUCKET, bucket=name))
+            for name in sorted(registered - set(buckets))
+        )
+
+        seen: dict[str, list[_Difference]] = {}
+        for name in sorted(buckets):
+            for place, record in self._scan_bucket(buckets[name], found):
+                seen.setdefault(str(record.id.value_uuid), []).append(
+                    _Difference(
+                        Finding(
+                            FindingKind.MISSING_ROW,
+                            bucket=place.bucket,
+                            pack=place.pack,
+                            value_uuid=str(record.id.value_uuid),
+                        ),
+                        place=place,
+                        ident=record.id,
+                    )
+                )
+
+        for value_uuid, row in rows.items():
+            found_at = seen.pop(value_uuid, [])
+            place = _placement_of(row)
+            if not found_at:
+                found.append(
+                    _Difference(
+                        Finding(
+                            FindingKind.MISSING_RECORD,
+                            bucket=str(row["bucket"]),
+                            pack=str(row["pack"]),
+                            value_uuid=value_uuid,
+                            detail="载体里没有这个身份",
+                        )
+                    )
+                )
+                continue
+            if any(item.place == place for item in found_at):
+                continue  # 坐标与身份都对得上：一致
+            same = [item for item in found_at if _ident_hash(item) == str(row["value_hash"])]
+            if not same:
+                found.append(
+                    _Difference(
+                        Finding(
+                            FindingKind.MISSING_RECORD,
+                            bucket=str(row["bucket"]),
+                            pack=str(row["pack"]),
+                            value_uuid=value_uuid,
+                            detail="载体里只有该身份的其他版本",
+                        )
+                    )
+                )
+                continue
+            newest = same[-1]
+            found.append(
+                _Difference(
+                    Finding(
+                        FindingKind.MISPLACED,
+                        bucket=newest.place.bucket if newest.place else "",
+                        pack=newest.place.pack if newest.place else "",
+                        value_uuid=value_uuid,
+                        detail=f"行 {place} ≠ 载体 {newest.place}",
+                    ),
+                    place=newest.place,
+                    ident=newest.ident,
+                )
+            )
+        for leftovers in seen.values():
+            found.extend(leftovers)  # 顺扫到、库里没有行
+        return found
+
+    def _scan_bucket(
+        self, bucket: Bucket, found: list[_Difference]
+    ) -> Iterator[tuple[Placement, Record]]:
+        """巡检式顺扫：某个载体读不到底时**记下发现、继续扫别的载体**。
+
+        与 :meth:`Bucket.records` 的区别只在这一处：重建要停下来（半份结果不能当结果），
+        巡检要接着看完——"还坏在哪儿"正是它要回答的问题。
+        """
+        for carrier in bucket.packs():
+            try:
+                for span, record in carrier.scan():
+                    yield (
+                        Placement(
+                            bucket=bucket.name,
+                            pack=carrier.path.name,
+                            span=span,
+                            size=record.total_len,
+                        ),
+                        record,
+                    )
+            except (CorruptObjectError, RecordFormatError, SlotError) as exc:
+                found.append(
+                    _Difference(
+                        Finding(
+                            FindingKind.CORRUPT_CARRIER,
+                            bucket=bucket.name,
+                            pack=carrier.path.name,
+                            detail=str(exc),
+                        )
+                    )
+                )
 
     # ---- 内部 ----
     def _open_bucket(self, name: str) -> Bucket:
@@ -469,7 +692,7 @@ class Vault:
     def _write_row(
         self,
         place: Placement,
-        record: Record,
+        ident: Id,
         *,
         kind: str = "",
         created: int | None = None,
@@ -477,16 +700,17 @@ class Vault:
     ) -> None:
         """写一条定位行：位置永远由载体的实际写入结果给出。
 
+        只收 ID（不是整条记录）：写行只需身份与长度，载荷在这条路径上没有用处。
         改写已有行时**保留已有的类型与落盘时刻**：本次调用没带类型（如重建）不代表
         那个类型不存在，抹掉它就等于把信息丢掉。``issued`` 来自 ID 本身，不受此影响。
         """
         now = now_ms()
-        value_uuid = str(record.id.value_uuid)
+        value_uuid = str(ident.value_uuid)
         existing = self.index.record_row(value_uuid)
         self.index.upsert_record(
             {
                 "value_uuid": value_uuid,
-                "value_hash": str(record.id.value_hash),
+                "value_hash": str(ident.value_hash),
                 "kind": kind or (str(existing["kind"]) if existing is not None else ""),
                 "bucket": place.bucket,
                 "pack": place.pack,
@@ -494,7 +718,7 @@ class Vault:
                 "slot_head": place.span.head,
                 "slot_count": place.span.count,
                 "size": place.size,
-                "issued": int(record.id.issued),
+                "issued": int(ident.issued),
                 "created": (
                     created
                     if created is not None
@@ -508,6 +732,23 @@ class Vault:
         return f"Vault({self.root})"
 
 
+@dataclass(frozen=True, slots=True)
+class _Difference:
+    """一处差异：**报告要的（finding）与处置要的（材料）绑在一起**。
+
+    绑在一起是为了让处置不必把载体再读一遍；材料只留 ID 与坐标，不留载荷。
+    """
+
+    finding: Finding
+    place: Placement | None = None
+    ident: Id | None = None
+
+
+def _ident_hash(item: _Difference) -> str:
+    """这次出现携带的摘要凭证（行与载体对身份时要它）。"""
+    return "" if item.ident is None else str(item.ident.value_hash)
+
+
 __all__ = [
     "DEFAULT_BUCKET",
     "PACKS_DIR",
@@ -515,6 +756,9 @@ __all__ = [
     "Bucket",
     "BucketRole",
     "BucketState",
+    "Finding",
+    "FindingKind",
+    "PatrolReport",
     "Placement",
     "Vault",
 ]

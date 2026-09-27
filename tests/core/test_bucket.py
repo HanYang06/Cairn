@@ -21,14 +21,20 @@ import pytest
 
 from core.conf import conf as engine_conf
 from core.storage import Record
-from core.storage.vault import DEFAULT_BUCKET, PACKS_DIR, Bucket, Placement, Vault
+from core.storage.vault import (
+    DEFAULT_BUCKET,
+    PACKS_DIR,
+    Bucket,
+    FindingKind,
+    Placement,
+    Vault,
+)
 from core.types import (
     BucketExistsError,
     BucketNotFoundError,
     CorruptObjectError,
     Id,
     ObjectNotFoundError,
-    RecordFormatError,
     SlotRange,
     StorageError,
     ValueHash,
@@ -59,6 +65,16 @@ def _same_identity(base: Id, payload: bytes) -> Id:
 
 def _vault(tmp_path: Path, *, pack_max_bytes: int | None = None) -> Vault:
     return Vault.open(tmp_path / "vault", pack_max_bytes=pack_max_bytes)
+
+
+def _placement_of_row(row: sqlite3.Row) -> Placement:
+    """定位行 → 物理坐标（与 `Vault.placement` 同一口径，供比对用）。"""
+    return Placement(
+        bucket=str(row["bucket"]),
+        pack=str(row["pack"]),
+        span=SlotRange(int(row["slot_start"]), int(row["slot_count"]), int(row["slot_head"])),
+        size=int(row["size"]),
+    )
 
 
 # ---- 开库与对齐 ----
@@ -134,16 +150,23 @@ def test_bucket_create_and_open_are_two_different_acts(tmp_path: Path) -> None:
         Bucket.open(tmp_path / "nowhere")
 
 
-def test_reconcile_reports_rows_without_a_directory(tmp_path: Path) -> None:
-    """登记对账：目录里有的补登记，登记里有的只报告不删。"""
+def test_patrol_reports_bucket_directories_and_registration(tmp_path: Path) -> None:
+    """桶这一侧：目录是事实、登记是投影。缺登记可补，登记多余只报告。"""
     with _vault(tmp_path) as vault:
         vault.bucket("gone")
         (vault.root / "appeared" / PACKS_DIR).mkdir(parents=True)
         (vault.root / "gone" / PACKS_DIR).rmdir()
         (vault.root / "gone").rmdir()
 
-        assert vault.reconcile() == ["gone"]
-        assert [row["name"] for row in vault.bucket_rows()] == ["appeared", "gone"]
+        report = vault.patrol()
+
+        assert report.counts() == {"unregistered_bucket": 1, "missing_bucket": 1}
+        assert {item.bucket for item in report.fixable} == {"appeared"}
+        assert {item.bucket for item in report.unfixable} == {"gone"}
+
+        assert [item.bucket for item in vault.repair()] == ["appeared"]
+        assert [row["name"] for row in vault.bucket_rows()] == ["appeared", "gone"]  # 不删登记者
+        assert vault.patrol().unfixable  # 桶没了这件事仍然在报告里
 
 
 # ---- 记录：写入与读取 ----
@@ -341,11 +364,33 @@ def test_placements_from_a_scan_match_the_written_ones(tmp_path: Path) -> None:
         assert [place for place, _found in vault.records()] == written
 
 
-# ---- 档一重建 ----
+# ---- 巡检与处置（§8.7）----
 
 
-def test_rebuild_restores_missing_rows_and_keeps_existing_ones(tmp_path: Path) -> None:
-    """重建只补缺行：类型不在记录头里，故已有的行一律不动。"""
+def test_patrol_is_clean_right_after_writes(tmp_path: Path) -> None:
+    """刚写完就巡检：索引与真源一致，没有可报告的东西。"""
+    with _vault(tmp_path) as vault:
+        vault.put(_record(b"one"), kind="notedata")
+        vault.put(_record(b"two"), bucket="other")
+
+        report = vault.patrol()
+
+        assert report.clean
+        assert report.counts() == {}
+        assert report.fixable == report.unfixable == ()
+
+
+def test_patrol_does_not_write(tmp_path: Path) -> None:
+    """巡检是只读的：报告缺登记，但自己不补登记。"""
+    with _vault(tmp_path) as vault:
+        (vault.root / "appeared" / PACKS_DIR).mkdir(parents=True)
+
+        assert not vault.patrol().clean
+        assert vault.bucket_rows() == []  # 一次巡检不该改变库
+
+
+def test_patrol_reports_a_missing_row_and_repair_puts_it_back(tmp_path: Path) -> None:
+    """盘上有、库里没有 → 可由重建补回；类型不在记录头里，故只能按未知补。"""
     with _vault(tmp_path) as vault:
         kept, lost = _record(b"kept"), _record(b"lost")
         vault.put(kept, kind="notedata")
@@ -355,7 +400,11 @@ def test_rebuild_restores_missing_rows_and_keeps_existing_ones(tmp_path: Path) -
         )
         vault.index.commit()
 
-        assert vault.rebuild_records() == 1
+        report = vault.patrol()
+        assert report.counts() == {"missing_row": 1}
+        assert [item.value_uuid for item in report.fixable] == [str(lost.id.value_uuid)]
+
+        assert [item.kind for item in vault.repair()] == [FindingKind.MISSING_ROW]
 
         row = vault.index.record_row(str(lost.id.value_uuid))
         assert row is not None
@@ -365,22 +414,89 @@ def test_rebuild_restores_missing_rows_and_keeps_existing_ones(tmp_path: Path) -
         assert back is not None
         assert back["kind"] == "notedata"  # 已有的行没被动过
         assert vault.get(str(lost.id.value_uuid)) == lost
+        assert vault.patrol().clean
 
 
-def test_rebuild_is_idempotent(tmp_path: Path) -> None:
+def test_patrol_reports_misplaced_coordinates_and_repair_corrects_them(tmp_path: Path) -> None:
+    """行在、身份也对得上，但坐标不符 → 以载体为真源改正；类型与时间不动。"""
+    with _vault(tmp_path) as vault:
+        record = _record(b"payload")
+        place = vault.put(record, kind="notedata")
+        row = vault.index.record_row(str(record.id.value_uuid))
+        assert row is not None
+        created, updated = int(row["created"]), int(row["updated"])
+        vault.index.conn.execute(
+            "UPDATE record SET slot_head = slot_head + 1 WHERE value_uuid = ?",
+            (str(record.id.value_uuid),),
+        )
+        vault.index.commit()
+
+        report = vault.patrol()
+
+        assert report.counts() == {"misplaced": 1}
+        assert FindingKind.MISPLACED in {item.kind for item in report.fixable}
+
+        assert [item.kind for item in vault.repair()] == [FindingKind.MISPLACED]
+
+        fixed = vault.index.record_row(str(record.id.value_uuid))
+        assert fixed is not None
+        assert _placement_of_row(fixed) == place
+        assert int(fixed["created"]) == created  # 修坐标不是写数据
+        assert int(fixed["updated"]) == updated
+        assert fixed["kind"] == "notedata"
+        assert vault.patrol().clean
+
+
+def test_patrol_reports_a_missing_record_without_touching_it(tmp_path: Path) -> None:
+    """行在、盘上读不出来 → 重建修不了：**报告，但绝不删行**（删了就抹掉了丢东西这件事）。"""
+    with _vault(tmp_path) as vault:
+        record = _record(b"x")
+        vault.put(record)
+        vault.bucket().packs()[0].path.unlink()
+
+        report = vault.patrol()
+
+        assert report.counts() == {"missing_record": 1}
+        assert report.fixable == ()
+        assert vault.repair() == ()
+        assert vault.index.record_row(str(record.id.value_uuid)) is not None
+
+
+def test_patrol_prefers_the_copy_the_row_points_at(tmp_path: Path) -> None:
+    """同一身份在盘上有旧副本不是差异：行只要指向**还在的那一份**即算一致。"""
+    with _vault(tmp_path) as vault:
+        base = Id.new(b"v1")
+        vault.put(Record.create(base, b"v1", _SLOT))  # 留下旧副本
+        changed = _same_identity(base, b"v2")
+        vault.put(Record.create(changed, b"v2", _SLOT))
+
+        assert vault.patrol().clean  # 旧副本是压实的活儿，不是索引与真源不一致
+
+
+def test_patrol_reports_a_corrupt_carrier_and_keeps_scanning(tmp_path: Path) -> None:
+    """坏点即停是重建的规矩；巡检要接着看完——"还坏在哪儿"正是它要回答的问题。"""
+    with _vault(tmp_path, pack_max_bytes=1) as vault:
+        good, bad = _record(b"good"), _record(b"bad")
+        vault.put(good)
+        bad_place = vault.put(bad)
+        broken = vault.bucket().packs_dir / bad_place.pack
+        broken.write_bytes(broken.read_bytes()[:-2])
+
+        report = vault.patrol()
+
+        kinds = report.counts()
+        assert kinds["corrupt_carrier"] == 1
+        assert kinds["missing_record"] == 1  # 那条记录连带读不出来，如实报出
+        assert "missing_row" not in kinds  # 好载体那一条没有差异
+        assert vault.get(str(good.id.value_uuid)) == good
+        assert vault.repair() == ()  # 坏点修不了
+
+
+def test_repair_is_idempotent(tmp_path: Path) -> None:
     with _vault(tmp_path) as vault:
         vault.put(_record(b"one"))
-        assert vault.rebuild_records() == 0
-
-
-def test_rebuild_stops_at_a_truncated_carrier(tmp_path: Path) -> None:
-    """坏点即停并报错：顺扫不得跳过读不出来的字节（跳过就把损坏伪装成缺失）。"""
-    with _vault(tmp_path) as vault:
-        vault.put(_record(b"one"))
-        pack = vault.bucket().packs()[0].path
-        pack.write_bytes(pack.read_bytes()[:-2])
-        with pytest.raises(RecordFormatError):
-            vault.rebuild_records()
+        assert vault.patrol().clean
+        assert vault.repair() == ()
 
 
 def test_placement_is_not_persisted_in_the_record() -> None:

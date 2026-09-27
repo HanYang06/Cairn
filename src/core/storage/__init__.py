@@ -40,7 +40,15 @@ from .io import CarrierFile
 from .record import Record, RecordHeader
 from .table import Table
 from .tables import Column, ColumnType, Owned, RebuildTier, declared_tables
-from .vault import BucketRole, BucketState, Placement, Vault
+from .vault import (
+    BucketRole,
+    BucketState,
+    Finding,
+    FindingKind,
+    PatrolReport,
+    Placement,
+    Vault,
+)
 
 __all__ = [
     "BLOCK_VERSION",
@@ -64,8 +72,11 @@ __all__ = [
     "Column",
     "ColumnType",
     "Difference",
+    "Finding",
+    "FindingKind",
     "Index",
     "Owned",
+    "PatrolReport",
     "Placement",
     "RebuildPlan",
     "RebuildTier",
