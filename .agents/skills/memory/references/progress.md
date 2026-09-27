@@ -6,17 +6,17 @@
 > 状态：进行中 / 已定 / 已废弃。完成后移入 `changes.md`，或直接删除。
 > 细则以 `docs/architecture/*.md` 与代码为准，本文件只记「还没做 + 在做」。
 
-## 存储重设计（2026-09-28 立项；第 1 阶段已落）
+## 存储重设计（2026-09-28 立项；**已收口**，只余未来项）
 
-> 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，草案 v1.2）。
-> 方向见 `decisions.md`「存储重设计」。分支 `feat/storage-redesign`。
-> **只跑局部测试**（作者口径：全量测试在当前阶段必然跑不通，等整体变更时统一规划）。
+> 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，已落地，v1.3）。
+> 方向见 `decisions.md`「存储重设计」。分支 `feat/storage-redesign`（已并回 `main`）。
+> 旧层（旧 `Bucket` / `Catalog` / `Oid` / `Cid`）与旧篇 `storage.md` **已删除**。
 
 - [x] **片 0 · 设计篇**：`storage-design.md`（12 节）＋ `mkdocs.yml` 登记 ＋ 逐轮裁定
   （四层 / ID 两形态 / 记录自描述 / 单库多桶 / 表声明配置化 / 可重建分档）。
 - [x] **片 1 · 身份层**：`core/types/id.py`（`Id` / `ValueUuid` / `ValueHash` / `SlotRange` / `Id.record`
-  与 `Id.from_record`）＋ 存储侧异常（`StorageError` 与其 6 个子类）＋ `tests/core/test_id.py`（35 例）。
-  一并：`types/ids.py` 里被取代的 `ID` 草稿删除（`Oid` / `Cid` 原样保留，待收口）。
+  与 `Id.from_record`）＋ 存储侧异常 ＋ `tests/core/test_id.py`（35 例）。
+  一并：`types/ids.py` 里被取代的 `ID` 草稿删除（`Oid` / `Cid` 已于片 5c 随旧层退役）。
 - [x] **片 2 · 载体与记录层**：`core/storage/carrier.py`（槽布局与载体文件头）、
   `record.py`（记录头四项 + 编解码）、`io.py`（`CarrierFile`：追加写 / 按槽区间读 / 顺扫重建）
   ＋ `tests/core/test_carrier.py`（48 例，含篡改、截断、同槽记录错位）。
@@ -46,26 +46,28 @@
 - [x] **片 5a · 块面**（2026-09-28）：`core/storage/blocks.py` 的 `BlockStore` —— 块 ⇄ 记录
   （内容记录 ＋ 块记录；内容面去重；`body_addr` 指针在载荷里；`drop` 只摘行）。
   一并修正设计篇 §3.2.1：指针不在 ID 里（记录层自校验优先），故 §3.2.1 / §4.4 已回写。
-- [ ] **片 5b · 内核接线**（下一步）：`Storage` 改成坐在 `Vault` + `BlockStore` 上，
-  保持 `Core` 的调用面（store / get / fetch / drop / ids / info_of / infos / query / execute / table）；
-  `feature/shared/relation.py` 的 `core.storage.table(...)` 换成新层的边表；`Core.query` / `execute`
-  这两个逃生口无人调用，接线时一并处置。**半径**：领域侧的存储用法只有 `core.put` / `core.get`
-  两处（约 10 个调用点）＋ relation 的表用法，故接线比"换地基"听起来小得多。
-- [ ] **片 5c · 清理**：删 `bucket.py` / `catalog.py` / `table.py` / 旧 `Storage` / `Oid` / `Cid`
-  与旧文档章节（`storage.md`、`data-model.md` 存储态）；旧测试里的**行为契约要迁到新地基**，
-  不是一删了之（`test_vault.py` 测的是内核读写面，`test_store.py` 测旧桶）。
+- [x] **片 5b · 内核接线**（2026-09-28）：`Storage` 重写为 `BlockStore` + `Vault` 之上的适配层，
+  内核只有一条存储路径；库级入口 `.catalog` → `.vault`；中立视图改由块构造；
+  删 `create` 与 `mount` / `bind_tables`（后者全库无一处覆写）。接线撞出并修掉三处：
+  `iter_blocks` 顺扫把**同一身份的旧副本**读成第二个对象（改为按索引走）、
+  `Block.decode` 不收 `author` / `config`（读回时补）、`Vault.open` 把**告警**当开库失败
+  （库里一旦建过领域表就打不开）。加护栏：旧格式的库**显式拒开**。
+  `Core.mount` 换下旧挂件时一并 `close()`（否则连接要等垃圾回收才报资源警告）。
+- [x] **片 5c · 旧层退役与文档收口**（2026-09-28）：删 `bucket.py` / `catalog.py` / `ids.py`
+  与两个无人抛的异常；领域侧 `Oid` 机械替换为 `ValueUuid` / `str`（15 个文件）；
+  测试按契约迁移（`test_vault.py` 11 条原样保留，`test_store.py` 重写为块语义契约）；
+  `storage.md` 删除、全站 13 处入链改指设计篇、`data-model.md` 与术语表按新口径回写。
+- [ ] **未来项 · 合并与短命桶**（作者 2026-09-28 定：无所谓，记下即可，短期不做）：
+  并发承接 + 合并回主桶 + 销毁；届时一并裁定"合并期桶归属改写"（改写为目标桶 / 保留源桶）。
 - 遗留 · **两处字段问题待作者裁**（设计篇 §12）：`body_addr` 提升成索引列？属性投影进库？
-- 遗留 · `bucket.py` / `catalog.py` / `table.py` / `block.py` **本阶段只加不改**（仍走旧路径）；
-  `core/storage/__init__.py` 同时导出新旧两套，**暂并存**：新层的桶类与旧 `Bucket` 同名，
-  过渡期只在 `core.storage.vault` 内可见。
-- 遗留 · 写路径目前无事务：先落字节、后记目录；块面写两条记录（内容 ＋ 块）同理——
+- 遗留 · **能力空缺**（随旧层退役，前三项原为预留、末项全库无人用）：事务与回滚、
+  大正文分片、每桶一份配置、块 `config` 的"独占载体"语义、目录版本号。
+- 遗留 · 写路径无事务：先落字节、后记目录；块面写两条记录（内容 ＋ 块）同理——
   中途失败可能留下没人指向的内容记录，属孤儿（由巡检补行收编，或将来清）。
-- 遗留 · 分片（大 body 切成 PART + INDEX）尚未接到块面（旧 `Bucket.put_content` 无人调用）。
-- 遗留 · `PackSealedError` / `IndexTooNewError` 两个异常**当前无人抛**（片 1 定的词汇表）；
-  要么在接线时找到真实用点，要么删掉——不留"登记了但没人用"的东西。
 - 遗留 · 更新留下的**旧副本**没有回收（同一身份盘上多份），属压实与空洞回收（设计篇 §12）。
 - 遗留 · `gen_conf.py` 重复跑会**留下曾声明、后已删除的键**（本轮手工清了 `storage.db.tables_file`、
   `storage.tables.declared` 一类残留）；生成器缺"清理过期键"这一步。
+  **不修的理由**：引擎无法区分"用户自己加的键"与"删除过的键"，而"用户改过的值一个字都不动"是硬口径。
 
 ## 书面语（2026-09-26 立项；全仓已清零，门禁已阻断）
 
@@ -97,10 +99,12 @@
   `--coverage` 出 docstring 覆盖报告。**规则：能算的就不写、能查的就不写。**
 - [ ] **片 3 · docstring 覆盖补齐（有缺口，勿忘）**：公共类 / 函数 **579 个、117 个没 docstring
   （79.8%）**，因 `show_if_no_docstring: false` 而**从 API 页静默消失**。
-  缺口最大：`core/storage/catalog.py` 24、`feature/shared/canvas.py` 13、`feature/note/tools.py` 12。
-  补到 ≥95% 后把 `tools/docgen.py` 的 `DOCSTRING_MIN` 接成 `--coverage --strict` 门禁。
-- [ ] **片 4 · 内容补齐（随实现走）**：`docs/architecture/` 各篇仍是「草案」，**随内核落地逐步回写**；
-  用户手册等界面稳定后再写（现在不假装有）。
+  缺口最大：`feature/shared/canvas.py` 13、`feature/note/tools.py` 12（`core/storage/catalog.py`
+  已随旧层退役删除）。补到 ≥95% 后把 `tools/docgen.py` 的 `DOCSTRING_MIN` 接成
+  `--coverage --strict` 门禁。
+- [x] **片 4 · 存储篇回写**（2026-09-28）：存储这摞文档已按新底座回写并收口——
+  `storage-design.md` 升为唯一事实来源、旧篇 `storage.md` 删除、`data-model.md` 的存储态
+  与术语表不再写"目录唯一真源"。其余各篇仍随实现逐步回写。
 - [ ] **片 5 · 中文搜索**：`jieba` 分词未引（本机构 sdist 失败）；需要时补，属构建期依赖。
 - [ ] **片 6 · 发布接线（人工一次性）**：仓库 Settings → Pages → Source 选 **GitHub Actions**；
   之后 `main` 的文档变更自动发布到 <https://hanyang06.github.io/cairn/>。自定义域名暂不需要。
@@ -113,17 +117,18 @@
 
 - [x] **片 1 · 引擎与投影**：`core/types/cfg.py`（`Cfg` 声明/取值）、`core/conf/`（engine + schema +
   errors + params）、`core/storage/conf.py`（存储那组声明，**各管各的**）、`tools/gen_conf.py`（`--check`）、
-  `tests/core/test_conf.py`（19 例，含重名检查、接线与端到端投影一致）、`docs/architecture/config.md`。
+  `tests/core/test_conf.py`（含重名检查、接线与端到端投影一致）、`docs/architecture/config.md`。
   投影：`config/settings/core/{conf/params,storage/conf}.json` ↔ `schema/settings/…` + `schema/settings.json`
   （hub 默认 `settings`；重名检查拒写别人的文件）。
-- [x] **片 2 · 接线**：`BucketConfig` 的默认值改由声明供值（`storage.block.max_bytes` /
-  `storage.pack.max_blocks` / `storage.pack.max_bytes`，`__post_init__` 按声明补齐，已建桶把值存目录、
-  重开读回）；`core.log.level` 在导入 `core` 时设到 `core.*` 这族 logger（不劫持 root）。
+- [x] **片 2 · 接线**：`core.log.level` 在导入 `core` 时设到 `core.*` 这族 logger（不劫持 root）。
+  存储参数（封口线 / 槽长 / 分片粒度）由声明供值，取用方式见存储重设计那片
+  （旧 `BucketConfig` 与"每桶一份配置"已随旧层退役；槽长写进载体文件头，封口线每次写入按配置判）。
   一并：`db__engine.py`（空骨架 + 多一个下划线）删除，等 `DB` 设计定了再落。
-- [ ] **片 3 · 手写口 / 校验**：第二个 hub（个人覆写 / 多 hub 合并）；可选 `jsonschema` 校验；
-  `gen_conf.py --check` 进 pre-commit / CI。
-- [ ] **遗留**：`storage.version.retention_days` 已登记**未接线**（版本能力本身待 Q7 裁定后装回）；
-  环境旋钮 `CAIRN_VAULT` / `CAIRN_THEME_DIR` / `CAIRN_SHAPES` 暂不进配置（开发 / 部署入口，测试靠它重定向）。
+- [x] **片 2b · 文件引用**：`Cfg(file_type=…)` 让配置项的值放独立文件，引用名相对值文件自己解析
+  （默认同层级的 `<字段名>.<类型>`）；表声明（`tables.yaml`）就走这条通道。
+- [ ] **片 3 · 手写口 / 校验**：第二个 hub（个人覆写 / 多 hub 合并）；可选 `jsonschema` 校验。
+- [ ] **遗留**：环境旋钮 `CAIRN_VAULT` / `CAIRN_THEME_DIR` / `CAIRN_SHAPES` 暂不进配置
+  （开发 / 部署入口，测试靠它重定向）；`gen_conf.py` 不清理"曾声明、后删除"的键（理由见存储那片）。
 
 ## 内核重构（2026-09-22 立项；规格 `docs/architecture/kernel-spec.md`，2026-09-24 核对至 v1.4）
 

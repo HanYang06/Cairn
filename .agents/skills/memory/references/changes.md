@@ -3,6 +3,31 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **片 5c：旧层退役（桶 / 目录 / Oid / Cid 删掉）＋ 文档收口**
+  （作者：存储侧已落地，接内核、然后清旧代码）：
+  源码删 `core/storage/bucket.py` / `catalog.py` / `core/types/ids.py` 与两个**无人抛**的异常
+  （`IndexTooNewError` / `PackSealedError`）；`block.py` 去 `BLOCK_VERSION` 与
+  `tables()` / `bind_tables()`（全库无一处覆写）；领域侧 `Oid` 机械替换为 `ValueUuid` / `str`（15 个文件）。
+  **测试按契约迁移**：`test_vault.py` 的 11 条 Core 契约原样保留，`test_store.py` 重写为"块语义契约"
+  （领域表那组 CRUD 改走 `Storage.table`），旧桶的 26 条随之删除（事务 / 独占载体 / 分片 /
+  每桶配置 / 目录版本号——其对象已不存在，记入设计篇 §12）。
+  文档：`storage.md` 删除、全站 13 处入链改指 `storage-design.md`、`data-model.md` 与术语表
+  不再写"目录唯一真源"（**真源是载体，索引库是可重建的投影**）、`AGENTS.md` 三处口径更新、
+  `storage-design.md` 补 §9.5 本地不加密与 §9.6 旧格式不兼容。
+  全量 575 通过；mypy 101；覆盖率 88.27%；mkdocs --strict 无断链。
+
+- 2026-09-28 · 已定 · **片 5b：内核接线（Storage 坐上新底座）**
+  （作者：接下来把它接到内核里去）：`Storage` 重写为 `BlockStore` + `Vault` 之上的适配层，
+  动作面照旧、库级入口 `.catalog` → `.vault`、中立视图改由块构造（attrs 来自载荷、author 是块字段）、
+  删 `create` 与 `mount` / `bind_tables` 那套；建表的标识符白名单从 `catalog.py` 搬到 `table.py`。
+  **接线撞出并修掉三处**：① `iter_blocks` 顺扫把同一身份的**旧副本**读成第二个对象
+  （组树里父组出现两次）→ 改为按索引走，一个身份一次；② `Block.decode` 不收 `author` / `config`
+  → 读回时补（否则"写进去的作者读回来是空串"）；③ `Vault.open` 把 `align()` 的**告警**
+  （多出的列 / 表）当开库失败 → 库里一旦建过领域表（relation 就会）就打不开，改为只对非告警差异报错。
+  护栏与顺带：旧格式的库**显式拒开**（不顺扫成"空桶"）；载体是我们的、索引丢了照旧开；
+  `Core.mount` 换下旧挂件时一并 `close()`（否则连接要等垃圾回收才报资源警告）。
+  全量 601 通过（含 Core 的 11 条读写契约原样成立）；覆盖率 88.62%。
+
 - 2026-09-28 · 已定 · **片 5a：块面落地（块 ⇄ 记录），并修正"指针在哪一格"**
   （作者定：存储侧除未来项外已落地，下一步接内核、然后清旧代码）：
   新增 `core/storage/blocks.py` 的 `BlockStore`——**一个块落成两条记录**：
