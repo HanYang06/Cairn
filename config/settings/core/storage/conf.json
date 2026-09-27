@@ -1,7 +1,7 @@
 {
   "$schema": "../../../../schema/settings/core/storage/conf.json",
   "storage.block.max_bytes": 1048576,
-  "storage.db.tables": "config\\settings\\core\\storage\\tables.yaml",
+  "storage.db.tables": "tables.yaml",
   "storage.pack.max_bytes": 1073741824,
   "storage.pack.slot_bytes": 65536
 }

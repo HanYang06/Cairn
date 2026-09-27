@@ -61,7 +61,7 @@ class StorageConf:
         "storage.db.tables",
         item_type=list[dict[str, Any]],
         file_type="yaml",
-        doc="索引库表声明所在文件（**结构本体在那**；文件名由键名推出，勿手改路径）",
+        doc="索引库表声明所在文件（**结构本体在那**；值写相对本文件的引用名，默认同层级同名）",
     )
 
 

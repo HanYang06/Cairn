@@ -71,14 +71,23 @@ class CfgItem:
     file_type: str = ""
     """**文件引用**：非空表示这一项的值放在**独立文件**里（如 ``yaml``）。
 
-    此时它不进值文件、也不出词表条目；路径由引擎按键名推（与值文件同约定），
-    故使用方不必自己拼路径，也不必从模块位置往上数目录层级。
+    此时值文件里这一项写的是一个**引用名**——相对值文件自己所在目录解析，
+    默认即同层级的 ``<字段名>.<类型>``（见 :attr:`reference`），值本体是被引用文件的内容。
     """
 
     def __post_init__(self) -> None:
         """路径必须是点分形式：空段会让文件归属算不出来。"""
         if not self.key or any(not part for part in self.key.split(".")):
             raise ValueError(f"配置路径非法：{self.key!r}")
+
+    @property
+    def reference(self) -> str:
+        """文件引用的**默认引用名**：同层级下的 ``<字段名>.<类型>``（如 ``tables.yaml``）。
+
+        只写文件名、不写路径：值文件与被引用文件在同一目录，引用照值文件自己解析，
+        故整棵配置树搬到哪里都成立（绝对路径搬一次就断）。
+        """
+        return f"{self.item}.{self.file_type}"
 
 
 _ITEMS: dict[str, CfgItem] = {}

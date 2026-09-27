@@ -22,11 +22,10 @@
       "x-cairn-empty-ok": false
     },
     "storage.db.tables": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      },
-      "description": "索引库表声明所在文件（**结构本体在那**；文件名由键名推出，勿手改路径）",
+      "type": "string",
+      "description": "索引库表声明所在文件（**结构本体在那**；值写相对本文件的引用名，默认同层级同名）",
+      "default": "tables.yaml",
+      "x-cairn-file-type": "yaml",
       "x-cairn-owner": "core.storage.conf.StorageConf",
       "x-cairn-fillable": false,
       "x-cairn-empty-ok": false

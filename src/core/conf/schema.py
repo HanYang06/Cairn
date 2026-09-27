@@ -74,15 +74,27 @@ def folder_schema(declared: list[CfgItem]) -> dict[str, Any]:
 
 
 def property_of(item: CfgItem) -> dict[str, Any]:
-    """一条声明的 JSON Schema 片段。"""
+    """一条声明的 JSON Schema 片段。
+
+    **文件引用**那类项在值文件里写的是一个引用名（字符串），内容本体在别处，
+    故词表按字符串出，并把被引用文件的类型记在 ``x-cairn-file-type`` 上——
+    照内容类型出词表（数组 / 对象）会让值文件当场显示成错的。
+    """
     schema: dict[str, Any] = {}
-    typed = type_schema(item.type)
-    if typed:
-        schema.update(typed)
-    if item.doc:
-        schema["description"] = item.doc
-    if item.fillable:
-        schema["default"] = item.default
+    if item.file_type:
+        schema["type"] = "string"
+        if item.doc:
+            schema["description"] = item.doc
+        schema["default"] = item.reference
+        schema["x-cairn-file-type"] = item.file_type
+    else:
+        typed = type_schema(item.type)
+        if typed:
+            schema.update(typed)
+        if item.doc:
+            schema["description"] = item.doc
+        if item.fillable:
+            schema["default"] = item.default
     schema["x-cairn-owner"] = f"{item.module}.{item.owner}"
     schema["x-cairn-fillable"] = item.fillable
     schema["x-cairn-empty-ok"] = item.empty_ok

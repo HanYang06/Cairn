@@ -46,6 +46,7 @@ _REAL = "core.demo.pack.max_blocks"
 _VERSION = "core.demo.catalog.version"
 _LEVEL = "core.demo.log.level"
 _EMPTY_OK = "core.demo.pack.empty_ok"
+_REF = "core.demo.tables"
 
 # 从 Python 3.14 起，模块级注解的求值不再受 `from __future__` 影响。
 _REAL_DEFAULT = 4096
@@ -58,6 +59,7 @@ def _declared_fields() -> dict[str, object]:
         "version": Cfg(_VERSION, doc="格式版本：只登记，不给值"),
         "level": Cfg(_LEVEL, "WARNING"),
         "empty_ok": Cfg(_EMPTY_OK, 7, empty_ok=True),
+        "tables": Cfg(_REF, item_type=list, file_type="yaml"),
     }
 
 
@@ -102,6 +104,11 @@ def _write(engine: ConfEngine, data: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     engine.reload()
+
+
+def _ref_file(engine: ConfEngine, name: str = "tables.yaml") -> Path:
+    """被引用文件：与值文件**同目录**（默认引用名就是同层级的那一个）。"""
+    return _value_file(engine).parent / name
 
 
 # ---- 两个投影 ----
@@ -186,6 +193,104 @@ def test_empty_ok_treats_empty_as_default(engine: ConfEngine) -> None:
     for blank in (None, "", []):
         _write(engine, {_EMPTY_OK: blank})
         assert engine.get(_EMPTY_OK) == 7
+
+
+# ---- 文件引用（值是一行引用名，本体在别处） ----
+
+
+@pytest.mark.usefixtures("declared")
+def test_reference_is_written_as_a_same_level_name(engine: ConfEngine) -> None:
+    """值文件里写的是一行**同层级引用名**（像 import），不是仓内全路径。"""
+    engine.sync()
+    values = json.loads(_value_file(engine).read_text(encoding="utf-8"))
+    assert values[_REF] == "tables.yaml"
+    assert "\\" not in values[_REF]
+
+
+@pytest.mark.usefixtures("declared")
+def test_reference_schema_says_string(engine: ConfEngine) -> None:
+    """词表按**字符串**出（值确实是字符串），内容类型另记一处。
+
+    照内容类型（数组）出词表，值文件顶部的 ``$schema`` 会当场把它标成错的。
+    """
+    engine.sync()
+    schema = json.loads(_schema_file(engine).read_text(encoding="utf-8"))
+    declared = schema["properties"][_REF]
+    assert declared["type"] == "string"
+    assert declared["default"] == "tables.yaml"
+    assert declared["x-cairn-file-type"] == "yaml"
+
+
+@pytest.mark.usefixtures("declared")
+def test_reference_reads_the_referenced_file(engine: ConfEngine) -> None:
+    """读到的值 = 被引用文件的内容（**值就是这个文件**）。"""
+    engine.sync()
+    _ref_file(engine).write_text("- name: record\n", encoding="utf-8")
+    engine.reload()
+    assert engine.get(_REF) == [{"name": "record"}]
+
+
+@pytest.mark.usefixtures("declared")
+def test_reference_resolves_against_the_value_file(engine: ConfEngine) -> None:
+    """引用相对**值文件自己**解析：指向别处只改引用名，不改任何路径推算。"""
+    engine.sync()
+    shared = _value_file(engine).parent.parent / "shared"
+    shared.mkdir(parents=True, exist_ok=True)
+    (shared / "tables.yaml").write_text("- name: edge\n", encoding="utf-8")
+    engine.set(_REF, "../shared/tables.yaml")
+    assert engine.get(_REF) == [{"name": "edge"}]
+
+
+@pytest.mark.usefixtures("declared")
+def test_edited_reference_is_not_overwritten(engine: ConfEngine) -> None:
+    """值文件里那一行是事实、不是装饰：改过之后补缺不得把它改回默认。"""
+    engine.sync()
+    engine.set(_REF, "../shared/tables.yaml")
+    engine.sync()
+    engine.sync()
+    values = json.loads(_value_file(engine).read_text(encoding="utf-8"))
+    assert values[_REF] == "../shared/tables.yaml"
+
+
+@pytest.mark.usefixtures("declared")
+def test_absolute_reference_is_refused(engine: ConfEngine) -> None:
+    """绝对路径绑死本机目录 → 拒收（配置文件要跟仓走，跟仓走的只能是相对引用）。"""
+    engine.sync()
+    engine.set(_REF, str(_ref_file(engine)))
+    with pytest.raises(ConfigValueError, match="相对引用"):
+        engine.get(_REF)
+
+
+@pytest.mark.usefixtures("declared")
+def test_reference_must_be_a_string(engine: ConfEngine) -> None:
+    """引用名写成数组 / 数字 → 在取值口报清楚，不把类型错误带到读文件处。"""
+    engine.sync()
+    _write(engine, {_REF: ["tables.yaml"]})
+    with pytest.raises(ConfigValueError, match="引用名"):
+        engine.get(_REF)
+
+
+@pytest.mark.usefixtures("declared")
+def test_missing_referenced_file_raises(engine: ConfEngine) -> None:
+    """文件缺失即报错，不退回默认——"写坏了"与"没写"必须可分。"""
+    engine.sync()
+    with pytest.raises(ConfigValueError, match="不存在"):
+        engine.get(_REF)
+
+
+@pytest.mark.usefixtures("declared")
+def test_broken_referenced_file_raises(engine: ConfEngine) -> None:
+    engine.sync()
+    _ref_file(engine).write_text("- [ 不是 yaml\n", encoding="utf-8")
+    engine.reload()
+    with pytest.raises(ConfigValueError, match="解析失败"):
+        engine.get(_REF)
+
+
+def test_file_reference_rejects_a_default() -> None:
+    """带值注册与文件引用互斥：值不设两处。"""
+    with pytest.raises(ValueError, match="不该带默认值"):
+        Cfg("core.demo.tables.both", [1], item_type=list, file_type="yaml")
 
 
 # ---- 写与维护 ----

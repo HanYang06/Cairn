@@ -19,6 +19,9 @@
   引擎把它展开成上面两个文件。**各模块管自己的配置**——声明写在自己包里，配置端只负责展开。
 - 带值注册（``Cfg("k", 4096)``）→ 两侧都出现，``config/`` 那份带值；
   不带值（``Cfg("k")``）→ 只有 ``schema/`` 出现，``config/`` 里不呈现。
+- **文件引用**（``Cfg("k", file_type="yaml")``）：内容不塞进值文件，值文件里只留一行
+  **引用名**——相对值文件自己所在目录解析，默认就是同层级的 ``<字段名>.<类型>``。
+  于是写起来像 ``import``，整棵配置树搬到哪里都成立；引擎读它时按扩展名选解析器。
 
 取值三条（作者原话的落地）：
 
@@ -182,27 +185,35 @@ class ConfEngine:
         base = self.root / "schema" / folder.hub / folder.tree.parent
         return base / f"{folder.name}.{SCHEMA_FILE_TYPE}"
 
-    def file_path(self, item: CfgItem) -> Path:
-        """**文件引用**那类配置项的被引用文件：``config/<hub>/<包树>/<字段名>.<类型>``。
+    def reference_path(self, item: CfgItem, value: str) -> Path:
+        """被引用文件的实际路径：引用名**相对值文件所在目录**解析。
 
-        与 :meth:`config_path` 同一套镜子约定，故路径由**引擎**推，
-        使用方不必自己拼、也不必从模块位置往上数目录层级。
+        默认引用名就是同层级的 ``<字段名>.<类型>``（``tables.yaml``），
+        故写起来像 ``import``，搬整棵配置树也不会失效。
+        **只收相对引用**：绝对路径绑死本机目录，配置文件是要跟仓走的。
         """
-        folder = self._folder_of(item)
-        base = self.root / self.base / folder.hub / folder.tree.parent
-        return base / f"{item.item}.{item.file_type}"
+        text = value.replace("\\", "/").strip()
+        if not text:
+            raise ConfigValueError(f"被引用配置文件的引用名是空的：{item.key}")
+        candidate = Path(text)
+        if candidate.is_absolute() or candidate.drive:
+            raise ConfigValueError(
+                f"被引用配置文件必须写相对引用（绝对路径搬不动仓）：{item.key} = {value!r}"
+            )
+        return self.config_path(self._folder_of(item)).parent / candidate
 
-    def _referenced(self, item: CfgItem) -> Any:
+    def _referenced(self, item: CfgItem, value: str) -> Any:
         """读被引用文件（**值就是这个文件的内容**）；缺失或读不出即报错，不猜。
 
         扩展名决定解析器：``yaml`` 走安全加载，其余按 JSON。
         """
-        path = self.file_path(item)
+        path = self.reference_path(item, value)
         if not path.is_file():
             raise ConfigValueError(f"被引用的配置文件不存在：{path}（{item.key}）")
         text = path.read_text(encoding="utf-8")
         if item.file_type == "yaml":
             import yaml  # noqa: PLC0415 — 只在这条路径上需要
+
             try:
                 return yaml.safe_load(text)
             except yaml.YAMLError as exc:
@@ -253,11 +264,13 @@ class ConfEngine:
             current = self._read_file(value_file)
             merged = {**current}
             for item in declared:
-                if item.fillable and item.key not in merged:
-                    merged[item.key] = item.default
-                elif item.file_type:
+                if item.key in merged:
+                    continue  # 值由人定：已有的值一个字都不动（含文件引用的引用名）
+                if item.file_type:
                     # 文件引用：值文件里只留一行"这项在哪个文件"，本体在被引用文件里。
-                    merged[item.key] = str(self.file_path(item).relative_to(self.root))
+                    merged[item.key] = item.reference
+                elif item.fillable:
+                    merged[item.key] = item.default
             payload = {
                 "$schema": self._relative_schema(value_file),
                 **self._ordered(folder, merged),
@@ -406,9 +419,7 @@ class ConfEngine:
                 return self._remember(key, declared.default)
             raise ConfigValueError(f"配置项值为空（不猜、不自动修）：{key}")
         if found:
-            if declared is not None and declared.file_type:
-                return self._remember(key, self._referenced(declared))
-            return self._remember(key, value)
+            return self._remember(key, self._resolved_value(declared, value))
         if declared is None:
             if default is not None:
                 # **不写缓存**：缓存键只有 key，把调用方给的 default 记进去，
@@ -419,6 +430,19 @@ class ConfEngine:
             self._repair(declared)
             return self._remember(key, declared.default)
         raise ConfigKeyError(f"配置项丢了且没有默认值可以补：{key}")
+
+    def _resolved_value(self, declared: CfgItem | None, value: Any) -> Any:
+        """文件引用的项要再走一步：文件里那一行只是**引用名**，本体在别处。
+
+        其余项照原值交回——取值面因此只有这一处分叉，调用方也不必知道文件引用这回事。
+        """
+        if declared is None or not declared.file_type:
+            return value
+        if not isinstance(value, str):
+            raise ConfigValueError(
+                f"文件引用的项要写引用名（字符串），得到 {type(value).__name__}：{declared.key}"
+            )
+        return self._referenced(declared, value)
 
     def set(self, key: str, value: Any) -> None:
         """写一个值进配置文件（**这是配置唯一的写入口**）。
