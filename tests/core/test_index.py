@@ -201,7 +201,7 @@ def test_declaration_round_trips_through_config_shape() -> None:
 
 
 def test_shipped_tables_file_loads() -> None:
-    """出货的那份 `config/tables.yaml` 必须能读进来（语法错、结构错都在这里拦下）。"""
+    """出货的那份表声明文件必须能读进来（语法错、结构错都在这里拦下）。"""
     loaded = load_tables()
     assert loaded
     assert {table.name for table in loaded} >= {"bucket", "record", "edge"}

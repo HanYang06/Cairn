@@ -34,7 +34,8 @@ from core.types.cfg import Cfg
 class StorageConf:
     """存储的**标量参数**（分片粒度 / 载体封口 / 槽长）。
 
-    表声明不在这里：它是**结构**，人手写在 `config/tables.yaml`（见 `core/storage/tables.py`）。
+    表声明不在这里：它是**结构**，人手写在
+    `config/settings/core/storage/tables.yaml`（见 `core/storage/tables.py`）。
     把结构塞进点分配置键，词表就长不出有意义的形状，值文件也会被工具重排——
     两者形态不同，就该分开放。
     """

@@ -3,6 +3,17 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **表声明文件归位到镜子约定 + 规划配置端"文件引用"**
+  （作者指出：tables 的位置要按目录约定放，不可随意；并建议配置引擎加"引用文件"能力）：
+  `config/tables.yaml` → **`config/settings/core/storage/tables.yaml`**，
+  与配置引擎的镜子约定一致（`src/core/storage/tables.py` ↔ `config/<hub>/<core/storage>/tables.yaml`），
+  与同包的 `conf.json` 并肩；`TABLES_FILE` 常量与 `tables_file()` 随之更新
+  （仓根由模块位置往上四级推出），文档与测试里的路径一并改。
+  并明确仓根 `config/theme/`、`config/shapes.json` 属**运行期资产**（随程序分发、不进投影树），
+  与表声明不同类、互不冲突。
+  作者提的"配置里引用文件"（配置只留"这项在哪个文件"，结构本体放被引用的文件）已**写入设计篇 §8.6
+  作为规划中的一步**，尚未实施。核心 266 通过。
+
 - 2026-09-28 · 已定 · **表声明改用 YAML（结构描述不该塞进 JSON 配置）**
   （作者判断：用 JSON 描述数据库表的构建，形态不合适，YAML 更合适）：
   新增 `config/tables.yaml` 作为表声明的**本体**（缩进即层级、可写注释——列项一行一列、

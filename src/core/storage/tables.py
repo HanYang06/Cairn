@@ -29,8 +29,13 @@ from core.types.errors import CairnError
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
-TABLES_FILE = "config/tables.yaml"
-"""表声明文件（相对仓根）；它是**本体**，不是生成物。"""
+TABLES_FILE = "config/settings/core/storage/tables.yaml"
+"""表声明文件（相对仓根）；它是**本体**，不是生成物。
+
+路径与"配置引擎的镜子约定"一致：``config/<hub>/<包树>/<文件>``——
+本模块是 ``src/core/storage/tables.py``，故落在 ``config/settings/core/storage/tables.yaml``，
+与同一包里的 ``conf.json`` 并肩。结构描述与标量配置**分文件、同约定**，谁也不挤谁。
+"""
 
 _IDENT_ALLOWED = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
@@ -397,9 +402,9 @@ def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[Table, ...]:
 
 
 def tables_file() -> Path:
-    """表声明文件的路径（**本体**）：仓根的 ``config/tables.yaml``。
+    """表声明文件的路径（**本体**）：``<仓根>/config/settings/core/storage/tables.yaml``。
 
-    路径由本模块的位置推出（``<仓根>/src/core/storage/tables.py`` 往上四级），
+    路径由本模块的位置推出（``<仓根>/src/core/storage/tables.py`` 往上四级到仓根），
     故打包后只要目录结构不变即可定位；仓根在别处时用 :func:`load_tables` 显式传路径。
     """
     return Path(__file__).resolve().parents[3] / TABLES_FILE
@@ -426,7 +431,7 @@ def load_tables(path: Path | str | None = None) -> tuple[Table, ...]:
 
 
 def declared_tables() -> tuple[Table, ...]:
-    """当前生效的表声明（本体在 ``config/tables.yaml``）。"""
+    """当前生效的表声明（本体在 ``config/settings/core/storage/tables.yaml``）。"""
     return load_tables()
 
 
