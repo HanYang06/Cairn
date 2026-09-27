@@ -15,6 +15,16 @@
       "x-cairn-fillable": true,
       "x-cairn-empty-ok": false
     },
+    "storage.db.tables": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "索引库表声明所在文件（**结构本体在那**；文件名由键名推出，勿手改路径）",
+      "x-cairn-owner": "core.storage.conf.StorageConf",
+      "x-cairn-fillable": false,
+      "x-cairn-empty-ok": false
+    },
     "storage.pack.max_bytes": {
       "type": "integer",
       "description": "单个载体的字节上限，写满即封口（只管封口线，不定槽长）",

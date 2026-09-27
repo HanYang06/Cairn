@@ -3,6 +3,20 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **配置端支持"文件引用"（并借此消掉 YAML 那次塞的路径代码）**
+  （作者提议：让配置项引用文件——配置面保持精简确定，语义结构各归其位）：
+  `Cfg` / `CfgItem` 增 `file_type`（非空即"值在被引用文件里"，且禁止同时带默认值）；
+  引擎增 `ConfEngine.file_path()` / `_referenced()`——路径按键名与包树推
+  （`config/<hub>/<包树>/<字段名>.<类型>`，与值文件同约定），扩展名定解析器（yaml / json），
+  缺失或解析失败**即报错**；`plan()` 对这类项只往值文件写一行路径。
+  存储侧相应简化：删 `TABLES_FILE` 常量、`tables_file()`（从模块位置往上数目录层级的写法）
+  与 `core/storage/tables.py` 里的路径推导/解析逻辑，改为声明
+  `Cfg("storage.db.tables", file_type="yaml")` 并直接读 `conf.tables`。
+  值文件现在长这样：`"storage.db.tables": "config\\settings\\core\\storage\\tables.yaml"`。
+  **发现一处工具缺陷（未修，记下）**：`gen_conf` 只补缺失键、不清理"曾声明、现已被移除"的键，
+  故上一版的 `storage.db.tables_file` 需手工删除才让 `--check` 回到一致。
+  核心 266 通过；ruff / mypy(93) / gen_conf --check / docgen --check 全绿。
+
 - 2026-09-28 · 已定 · **表声明文件归位到镜子约定 + 规划配置端"文件引用"**
   （作者指出：tables 的位置要按目录约定放，不可随意；并建议配置引擎加"引用文件"能力）：
   `config/tables.yaml` → **`config/settings/core/storage/tables.yaml`**，

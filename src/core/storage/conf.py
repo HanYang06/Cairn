@@ -28,6 +28,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from core.types.cfg import Cfg
 
 
@@ -54,6 +56,12 @@ class StorageConf:
         "storage.pack.slot_bytes",
         64 * 1024,
         doc="槽长：载体内的定长分配与定位单位，建载体时写进文件头",
+    )
+    tables: Cfg = Cfg(
+        "storage.db.tables",
+        item_type=list[dict[str, Any]],
+        file_type="yaml",
+        doc="索引库表声明所在文件（**结构本体在那**；文件名由键名推出，勿手改路径）",
     )
 
 

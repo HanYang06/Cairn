@@ -68,6 +68,12 @@ class CfgItem:
     """``empty_ok=True`` 的增强写法：空值（``None`` / 空串 / 空容器）也按默认处理。"""
     fillable: bool = False
     """是否带值注册（带值才能补进 ``config/``）。"""
+    file_type: str = ""
+    """**文件引用**：非空表示这一项的值放在**独立文件**里（如 ``yaml``）。
+
+    此时它不进值文件、也不出词表条目；路径由引擎按键名推（与值文件同约定），
+    故使用方不必自己拼路径，也不必从模块位置往上数目录层级。
+    """
 
     def __post_init__(self) -> None:
         """路径必须是点分形式：空段会让文件归属算不出来。"""
@@ -115,7 +121,7 @@ class Cfg:
     默认值也没有 → 报错（不猜）。
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — 槽位各有语义，合并反而更绕
         self,
         path: str,
         default: Any = _MISSING,
@@ -123,16 +129,20 @@ class Cfg:
         doc: str = "",
         empty_ok: bool = False,
         item_type: Any = None,
+        file_type: str = "",
     ) -> None:
         if not empty_ok and _is_empty_default(default):
             raise ValueError(
                 f"默认值不得为空（会写出读不回来的空值，读的时候按空值报错）：{path!r}；"
                 "确实要以空为默认时，显式传 empty_ok=True"
             )
+        if file_type and default is not _MISSING:
+            raise ValueError(f"文件引用的项不该带默认值（它的值在文件里）：{path!r}")
         self.path = path
         self.doc = doc
         self.empty_ok = empty_ok
         self._item_type = item_type
+        self.file_type = file_type
         self.key = path
         self.owner = ""
         self.field = ""
@@ -167,6 +177,7 @@ class Cfg:
                 doc=self.doc or self._doc_of(owner),
                 empty_ok=self.empty_ok,
                 fillable=self.fillable,
+                file_type=self.file_type,
             )
         )
 

@@ -182,6 +182,36 @@ class ConfEngine:
         base = self.root / "schema" / folder.hub / folder.tree.parent
         return base / f"{folder.name}.{SCHEMA_FILE_TYPE}"
 
+    def file_path(self, item: CfgItem) -> Path:
+        """**文件引用**那类配置项的被引用文件：``config/<hub>/<包树>/<字段名>.<类型>``。
+
+        与 :meth:`config_path` 同一套镜子约定，故路径由**引擎**推，
+        使用方不必自己拼、也不必从模块位置往上数目录层级。
+        """
+        folder = self._folder_of(item)
+        base = self.root / self.base / folder.hub / folder.tree.parent
+        return base / f"{item.item}.{item.file_type}"
+
+    def _referenced(self, item: CfgItem) -> Any:
+        """读被引用文件（**值就是这个文件的内容**）；缺失或读不出即报错，不猜。
+
+        扩展名决定解析器：``yaml`` 走安全加载，其余按 JSON。
+        """
+        path = self.file_path(item)
+        if not path.is_file():
+            raise ConfigValueError(f"被引用的配置文件不存在：{path}（{item.key}）")
+        text = path.read_text(encoding="utf-8")
+        if item.file_type == "yaml":
+            import yaml  # noqa: PLC0415 — 只在这条路径上需要
+            try:
+                return yaml.safe_load(text)
+            except yaml.YAMLError as exc:
+                raise ConfigValueError(f"被引用的配置文件解析失败：{path}（{exc}）") from exc
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ConfigValueError(f"被引用的配置文件解析失败：{path}（{exc}）") from exc
+
     def index_path(self) -> Path:
         """总词表（给人看的入口，含 ``$id``）。"""
         return self.root / "schema" / f"{self.hub}.json"
@@ -225,6 +255,9 @@ class ConfEngine:
             for item in declared:
                 if item.fillable and item.key not in merged:
                     merged[item.key] = item.default
+                elif item.file_type:
+                    # 文件引用：值文件里只留一行"这项在哪个文件"，本体在被引用文件里。
+                    merged[item.key] = str(self.file_path(item).relative_to(self.root))
             payload = {
                 "$schema": self._relative_schema(value_file),
                 **self._ordered(folder, merged),
@@ -373,6 +406,8 @@ class ConfEngine:
                 return self._remember(key, declared.default)
             raise ConfigValueError(f"配置项值为空（不猜、不自动修）：{key}")
         if found:
+            if declared is not None and declared.file_type:
+                return self._remember(key, self._referenced(declared))
             return self._remember(key, value)
         if declared is None:
             if default is not None:
