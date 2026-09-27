@@ -37,8 +37,7 @@ from .index import INDEX_NAME, Difference, Index, RebuildPlan
 from .io import CarrierFile
 from .record import Record, RecordHeader
 from .table import Table
-from .tables import Column, ColumnType, RebuildTier, canonical_tables
-from .tables import tables as declared_tables
+from .tables import Column, ColumnType, Owned, RebuildTier, declared_tables
 
 __all__ = [
     "BLOCK_VERSION",
@@ -61,6 +60,7 @@ __all__ = [
     "ColumnType",
     "Difference",
     "Index",
+    "Owned",
     "RebuildPlan",
     "RebuildTier",
     "Record",
@@ -68,7 +68,6 @@ __all__ = [
     "Storage",
     "Table",
     "canonical",
-    "canonical_tables",
     "declared_tables",
     "decode_canonical",
 ]

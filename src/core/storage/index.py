@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 from core.types import RecordFormatError, ValueHash, now_ms
 from core.types.errors import IndexSchemaError
 
-from .tables import Table, sql_type_name, tables
+from .tables import Table, declared_tables, sql_type_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -86,7 +86,7 @@ class Index:
 
     path: Path
     conn: sqlite3.Connection
-    declarations: tuple[Table, ...] = field(default_factory=lambda: tuple(tables()))
+    declarations: tuple[Table, ...] = field(default_factory=declared_tables)
 
     # ---- 生命周期 ----
     @classmethod
@@ -323,11 +323,9 @@ class Index:
         return identifier
 
 
-def _canonical_declarations() -> dict[str, dict[str, object]]:
-    """当前声明的规范化投影（与 `core.storage.conf` 里那份**同源**）。"""
-    from .tables import canonical_tables  # noqa: PLC0415 — 避免加载期互引
-
-    return canonical_tables()
+def _canonical_declarations() -> dict[str, object]:
+    """当前声明的规范化投影：按表名归拢的 :meth:`Table.signature`（列与索引有序，摘要稳定）。"""
+    return {table.name: table.signature() for table in declared_tables()}
 
 
 def _edge_id(src: str, dst: str, kind: str, domain: str) -> str:

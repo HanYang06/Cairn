@@ -16,12 +16,12 @@ from core.storage.index import Difference, Index, RebuildPlan
 from core.storage.tables import (
     Column,
     ColumnType,
+    Owned,
     RebuildTier,
     Table,
-    canonical_tables,
     core_tables,
-    register,
-    tables,
+    declared_tables,
+    parse_tables,
 )
 from core.types.errors import CairnError, IndexSchemaError
 
@@ -45,7 +45,6 @@ def _row(**overrides: object) -> dict[str, object]:
         "slot_start": 0,
         "slot_head": 0,
         "slot_count": 1,
-        "body_addr": _HASH,
         "size": 128,
         "issued": 1,
         "created": 1,
@@ -58,12 +57,59 @@ def _row(**overrides: object) -> dict[str, object]:
 # ---- 表声明 ----
 
 
-def test_core_tables_are_declared_with_tiers() -> None:
-    names = [table.name for table in core_tables()]
-    assert names == ["record", "bucket", "edge"]
+def test_core_tables_come_from_config_declaration() -> None:
+    """内核表来自**配置声明**（配置是本体，代码只解析）。"""
+    declared = declared_tables()
+    assert [table.name for table in declared] == ["bucket", "record", "edge"]
     for table in core_tables():
+        assert table.owner is Owned.CORE
         assert table.tier is RebuildTier.TIER1
         assert table.rebuild_from  # 档一必须写得出重建来源
+    assert all(table.owner is Owned.CORE for table in declared)  # 出厂声明目前全是内核表
+
+
+def test_parse_rejects_unknown_column_key() -> None:
+    with pytest.raises(CairnError, match="未知项"):
+        parse_tables(
+            [
+                {
+                    "name": "t",
+                    "tier": "tier1",
+                    "rebuild_from": "x",
+                    "columns": [{"name": "a", "type": "text", "primary_key": True, "oops": 1}],
+                }
+            ]
+        )
+
+
+def test_parse_rejects_unknown_type() -> None:
+    with pytest.raises(CairnError, match="类型非法"):
+        parse_tables(
+            [
+                {
+                    "name": "t",
+                    "tier": "tier1",
+                    "rebuild_from": "x",
+                    "columns": [{"name": "a", "type": "money", "primary_key": True}],
+                }
+            ]
+        )
+
+
+def test_parse_rejects_duplicate_table_names() -> None:
+    one = {
+        "name": "t",
+        "tier": "tier1",
+        "rebuild_from": "x",
+        "columns": [{"name": "a", "type": "text", "primary_key": True}],
+    }
+    with pytest.raises(CairnError, match="表声明重复"):
+        parse_tables([one, dict(one)])
+
+
+def test_parse_rejects_missing_required_item() -> None:
+    with pytest.raises(CairnError, match="缺少必填项"):
+        parse_tables([{"name": "t", "columns": []}])
 
 
 def test_table_requires_exactly_one_primary_key() -> None:
@@ -135,21 +181,9 @@ def test_primary_key_implies_not_null() -> None:
     assert Column("a", ColumnType.TEXT, primary_key=True).not_null
 
 
-def test_duplicate_declaration_conflict_is_rejected() -> None:
-    with pytest.raises(CairnError, match="重复且不一致"):
-        register(
-            Table(
-                name="record",  # 已在册，且内容不同
-                tier=RebuildTier.TIER1,
-                rebuild_from="别的来源",
-                columns=(Column("x", ColumnType.TEXT, primary_key=True),),
-            )
-        )
-
-
-def test_ddl_has_no_sql_literals_in_source() -> None:
+def test_ddl_is_compiled_from_declaration() -> None:
     """建表语句由声明**编译**出来：类型词汇中立，方言只出现在编译器里。"""
-    record = next(table for table in tables() if table.name == "record")
+    record = next(table for table in declared_tables() if table.name == "record")
     statements = record.ddl()
     assert statements[0].startswith('CREATE TABLE IF NOT EXISTS "record"')
     assert any('CREATE INDEX IF NOT EXISTS "idx_value_hash"' in sql for sql in statements)
@@ -158,9 +192,11 @@ def test_ddl_has_no_sql_literals_in_source() -> None:
     assert '"slot_count" INTEGER NOT NULL DEFAULT 1' in compiled
 
 
-def test_canonical_projection_keys_are_config_paths() -> None:
-    projection = canonical_tables()
-    assert set(projection) == {"storage.table.record", "storage.table.bucket", "storage.table.edge"}
+def test_declaration_round_trips_through_config_shape() -> None:
+    """声明 → 配置形状 → 声明：**往返一致**（故配置那份就是本体，不是影子）。"""
+    for table in declared_tables():
+        again = parse_tables([table.to_config()])[0]
+        assert again.signature() == table.signature()
 
 
 # ---- 对比与分类 ----
@@ -281,7 +317,9 @@ def test_verify_declarations_passes_right_after_align(tmp_path: Path) -> None:
     index = _index(tmp_path)
     index.align()
     index.verify_declarations()
-    assert index.recorded_declarations() == canonical_tables()
+    assert index.recorded_declarations() == {
+        table.name: table.signature() for table in declared_tables()
+    }
     index.close()
 
 

@@ -15,6 +15,236 @@
       "x-cairn-fillable": true,
       "x-cairn-empty-ok": false
     },
+    "storage.db.tables": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "索引库的表声明（**本体在这**：改它即改表；列项顺序即建表顺序）",
+      "default": [
+        {
+          "name": "bucket",
+          "doc": "桶登记：桶目录是存在证明，本表是登记",
+          "tier": "tier1",
+          "owner": "core",
+          "rebuild_from": "桶目录：扫 vault 下的桶目录",
+          "columns": [
+            {
+              "name": "name",
+              "type": "text",
+              "primary_key": true,
+              "doc": "桶名（即目录名）"
+            },
+            {
+              "name": "role",
+              "type": "text",
+              "default": "main",
+              "doc": "形态：主/归档/临时",
+              "not_null": true
+            },
+            {
+              "name": "state",
+              "type": "text",
+              "default": "mounted",
+              "doc": "挂载状态",
+              "not_null": true
+            },
+            {
+              "name": "created",
+              "type": "integer",
+              "default": 0,
+              "doc": "建立时刻",
+              "not_null": true
+            }
+          ]
+        },
+        {
+          "name": "record",
+          "doc": "身份到位置：一行一条记录（块记录与内容记录同表）",
+          "tier": "tier1",
+          "owner": "core",
+          "rebuild_from": "载体：顺扫全部记录，读记录头重建",
+          "columns": [
+            {
+              "name": "value_uuid",
+              "type": "text",
+              "primary_key": true,
+              "doc": "分配形态凭证"
+            },
+            {
+              "name": "value_hash",
+              "type": "text",
+              "doc": "摘要形态凭证（指向内容）",
+              "not_null": true
+            },
+            {
+              "name": "kind",
+              "type": "text",
+              "default": "",
+              "doc": "类型名（由程序给出）",
+              "not_null": true
+            },
+            {
+              "name": "bucket",
+              "type": "text",
+              "default": "",
+              "doc": "所在桶",
+              "not_null": true
+            },
+            {
+              "name": "pack",
+              "type": "text",
+              "default": "",
+              "doc": "所在载体名",
+              "not_null": true
+            },
+            {
+              "name": "slot_start",
+              "type": "integer",
+              "default": 0,
+              "doc": "起始槽",
+              "not_null": true
+            },
+            {
+              "name": "slot_head",
+              "type": "integer",
+              "default": 0,
+              "doc": "槽内偏移",
+              "not_null": true
+            },
+            {
+              "name": "slot_count",
+              "type": "integer",
+              "default": 1,
+              "doc": "跨槽数",
+              "not_null": true
+            },
+            {
+              "name": "size",
+              "type": "integer",
+              "default": 0,
+              "doc": "记录字节数",
+              "not_null": true
+            },
+            {
+              "name": "issued",
+              "type": "integer",
+              "default": 0,
+              "doc": "ID 签发时刻",
+              "not_null": true
+            },
+            {
+              "name": "created",
+              "type": "integer",
+              "default": 0,
+              "doc": "落盘时刻",
+              "not_null": true
+            },
+            {
+              "name": "updated",
+              "type": "integer",
+              "default": 0,
+              "doc": "最近写入时刻",
+              "not_null": true
+            }
+          ],
+          "indexes": [
+            {
+              "columns": [
+                "value_hash"
+              ],
+              "doc": "地址反查：这份内容被哪些记录引用"
+            },
+            {
+              "columns": [
+                "kind"
+              ],
+              "doc": "按类型筛选"
+            },
+            {
+              "columns": [
+                "bucket",
+                "pack"
+              ],
+              "doc": "按载体归拢"
+            },
+            {
+              "columns": [
+                "updated"
+              ],
+              "doc": "按时间排序"
+            }
+          ]
+        },
+        {
+          "name": "edge",
+          "doc": "关系边：一等行，src --kind--> dst",
+          "tier": "tier1",
+          "owner": "core",
+          "rebuild_from": "块记录：关系数据落在块内时由其派生",
+          "columns": [
+            {
+              "name": "id",
+              "type": "text",
+              "primary_key": true,
+              "doc": "边身份（由四元组算摘要）"
+            },
+            {
+              "name": "src",
+              "type": "text",
+              "doc": "源身份",
+              "not_null": true
+            },
+            {
+              "name": "dst",
+              "type": "text",
+              "doc": "目标身份",
+              "not_null": true
+            },
+            {
+              "name": "kind",
+              "type": "text",
+              "default": "",
+              "doc": "关系种类",
+              "not_null": true
+            },
+            {
+              "name": "domain",
+              "type": "text",
+              "default": "",
+              "doc": "归属域",
+              "not_null": true
+            },
+            {
+              "name": "created",
+              "type": "integer",
+              "default": 0,
+              "doc": "建立时刻",
+              "not_null": true
+            }
+          ],
+          "indexes": [
+            {
+              "columns": [
+                "src",
+                "kind"
+              ],
+              "doc": "出边（正向遍历）"
+            },
+            {
+              "columns": [
+                "dst",
+                "kind"
+              ],
+              "doc": "入边（反查 / backlinks）"
+            }
+          ]
+        }
+      ],
+      "x-cairn-owner": "core.storage.conf.StorageConf",
+      "x-cairn-fillable": true,
+      "x-cairn-empty-ok": false
+    },
     "storage.pack.max_bytes": {
       "type": "integer",
       "description": "单个载体的字节上限，写满即封口（只管封口线，不定槽长）",
@@ -27,14 +257,6 @@
       "type": "integer",
       "description": "槽长：载体内的定长分配与定位单位，建载体时写进文件头",
       "default": 65536,
-      "x-cairn-owner": "core.storage.conf.StorageConf",
-      "x-cairn-fillable": true,
-      "x-cairn-empty-ok": false
-    },
-    "storage.tables.declared": {
-      "type": "string",
-      "description": "表声明的规范化投影（生成物：由 core/storage/tables.py 的声明算出，勿手改）",
-      "default": "{\"storage.table.bucket\":{\"columns\":[[\"created\",\"integer\",false,true,false,\"0\"],[\"name\",\"text\",true,true,false,\"\"],[\"role\",\"text\",false,true,false,\"'main'\"],[\"state\",\"text\",false,true,false,\"'mounted'\"]],\"doc\":\"桶登记：桶目录是存在证明，本表是登记\",\"indexes\":[],\"name\":\"bucket\",\"rebuild_from\":\"桶目录：扫 vault 下的桶目录\",\"tier\":\"tier1\"},\"storage.table.edge\":{\"columns\":[[\"created\",\"integer\",false,true,false,\"0\"],[\"domain\",\"text\",false,true,false,\"''\"],[\"dst\",\"text\",false,true,false,\"\"],[\"id\",\"text\",true,true,false,\"\"],[\"kind\",\"text\",false,true,false,\"''\"],[\"src\",\"text\",false,true,false,\"\"]],\"doc\":\"关系边：一等行，src --kind--> dst\",\"indexes\":[[[\"dst\",\"kind\"],false],[[\"src\",\"kind\"],false]],\"name\":\"edge\",\"rebuild_from\":\"块记录：关系数据落在块内时由其派生\",\"tier\":\"tier1\"},\"storage.table.record\":{\"columns\":[[\"body_addr\",\"text\",false,true,false,\"''\"],[\"bucket\",\"text\",false,true,false,\"''\"],[\"created\",\"integer\",false,true,false,\"0\"],[\"issued\",\"integer\",false,true,false,\"0\"],[\"kind\",\"text\",false,true,false,\"''\"],[\"pack\",\"text\",false,true,false,\"''\"],[\"size\",\"integer\",false,true,false,\"0\"],[\"slot_count\",\"integer\",false,true,false,\"1\"],[\"slot_head\",\"integer\",false,true,false,\"0\"],[\"slot_start\",\"integer\",false,true,false,\"0\"],[\"updated\",\"integer\",false,true,false,\"0\"],[\"value_hash\",\"text\",false,true,false,\"\"],[\"value_uuid\",\"text\",true,true,false,\"\"]],\"doc\":\"身份到位置：一行一条记录（含块记录与内容记录）\",\"indexes\":[[[\"bucket\",\"pack\"],false],[[\"kind\"],false],[[\"updated\"],false],[[\"value_hash\"],false]],\"name\":\"record\",\"rebuild_from\":\"载体：顺扫全部记录，读记录头重建\",\"tier\":\"tier1\"}}",
       "x-cairn-owner": "core.storage.conf.StorageConf",
       "x-cairn-fillable": true,
       "x-cairn-empty-ok": false

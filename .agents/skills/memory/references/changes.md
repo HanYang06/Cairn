@@ -3,6 +3,21 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **表声明的方向改正：配置是本体，代码只读 / 校验 / 编译**
+  （作者指出两处：① 生成的 JSON 压成一整行没法看；② **既然写进配置就该是人写人改的**，
+  不该是机器塞进去的一个字符串）：
+  新增配置键 `storage.db.tables`（**数组，一项一张表，列项一行一列**）作为表声明的**本体**；
+  `core/storage/tables.py` 改为**解析器 + 编译器**（`parse_table` / `parse_tables` /
+  `declared_tables` / `Table.ddl`），解析口对未知项、非法类型、重复表名一律报错；
+  出厂初值移到 `core/storage/_defaults.py`，**与配置形状逐字一致**（读起来就是配置该长的样子），
+  配置里丢了该项时由它补齐；旧键 `storage.tables.declared`（一整行 JSON 字符串）删除。
+  声明里新增 `owner`（core / domain：决定建表时机）与非空位；`record` 去掉 `body_addr`
+  （与 `value_hash` 同值，属重复事实）。
+  **实测两处工具行为并据此定形**：① `gen_conf.py` 用 `json.dumps(indent=2)` 输出，
+  **必然重排**手写排版——故"值由人定、形态由工具定"，出厂初值按投影形态渲染以保持幂等
+  （验证：生成后文本逐字相同、`--check` 通过）；② `Column.to_config()` 曾漏 `not_null`，
+  往返有损被 `test_declaration_round_trips_through_config_shape` 抓住并补上。
+  测试 `tests/core/test_index.py` 迁移到新 API 并补解析器用例（35 例）；核心 260 通过。
 - 2026-09-28 · 已定 · **存储重设计：第 2 阶段落地（索引库：表声明 + 对比分类）**
   （分支 `feat/storage-redesign`）：
   **表声明层** `src/core/storage/tables.py`：`Column` / `ColumnType`（中立五型）/ `Index` /

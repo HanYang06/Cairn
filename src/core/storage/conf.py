@@ -28,15 +28,15 @@
 
 from __future__ import annotations
 
-import json
+from typing import Any
 
 from core.types.cfg import Cfg
 
-from . import tables as _tables  # 导入即登记内核表声明（声明与投影同一处报到）
+from ._defaults import DEFAULT_TABLES
 
 
 class StorageConf:
-    """存储参数（分片粒度 / 载体封口 / 槽长 / 表声明）。"""
+    """存储参数（分片粒度 / 载体封口 / 槽长 / **表声明**）。"""
 
     block_max_bytes: Cfg = Cfg(
         "storage.block.max_bytes",
@@ -53,12 +53,11 @@ class StorageConf:
         64 * 1024,
         doc="槽长：载体内的定长分配与定位单位，建载体时写进文件头",
     )
-    tables_declared: Cfg = Cfg(
-        "storage.tables.declared",
-        json.dumps(
-            _tables.canonical_tables(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ),
-        doc="表声明的规范化投影（生成物：由 core/storage/tables.py 的声明算出，勿手改）",
+    db_tables: Cfg = Cfg(
+        "storage.db.tables",
+        DEFAULT_TABLES,
+        item_type=list[dict[str, Any]],
+        doc="索引库的表声明（**本体在这**：改它即改表；列项顺序即建表顺序）",
     )
 
 
