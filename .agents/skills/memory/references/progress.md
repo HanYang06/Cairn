@@ -8,7 +8,7 @@
 
 ## 存储重设计（2026-09-28 立项；第 1 阶段已落）
 
-> 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，草案 v1.1）。
+> 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，草案 v1.2）。
 > 方向见 `decisions.md`「存储重设计」。分支 `feat/storage-redesign`。
 > **只跑局部测试**（作者口径：全量测试在当前阶段必然跑不通，等整体变更时统一规划）。
 
@@ -29,14 +29,23 @@
   破坏性动作默认拒绝、须显式授权；入口四件事与幂等边）；
   声明投影落在配置键 `storage.tables.declared`，库内 `meta` 存一份并在开库时比对；
   `tests/core/test_index.py` 32 例。
-- [ ] **片 4 · 桶与多桶**：`Bucket` 接载体与索引库（替换 `catalog.db` 与旧 pack 逻辑）、
-  桶目录与桶表、合并与短命桶。
+- [x] **片 4 · 桶与多桶**（2026-09-28）：`core/storage/vault.py` —— `Bucket`（目录 + `packs/`；
+  追加 / 按槽区间读 / 顺扫；活跃载体＝有空间的最满者）与 `Vault`（唯一索引库 + 多桶路由 +
+  桶登记与对账）；`io.CarrierFile.scan` 改为交出 `(槽区间, 记录)`；`Index.open` 拒绝接管别人的 SQLite 文件；
+  `tests/core/test_bucket.py` 27 例。**未做**：合并与短命桶（归属改写待裁定，见设计篇 §7）、巡检。
+- [ ] **片 4b · 合并与短命桶**：待作者裁定"合并期桶归属改写"（改写为目标桶 / 保留源桶），
+  裁定前不实现——免得把一次取舍固化成数据格式。
 - [ ] **片 5 · 收口**：`Oid` / `Cid` 与旧 `catalog.py` / `bucket.py` 旧逻辑退役、
   旧篇 `storage.md` 与 `data-model.md` 存储态章节清理、全量测试与记忆整理。
 - 遗留 · `block.py` / `bucket.py` / `catalog.py` **本阶段一字未改**（仍走旧路径）；
-  `core/storage/__init__.py` 已同时导出新旧两套，**暂并存**。
+  `core/storage/__init__.py` 已同时导出新旧两套，**暂并存**：新层的桶类与旧 `Bucket` 同名，
+  过渡期只在 `core.storage.vault` 内可见。
 - 遗留 · 索引库的**巡检（与真源比对）**与**重建搬运**尚未实现：当前只保证"对齐后无差异"
-  与"破坏性差异拒绝执行"，搬运由调用方负责（片 4 接）。
+  与"破坏性差异拒绝执行"，搬运由调用方负责。档一重建已落地**补缺行**口径（
+  `Vault.rebuild_records`）：已有行不动（`kind` 不在记录头里），缺行按类型未知补回。
+- 遗留 · `Vault.put` 目前无事务：先落字节、后记目录，中途失败留孤儿字节（由补缺行收编）。
+- 遗留 · `gen_conf.py` 重复跑会**留下曾声明、后已删除的键**（本轮手工清了 `storage.db.tables_file`、
+  `storage.tables.declared` 一类残留）；生成器缺"清理过期键"这一步。
 
 ## 书面语（2026-09-26 立项；全仓已清零，门禁已阻断）
 

@@ -3,16 +3,41 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **片 4：桶与多桶落地（新层 `core/storage/vault.py`）**
+  （作者指令"开始做桶"；并指出多桶的价值在于确定性路径查询——先查桶再查块，桶上名称或 ID 皆可）：
+  新增 `Bucket`（桶＝含 `packs/` 的目录；追加记录、按槽区间读回、顺扫；
+  **活跃载体＝有空间的最满者**）与 `Vault`（一库一索引库 + 多桶路由 + 桶登记与对账），
+  `Placement` 承载物理坐标（桶 / 载体 / 槽区间 / 字节数）。
+  四条落点：① **封口不留标记**——"已封口"就是"达到封口线"，故封口是策略判断而非落盘状态；
+  ② **桶无状态**——槽长随载体走（文件头自描述），封口线每次写入按配置判，桶不存自己那份配置；
+  ③ **读路径不建桶**（目录没了报 `BucketNotFoundError`，不悄悄建空桶顶上）；
+  ④ **先落字节、后记目录**，孤儿字节由档一"补缺行"重建收编（`Vault.rebuild_records` 只补不覆盖：
+  `kind` 与落盘时刻不在记录头里，已有行一律不动）。
+  一并：`io.CarrierFile.scan` 改为交出 `(槽区间, 记录)`（顺扫的位置只算一次）；
+  `Index.open` 拒绝接管别人的 SQLite 文件（有表却无 `meta` 即拒，与配置端"不覆盖别人的文件"同一口径）。
+  新增 `tests/core/test_bucket.py` 27 例；核心 303 通过；ruff / mypy(94) / prose / SPDX /
+  gen_conf --check / docgen --check / mkdocs --strict 全绿。
+  **未做**：合并与短命桶（`bucket` 归属改写属设计篇 §7 的待定项，裁定前不实现）、巡检。
+
+- 2026-09-28 · 已定 · **文件引用改为值文件同层级的相对引用名**（作者指正写法太繁杂）：
+  值文件里原先写仓内全路径（`config\settings\core\storage\tables.yaml`），长、且与绝对路径只差一步，
+  而那一行还是**装饰**——真正的路径由引擎按键名推，用户改了会被改回去（两处事实，且搬一次仓就废）。
+  现在引用名**相对值文件自己所在目录**解析，默认即同层级的 `<字段名>.<类型>`：
+  `"storage.db.tables": "tables.yaml"`。**只收相对引用**（绝对路径绑死本机目录）；
+  那一行是事实、不是装饰（改成别的相对引用即换文件，补缺不改回默认）；
+  词表侧改按**字符串**出（值确实是字符串），被引用文件类型记在 `x-cairn-file-type`——
+  照内容类型出词表会让值文件当场显示成错的；非字符串值在取值口报清楚。
+  顺带清掉 `tables.py` 里两处已失效的说明（`_DEFAULT_TABLES`、旧键名 `tables_file`）。
+
 - 2026-09-28 · 已定 · **配置端支持"文件引用"（并借此消掉 YAML 那次塞的路径代码）**
   （作者提议：让配置项引用文件——配置面保持精简确定，语义结构各归其位）：
   `Cfg` / `CfgItem` 增 `file_type`（非空即"值在被引用文件里"，且禁止同时带默认值）；
-  引擎增 `ConfEngine.file_path()` / `_referenced()`——路径按键名与包树推
+  引擎增 `file_path()` / `_referenced()`——路径按键名与包树推
   （`config/<hub>/<包树>/<字段名>.<类型>`，与值文件同约定），扩展名定解析器（yaml / json），
   缺失或解析失败**即报错**；`plan()` 对这类项只往值文件写一行路径。
   存储侧相应简化：删 `TABLES_FILE` 常量、`tables_file()`（从模块位置往上数目录层级的写法）
   与 `core/storage/tables.py` 里的路径推导/解析逻辑，改为声明
   `Cfg("storage.db.tables", file_type="yaml")` 并直接读 `conf.tables`。
-  值文件现在长这样：`"storage.db.tables": "config\\settings\\core\\storage\\tables.yaml"`。
   **发现一处工具缺陷（未修，记下）**：`gen_conf` 只补缺失键、不清理"曾声明、现已被移除"的键，
   故上一版的 `storage.db.tables_file` 需手工删除才让 `--check` 回到一致。
   核心 266 通过；ruff / mypy(93) / gen_conf --check / docgen --check 全绿。
