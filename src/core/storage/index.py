@@ -103,19 +103,20 @@ class Index:
     def open(cls, path: Path | str) -> Index:
         """打开（不存在即建）索引库；只建 ``meta``，其余表由 :meth:`align` 按声明处置。
 
-        **不接管别人的 SQLite 文件**：文件已存在、里面有表、却没有本库的 ``meta``，
-        说明它不是本程序建的（或来自别的格式）。此时拒开，而不是往里建表——
-        与配置端的口径一致：绝不覆盖别人的文件。
+        **不接管别人的 SQLite 文件**：库里已有表，却**一张都不是本程序声明的**，
+        就说明它不是本程序建的——旧格式的目录也落在这一条上。此时拒开，而不是往里建表：
+        与配置端的口径一致，绝不覆盖别人的文件；也免得老库被当成"空库"静默读过去。
         """
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(target))
         conn.row_factory = sqlite3.Row
-        foreign = _foreign_tables(conn)
-        if foreign:
+        strangers = _stranger_tables(conn)
+        if strangers:
             conn.close()
             raise IndexSchemaError(
-                f"索引库里有本程序不认识的表 {foreign}，不接管：{target}（换目录或人工处置）"
+                f"库里已有的表 {strangers} 一张都不是本程序声明的，不接管：{target}"
+                "（旧格式的库不予读取；换目录或人工处置）"
             )
         conn.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         return cls(path=target, conn=conn)
@@ -352,18 +353,21 @@ class Index:
         return identifier
 
 
-def _foreign_tables(conn: sqlite3.Connection) -> list[str]:
-    """本程序不认识的表：里面已有表、却没有本库的 ``meta``，即"这不是我们的库"。
+def _stranger_tables(conn: sqlite3.Connection) -> list[str]:
+    """已有的表里，哪些说明"这不是我们的库"。
 
-    空库（一个表都没有）不算：那正是新建索引库时的样子。
+    判据：库中已有表（`meta` 除外），却**一张都不是本程序声明的**——那不是我们的库
+    （旧格式的目录同样撞在这一条上：它有自己的 packs / contents / blocks）。
+    只建过 `meta` 的库**不拦**：那是刚 `open`、还没对齐的样子。
     """
+    declared = {table.name for table in declared_tables()}
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
-    names = [str(row["name"]) for row in rows]
-    if not names or "meta" in names:
-        return []
-    return sorted(names)
+    names = {str(row["name"]) for row in rows}
+    if names - {"meta"} and not names & declared:
+        return sorted(names)
+    return []
 
 
 def _canonical_declarations() -> dict[str, object]:

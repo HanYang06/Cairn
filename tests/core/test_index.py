@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
@@ -241,6 +242,37 @@ def test_tables_file_must_be_a_list(tmp_path: Path) -> None:
 
 
 # ---- 对比与分类 ----
+
+# ---- 开库的接管口径 ----
+
+
+def test_open_refuses_an_older_format_catalog(tmp_path: Path) -> None:
+    """旧格式的目录：表都在，却**一张都不是我们声明的** → 拒开。
+
+    不这么判的话，老库会被"接进来并补上我们的表"，而它的块在旧结构里，
+    于是用户看到的是一间**空库**——静默无视数据比报错坏得多。
+    """
+    path = tmp_path / "catalog.db"
+    old = sqlite3.connect(str(path))
+    old.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    old.execute("CREATE TABLE packs(id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    old.execute("CREATE TABLE blocks(oid TEXT PRIMARY KEY, checksum TEXT, data BLOB)")
+    old.commit()
+    old.close()
+
+    with pytest.raises(IndexSchemaError, match="不接管"):
+        Index.open(path)
+
+
+def test_open_adopts_a_library_that_only_has_meta(tmp_path: Path) -> None:
+    """只建过 `meta` 的库不算"别人的"：那是刚开过、还没对齐的样子。"""
+    index = _index(tmp_path)
+    index.close()
+
+    reopened = _index(tmp_path)
+    assert reopened.differences() != []  # 还没对齐，但库是我们的
+    assert reopened.align() == []
+    reopened.close()
 
 
 def test_differences_report_missing_tables_before_align(tmp_path: Path) -> None:
