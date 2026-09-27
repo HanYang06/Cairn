@@ -96,10 +96,12 @@ class NoteData(Block):
 - 组：域身份 `gid`（≠ 块 `oid`）+ 有序子项 `group` 列表（可嵌套）；另存 `contains` 边做反查。
 - 签名为**复合值**（`Signature`），落在 attrs；画板值类型（`Graphic` / `Paint` / `Link`）同属数据描述。
 
-## 5. 大内容：交给桶的分片
+## 5. 大内容：交给存储的分片
 
-- `Bucket.put_content(bytes)`：小则一块，大则分片 + 索引块（`part` / `index`），返回可引用的稳定 id。
-- 分片块**不做块级去重**；去重只发生在领域对象这一层。
+- 分片是**存储**的活：小则一块，大则切成 `part` 块 + 一个 `index` 索引块，返回可引用的稳定身份。
+  **预留**：粒度（`storage.block.max_bytes`）与词表（`PART_TYPE` / `INDEX_TYPE`）已定，
+  块面尚未接上，见 [`storage-design.md`](./storage-design.md) §6.3 / §12。
+- 分片块**不做块级去重**；去重只发生在领域对象这一层（同 body 的内容面只存一份是存储给的）。
 
 ## 6. 日志：诊断 vs 活动（两层，互不混淆）
 

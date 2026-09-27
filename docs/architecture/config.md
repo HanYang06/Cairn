@@ -120,28 +120,29 @@ uv run python tools/gen_conf.py --check    # 只查不写（CI 防漂移）
 
 `tools/gen_conf.py` 会先把冲突逐条列出来让人处理——**搬迁或换 hub**，绝不静默覆盖。
 
-## 6. 已经接上的线（片 2）
+## 6. 已经接上的线
 
 声明不只是"记着"，它**真的驱动行为**：
 
 | 配置项 | 谁读它 | 怎么生效 |
 |---|---|---|
-| `storage.block.max_bytes` | `BucketConfig` | 分片粒度（超过即分片 + 索引块） |
-| `storage.pack.max_blocks` / `max_bytes` | `BucketConfig` | 载体写满即封口 |
+| `storage.pack.slot_bytes` | `CarrierFile.create` | 建载体时写进文件头（**此后按文件头读**，不再问配置） |
+| `storage.pack.max_bytes` | `Bucket.pack_max_bytes` | 封口线：写满即换新载体（每次写入按当前值判） |
+| `storage.block.max_bytes` | —— | 分片粒度（**预留**：分片尚未接进块面，见存储设计篇 §12） |
+| `storage.db.tables` | `core/storage/tables.py` | **文件引用**：值是相对引用名，本体是那份 YAML 表声明 |
 | `core.log.level` | `core/__init__` | 导入内核即设 `core.*` 这族 logger 的级别（不劫持 root） |
-| `storage.version.retention_days` | —— | **已登记、未接线**（版本能力本身还没装回，见 kernel-spec §5.1） |
 
 两条使用规矩：
 
-- `BucketConfig()` 的默认值**来自声明**（`core/storage/conf.py`），这里不抄第二份；
-  已建好的桶把自己那份值存进目录，**重开时读回来**——老库不会被新默认值悄悄改掉；
-- 改配置文件即改行为：`BucketConfig` 每次构造都向引擎要值。
+- 值的默认值**来自声明**（`core/storage/conf.py`），这里不抄第二份；
+  **已落盘的东西不被新配置改写**（槽长写在载体文件头里，老库不会因改配置而被解释成另一个布局）；
+- 改配置文件即改行为：策略类参数（如封口线）每次取用都向引擎要值。
 
 ## 7. 边界（别越界）
 
 - **各模块管自己的配置**：`core/storage` 的参数由 `core/storage` 声明，配置端只负责展开，
   不替别人管；
-- **格式版本号不进配置**：`CATALOG_VERSION` / `BLOCK_VERSION` 这类改了会坏库的，留在实现处；
+- **格式常量不进配置**：载体魔数、文件头长度、记录头布局这类改了会坏库的，留在实现处；
 - **引擎不依赖第三方**：`core/conf` 只用标准库 + `core.types`；`jsonschema` 只在测试 / 可选校验里用；
 - **配置不是"统一参数面"**：它只管配置这件事；UI 侧 `ui_tools` 的 Facet 配置是另一套，两者不合并。
 

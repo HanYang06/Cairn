@@ -77,10 +77,10 @@ core / feature   数据内核（Qt-free）
 **约束（以 import 依赖固化，非仅文档约定）**：
 
 ```
-ui  →  core.types（中立 DTO / Oid） + 领域契约
-ui  ✗  core.storage（Bucket / Block）
+ui  →  core.types（中立 DTO / 身份凭证） + 领域契约
+ui  ✗  core.storage（Block / 桶 / 载体）
 ui  ✗  feature
-ui  ✗  Vault 内部（body / attrs / checksum / catalog …）
+ui  ✗  存储内部（body / attrs / checksum / 载体 / 索引库 …）
 ```
 
 - **Bucket / Block 为存储实现，与 UI 无耦合**：UI 不导入、不复用、不感知。二者职责正交——

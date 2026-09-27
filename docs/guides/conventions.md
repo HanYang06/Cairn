@@ -58,7 +58,8 @@ core(L0)  ←  feature(L3)  ←  app(组合根)
 
 ## 4. 数据约定
 
-- 内部时间统一 **unix 毫秒 int**；ID 用 **ULID**（`Oid`）；内容哈希用 **BLAKE3 十六进制**（`checksum`）。
+- 内部时间统一 **unix 毫秒 int**；对象身份用 **`ValueUuid`**（26 字符 Crockford ULID），
+  内容地址用 **`ValueHash`**（BLAKE3 十六进制）——两者都是 `core/types/id.py` 的 `Id` 上的凭证。
 - 类型名用 `feature.shared.Kind`（plain `Enum`，值即落盘字符串，如 `notedata`）。
 - **未实现的设计标为「预留 / 草案」**，不要假装已存在；也别写"已实现"骗下一个读代码的人。
 
