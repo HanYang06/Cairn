@@ -24,3 +24,55 @@ class KindMismatchError(CairnError):
 
 class CorruptObjectError(CairnError):
     """对象数据损坏或校验失败。"""
+
+
+# ---- 存储侧 ----
+
+
+class StorageError(CairnError):
+    """存储侧异常的基类。"""
+
+
+class BucketExistsError(StorageError):
+    """桶已存在（重复创建）。"""
+
+
+class BucketNotFoundError(StorageError):
+    """桶不存在。"""
+
+
+class PackSealedError(StorageError):
+    """载体已封口（不可再追加），或其内容与目录不一致。"""
+
+
+class SlotError(StorageError):
+    """槽区间非法：越界、溢出载体，或与槽长不匹配。"""
+
+
+class IndexSchemaError(StorageError):
+    """表声明与实际结构不一致，且该差异不允许自动处置（拒绝启动）。"""
+
+
+class IndexTooNewError(StorageError):
+    """索引库的结构版本高于当前程序（拒绝降级）。"""
+
+
+class RecordFormatError(StorageError):
+    """载体记录头非法：长度、校验和或字段缺失。"""
+
+
+__all__ = [
+    "BucketExistsError",
+    "BucketNotFoundError",
+    "CairnError",
+    "CorruptObjectError",
+    "IndexSchemaError",
+    "IndexTooNewError",
+    "InvalidIdError",
+    "KindMismatchError",
+    "ObjectNotFoundError",
+    "PackSealedError",
+    "RecordFormatError",
+    "SlotError",
+    "StorageError",
+]

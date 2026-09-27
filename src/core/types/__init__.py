@@ -10,8 +10,9 @@
 
 | 模块 | 内容 | 性质 |
 |---|---|---|
-| `errors` | 异常体系 | 基础 |
-| `ids` | `Oid`（ULID）/ `Cid`（内容哈希） | 基础 |
+| `errors` | 异常体系（含存储侧） | 基础 |
+| `id` | `Id`（身份证）与两套凭证 `ValueUuid` / `ValueHash`、`SlotRange` | 基础 |
+| `ids` | **待收口**：旧 `Oid`（ULID）/ `Cid`（内容哈希） | 基础 |
 | `kind` | 类型词表与最小类型表（`TypeInfo` / `type_name` / `register`） | 声明 |
 | `objects` | 中立视图（`ObjectInfo` / `VerifyReport`） | 结构 |
 | `common` | 通用小函数（`now_ms`） | 工具 |
@@ -27,12 +28,21 @@ from __future__ import annotations
 
 from .common import now_ms
 from .errors import (
+    BucketExistsError,
+    BucketNotFoundError,
     CairnError,
     CorruptObjectError,
+    IndexSchemaError,
+    IndexTooNewError,
     InvalidIdError,
     KindMismatchError,
     ObjectNotFoundError,
+    PackSealedError,
+    RecordFormatError,
+    SlotError,
+    StorageError,
 )
+from .id import Id, SlotRange, ValueHash, ValueUuid
 from .ids import Cid, Oid
 from .kind import (
     ROLE_DATA,
@@ -52,15 +62,27 @@ from .objects import ObjectInfo, VerifyReport
 __all__ = [
     "ROLE_DATA",
     "ROLE_DOMAIN",
+    "BucketExistsError",
+    "BucketNotFoundError",
     "CairnError",
     "Cid",
     "CorruptObjectError",
+    "Id",
+    "IndexSchemaError",
+    "IndexTooNewError",
     "InvalidIdError",
     "KindMismatchError",
     "ObjectInfo",
     "ObjectNotFoundError",
     "Oid",
+    "PackSealedError",
+    "RecordFormatError",
+    "SlotError",
+    "SlotRange",
+    "StorageError",
     "TypeInfo",
+    "ValueHash",
+    "ValueUuid",
     "VerifyReport",
     "collect_fields",
     "domain_of",
