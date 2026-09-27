@@ -43,10 +43,26 @@
   旧篇 `storage.md` 与 `data-model.md` 存储态章节清理、全量测试与记忆整理。
   **卡口**：旧层退役要先把 `Block` / `Oid` 换成 ID + body（`Storage.store(obj: Block)` 那条链），
   即 ID 专项——不是单靠存储侧能做完的一步。
-- 遗留 · `block.py` / `bucket.py` / `catalog.py` **本阶段一字未改**（仍走旧路径）；
-  `core/storage/__init__.py` 已同时导出新旧两套，**暂并存**：新层的桶类与旧 `Bucket` 同名，
+- [x] **片 5a · 块面**（2026-09-28）：`core/storage/blocks.py` 的 `BlockStore` —— 块 ⇄ 记录
+  （内容记录 ＋ 块记录；内容面去重；`body_addr` 指针在载荷里；`drop` 只摘行）。
+  一并修正设计篇 §3.2.1：指针不在 ID 里（记录层自校验优先），故 §3.2.1 / §4.4 已回写。
+- [ ] **片 5b · 内核接线**（下一步）：`Storage` 改成坐在 `Vault` + `BlockStore` 上，
+  保持 `Core` 的调用面（store / get / fetch / drop / ids / info_of / infos / query / execute / table）；
+  `feature/shared/relation.py` 的 `core.storage.table(...)` 换成新层的边表；`Core.query` / `execute`
+  这两个逃生口无人调用，接线时一并处置。**半径**：领域侧的存储用法只有 `core.put` / `core.get`
+  两处（约 10 个调用点）＋ relation 的表用法，故接线比"换地基"听起来小得多。
+- [ ] **片 5c · 清理**：删 `bucket.py` / `catalog.py` / `table.py` / 旧 `Storage` / `Oid` / `Cid`
+  与旧文档章节（`storage.md`、`data-model.md` 存储态）；旧测试里的**行为契约要迁到新地基**，
+  不是一删了之（`test_vault.py` 测的是内核读写面，`test_store.py` 测旧桶）。
+- 遗留 · **两处字段问题待作者裁**（设计篇 §12）：`body_addr` 提升成索引列？属性投影进库？
+- 遗留 · `bucket.py` / `catalog.py` / `table.py` / `block.py` **本阶段只加不改**（仍走旧路径）；
+  `core/storage/__init__.py` 同时导出新旧两套，**暂并存**：新层的桶类与旧 `Bucket` 同名，
   过渡期只在 `core.storage.vault` 内可见。
-- 遗留 · `Vault.put` 目前无事务：先落字节、后记目录，中途失败留孤儿字节（由 `repair` 补行收编）。
+- 遗留 · 写路径目前无事务：先落字节、后记目录；块面写两条记录（内容 ＋ 块）同理——
+  中途失败可能留下没人指向的内容记录，属孤儿（由巡检补行收编，或将来清）。
+- 遗留 · 分片（大 body 切成 PART + INDEX）尚未接到块面（旧 `Bucket.put_content` 无人调用）。
+- 遗留 · `PackSealedError` / `IndexTooNewError` 两个异常**当前无人抛**（片 1 定的词汇表）；
+  要么在接线时找到真实用点，要么删掉——不留"登记了但没人用"的东西。
 - 遗留 · 更新留下的**旧副本**没有回收（同一身份盘上多份），属压实与空洞回收（设计篇 §12）。
 - 遗留 · `gen_conf.py` 重复跑会**留下曾声明、后已删除的键**（本轮手工清了 `storage.db.tables_file`、
   `storage.tables.declared` 一类残留）；生成器缺"清理过期键"这一步。

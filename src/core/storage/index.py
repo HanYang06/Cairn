@@ -302,6 +302,14 @@ class Index:
             [row[name] for name in columns],
         )
 
+    def remove_record(self, value_uuid: str) -> bool:
+        """摘掉一条定位行；返回它此前是否存在。
+
+        **只摘行**：载体里的字节留着，等压实回收——物理坐标是投影，删投影不动事实（§5.2）。
+        """
+        cursor = self.conn.execute("DELETE FROM record WHERE value_uuid = ?", (value_uuid,))
+        return cursor.rowcount > 0
+
     def edges(self, *, src: str = "", dst: str = "", kind: str = "") -> list[sqlite3.Row]:
         """按来源 / 目标 / 种类查边（拓扑遍历的入口）。"""
         clauses: list[str] = []

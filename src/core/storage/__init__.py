@@ -31,6 +31,7 @@ from .block import (
     canonical,
     decode_canonical,
 )
+from .blocks import BlockStore
 from .bucket import CATALOG_NAME, Bucket, BucketConfig
 from .carrier import CARRIER_HEADER_BYTES, CARRIER_MAGIC, CarrierLayout
 from .catalog import BlockLocation, Catalog
@@ -60,6 +61,7 @@ __all__ = [
     "PART_TYPE",
     "Block",
     "BlockLocation",
+    "BlockStore",
     "Body",
     "BodyField",
     "Bucket",
