@@ -6,6 +6,29 @@
 > 状态：进行中 / 已定 / 已废弃。完成后移入 `changes.md`，或直接删除。
 > 细则以 `docs/architecture/*.md` 与代码为准，本文件只记「还没做 + 在做」。
 
+## 存储重设计（2026-09-28 立项；第 1 阶段已落）
+
+> 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，草案 v1.1）。
+> 方向见 `decisions.md`「存储重设计」。分支 `feat/storage-redesign`。
+> **只跑局部测试**（作者口径：全量测试在当前阶段必然跑不通，等整体变更时统一规划）。
+
+- [x] **片 0 · 设计篇**：`storage-design.md`（12 节）＋ `mkdocs.yml` 登记 ＋ 逐轮裁定
+  （四层 / ID 两形态 / 记录自描述 / 单库多桶 / 表声明配置化 / 可重建分档）。
+- [x] **片 1 · 身份层**：`core/types/id.py`（`Id` / `ValueUuid` / `ValueHash` / `SlotRange` / `Id.record`
+  与 `Id.from_record`）＋ 存储侧异常（`StorageError` 与其 6 个子类）＋ `tests/core/test_id.py`（35 例）。
+  一并：`types/ids.py` 里被取代的 `ID` 草稿删除（`Oid` / `Cid` 原样保留，待收口）。
+- [x] **片 2 · 载体与记录层**：`core/storage/carrier.py`（槽布局与载体文件头）、
+  `record.py`（记录头四项 + 编解码）、`io.py`（`CarrierFile`：追加写 / 按槽区间读 / 顺扫重建）
+  ＋ `tests/core/test_carrier.py`（48 例，含篡改、截断、同槽记录错位）。
+- [ ] **片 3 · 索引库**：`record` 表（`value_uuid` 主键 ＋ `value_hash` 非唯一索引）＋
+  `bucket` / `edge` 表；表声明配置化（不写 SQL）；开库与挂载时对比与分档；重建档写进声明。
+- [ ] **片 4 · 桶与多桶**：`Bucket` 接载体与索引库（替换 `catalog.db` 与旧 pack 逻辑）、
+  桶目录与桶表、合并与短命桶。
+- [ ] **片 5 · 收口**：`Oid` / `Cid` 与旧 `catalog.py` / `bucket.py` 旧逻辑退役、
+  旧篇 `storage.md` 与 `data-model.md` 存储态章节清理、全量测试与记忆整理。
+- 遗留 · `block.py` / `bucket.py` / `catalog.py` **本阶段一字未改**（仍走旧路径）；
+  `core/storage/__init__.py` 已同时导出新旧两套，**暂并存**。
+
 ## 书面语（2026-09-26 立项；全仓已清零，门禁已阻断）
 
 > 方向见 `decisions.md`「书面语（2026-09-26 定 + 全仓已落，门禁已阻断）」。

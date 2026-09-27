@@ -3,6 +3,26 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **存储重设计：第 1 阶段落地（设计篇 + 身份层 + 载体与记录层）**
+  （分支 `feat/storage-redesign`，基于 `8d3d1c0`）：
+  **设计篇**新增 `docs/architecture/storage-design.md`（12 节，草案 v1.1；`mkdocs.yml` 已登记）
+  ——四层（块 / 载体 / 多桶 / 索引库）、ID 两套凭证、记录自描述、单库多桶、
+  表声明配置化、可重建分档（内核态可重建 / 领域态含不可重建表 + 备份必需）、已裁十项。
+  **身份层**新增 `src/core/types/id.py`：`Id`（两套凭证 + 名字 + `issued` + `issuer` + 位置段，
+  含预留网络字段）、`ValueUuid`（26 位 ULID 布局，带 `time_ms`）、`ValueHash`（BLAKE3，`context` 域分隔）、
+  `SlotRange`（`(起始槽, 槽数, 槽内偏移)`）；`Id.record()` / `Id.from_record()` 给出并还原落盘子集。
+  `core/types/errors.py` 补 `StorageError` 与其 6 个子类；`types/ids.py` 删掉被取代的 `ID` 草稿
+  （`Oid` / `Cid` 保持原样，全库 90 余处调用未动）。
+  **载体与记录层**新增 `src/core/storage/carrier.py`（定长槽算术、载体文件头 24 字节：魔数 + 槽长 + 预留）、
+  `record.py`（记录头四项：总长 / 校验和 / ID / 槽数；自框定 + 自校验）、
+  `io.py`（`CarrierFile`：追加写并返回槽区间、按槽区间读、顺扫重建，坏点即停并显式报错）。
+  **实测改动设计两处**（冒烟抓出，已回灌设计篇 §5.2 / §5.4）：
+  ① 槽区间必须带**槽内偏移**——只记 `(起始槽, 槽数)` 会让两条同槽记录的起点撞在一起，
+  读第二条读出第一条的头部；带上后字节偏移与槽区间互为逆运算，故索引无需另存偏移。
+  ② **不设封口目录**——记录自框定（总长在最前），顺扫即可重建；目录降级为预留的性能优化。
+  测试：新增 `tests/core/test_id.py`（35 例）与 `tests/core/test_carrier.py`（48 例）；
+  局部测试 221 通过，`ruff check .` 全仓干净、`mypy src`（91 文件）通过、`mkdocs build --strict` 通过。
+  **未动**：`block.py` / `bucket.py` / `catalog.py`（片 3–4 接）；旧篇 `storage.md` / `data-model.md` 未清理。
 - 2026-09-26 · 已定 · **书面语成为全仓硬标准，门禁由报告模式转为阻断**（分支 `feat/prose-gate`）：
   标准本体在 `.agents/skills/rules/references/prose.md`，词典本体在 `tools/prose.py` 的 `_LEXICON`
   （规则文件只写判据、**不复述禁用词**，否则规则文件自身会被命中）。
