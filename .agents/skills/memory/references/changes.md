@@ -3,6 +3,24 @@
 
 # 变更
 
+- 2026-09-28 · 已定 · **存储重设计：第 2 阶段落地（索引库：表声明 + 对比分类）**
+  （分支 `feat/storage-redesign`）：
+  **表声明层** `src/core/storage/tables.py`：`Column` / `ColumnType`（中立五型）/ `Index` /
+  `Table` / `RebuildTier`（三档），声明在 `__post_init__` 里自校验（恰好一个主键、索引列必须存在、
+  **档三不得写重建来源、档一 / 档二必须写**）；建表与建索引语句由 `Table.ddl()` **编译**出来，
+  源码内不出现 SQL；内核三张表在该模块声明并在导入时登记。
+  **索引库** `src/core/storage/index.py`：`Index`（一个 vault 一个 `catalog.db`）——
+  读回实际结构（`sqlite_master` / `PRAGMA table_info` / `index_list`）→ 与声明逐项比 →
+  分类（可原位补齐 / 须重建搬运 / 拒绝）→ 处置；**破坏性动作默认拒绝**，须显式传
+  `RebuildPlan(tables=…, reason=…)`；未声明的表与列只告警、**不静默删除**；
+  入口四件事（按身份取、按摘要反查、计数、边）与 `put_edge`（边身份由四元组算摘要，故幂等）。
+  **声明走配置投影**：全部声明算出规范化描述（列与索引按名排序，摘要稳定），落在配置键
+  `storage.tables.declared`；它是**生成物**（防漂移 + 可评审），真源仍是声明——
+  库内 `meta` 也存一份并在开库时比对（`verify_declarations`）。
+  **途中修掉两处同名覆盖**（决策记忆里记过的坑）：`canonical`（CBOR 编码）被表声明投影同名顶掉，
+  改名 `canonical_tables`；`tables`（函数）把 `core.storage.tables` **子模块**顶掉，
+  顶层改导出 `declared_tables`。测试新增 `tests/core/test_index.py`（32 例，覆盖分类树与越权重建）；
+  核心 257 通过、ruff / mypy（93 文件）/ `gen_conf --check` / `docgen --check` / `mkdocs --strict` 全绿。
 - 2026-09-28 · 已定 · **存储参数接入配置引擎（片 2 补：作者指出"写了参数却一个都没走配置"）**
   （分支 `feat/storage-redesign`）：`core/storage/conf.py` 重定三键——
   新增 `storage.pack.slot_bytes`（默认 64 KiB）、`storage.pack.max_bytes` 语义收窄为**只管封口线**

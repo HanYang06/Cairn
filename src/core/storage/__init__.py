@@ -33,15 +33,19 @@ from .bucket import CATALOG_NAME, Bucket, BucketConfig
 from .carrier import CARRIER_HEADER_BYTES, CARRIER_MAGIC, CarrierLayout
 from .catalog import BlockLocation, Catalog
 from .engine import Storage
+from .index import INDEX_NAME, Difference, Index, RebuildPlan
 from .io import CarrierFile
 from .record import Record, RecordHeader
 from .table import Table
+from .tables import Column, ColumnType, RebuildTier, canonical_tables
+from .tables import tables as declared_tables
 
 __all__ = [
     "BLOCK_VERSION",
     "CARRIER_HEADER_BYTES",
     "CARRIER_MAGIC",
     "CATALOG_NAME",
+    "INDEX_NAME",
     "INDEX_TYPE",
     "PART_TYPE",
     "Block",
@@ -53,10 +57,18 @@ __all__ = [
     "CarrierFile",
     "CarrierLayout",
     "Catalog",
+    "Column",
+    "ColumnType",
+    "Difference",
+    "Index",
+    "RebuildPlan",
+    "RebuildTier",
     "Record",
     "RecordHeader",
     "Storage",
     "Table",
     "canonical",
+    "canonical_tables",
+    "declared_tables",
     "decode_canonical",
 ]

@@ -24,14 +24,19 @@
   `pack.max_bytes` 收窄为**只管封口线**（默认 2 GiB）；**删** `pack.max_blocks` 与
   `version.retention_days`；两份投影与配置参考页重生成；建载体时读一次配置、此后按文件头读。
   **规矩**：格式常量（魔数 / 头长 / 记录头布局）不进配置。
-- [ ] **片 3 · 索引库**：`record` 表（`value_uuid` 主键 ＋ `value_hash` 非唯一索引）＋
-  `bucket` / `edge` 表；表声明配置化（不写 SQL）；开库与挂载时对比与分档；重建档写进声明。
+- [x] **片 3 · 索引库**：`core/storage/tables.py`（表声明：中立类型 / 约束 / 索引 / 重建档，
+  自校验 + 编译成 DDL）与 `core/storage/index.py`（实际结构比对 → 分类 → 处置；
+  破坏性动作默认拒绝、须显式授权；入口四件事与幂等边）；
+  声明投影落在配置键 `storage.tables.declared`，库内 `meta` 存一份并在开库时比对；
+  `tests/core/test_index.py` 32 例。
 - [ ] **片 4 · 桶与多桶**：`Bucket` 接载体与索引库（替换 `catalog.db` 与旧 pack 逻辑）、
   桶目录与桶表、合并与短命桶。
 - [ ] **片 5 · 收口**：`Oid` / `Cid` 与旧 `catalog.py` / `bucket.py` 旧逻辑退役、
   旧篇 `storage.md` 与 `data-model.md` 存储态章节清理、全量测试与记忆整理。
 - 遗留 · `block.py` / `bucket.py` / `catalog.py` **本阶段一字未改**（仍走旧路径）；
   `core/storage/__init__.py` 已同时导出新旧两套，**暂并存**。
+- 遗留 · 索引库的**巡检（与真源比对）**与**重建搬运**尚未实现：当前只保证"对齐后无差异"
+  与"破坏性差异拒绝执行"，搬运由调用方负责（片 4 接）。
 
 ## 书面语（2026-09-26 立项；全仓已清零，门禁已阻断）
 

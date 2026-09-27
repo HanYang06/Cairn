@@ -23,7 +23,7 @@
 | 键丢、有默认值 | **补回来**（只补缺失的键） |
 | 键丢、没默认值 | **报错** |
 
-## 全部配置项（4 条）
+## 全部配置项（5 条）
 
 | 键 | 类型 | 默认值 | 说明 | 归属 |
 |---|---|---|---|---|
@@ -31,6 +31,7 @@
 | `storage.block.max_bytes` | `integer` | `1048576` | 单个块的字节上限，超过即分片（分片 + 索引块） | `core.storage.conf.StorageConf` |
 | `storage.pack.max_bytes` | `integer` | `2147483648` | 单个载体的字节上限，写满即封口（只管封口线，不定槽长） | `core.storage.conf.StorageConf` |
 | `storage.pack.slot_bytes` | `integer` | `65536` | 槽长：载体内的定长分配与定位单位，建载体时写进文件头 | `core.storage.conf.StorageConf` |
+| `storage.tables.declared` | `string` | `{"storage.table.bucket":{"columns":[["created","integer",false,true,false,"0"],["name","text",true,true,false,""],["role","text",false,true,false,"'main'"],["state","text",false,true,false,"'mounted'"]],"doc":"桶登记：桶目录是存在证明，本表是登记","indexes":[],"name":"bucket","rebuild_from":"桶目录：扫 vault 下的桶目录","tier":"tier1"},"storage.table.edge":{"columns":[["created","integer",false,true,false,"0"],["domain","text",false,true,false,"''"],["dst","text",false,true,false,""],["id","text",true,true,false,""],["kind","text",false,true,false,"''"],["src","text",false,true,false,""]],"doc":"关系边：一等行，src --kind--> dst","indexes":[[["dst","kind"],false],[["src","kind"],false]],"name":"edge","rebuild_from":"块记录：关系数据落在块内时由其派生","tier":"tier1"},"storage.table.record":{"columns":[["body_addr","text",false,true,false,"''"],["bucket","text",false,true,false,"''"],["created","integer",false,true,false,"0"],["issued","integer",false,true,false,"0"],["kind","text",false,true,false,"''"],["pack","text",false,true,false,"''"],["size","integer",false,true,false,"0"],["slot_count","integer",false,true,false,"1"],["slot_head","integer",false,true,false,"0"],["slot_start","integer",false,true,false,"0"],["updated","integer",false,true,false,"0"],["value_hash","text",false,true,false,""],["value_uuid","text",true,true,false,""]],"doc":"身份到位置：一行一条记录（含块记录与内容记录）","indexes":[[["bucket","pack"],false],[["kind"],false],[["updated"],false],[["value_hash"],false]],"name":"record","rebuild_from":"载体：顺扫全部记录，读记录头重建","tier":"tier1"}}` | 表声明的规范化投影（生成物：由 core/storage/tables.py 的声明算出，勿手改） | `core.storage.conf.StorageConf` |
 
 ## 另见
 
