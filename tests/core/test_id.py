@@ -118,6 +118,14 @@ def test_slot_range_parse_roundtrip() -> None:
             SlotRange.parse(bad)
 
 
+def test_slot_range_parse_only_accepts_ascii_digits() -> None:
+    """全角数字 / 阿拉伯-印度数字要被拒：`isdecimal()` 认它们、`int()` 也照收，
+    于是这种脏字节会莫名其妙地"能解析"（评审指出的一条）。"""
+    for bad in ("１２:３", "١٢:٣", "2:７"):
+        with pytest.raises(InvalidIdError):
+            SlotRange.parse(bad)
+
+
 @pytest.mark.parametrize(
     ("start", "count", "head"),
     [(-1, 1, 0), (0, 0, 0), (0, -3, 0), (0, 1, -2)],
@@ -219,6 +227,17 @@ def test_id_from_record_ignores_unknown_keys() -> None:
     raw = Id.new(b"x").record()
     raw["future_field"] = "whatever"
     assert Id.from_record(raw).value_hash == raw["value_hash"]
+
+
+def test_id_from_record_treats_explicit_null_as_empty() -> None:
+    """键在、值是显式 null → 还原成空串，**不是字符串 "None"**。
+
+    `str(None)` 会造出一个幽灵名字 / 幽灵桶名，下游按名匹配时就对不上了（评审指出的一条）。
+    """
+    raw = Id.new(b"x").record()
+    raw.update({"name": None, "issuer": None, "in_bucket_name": None, "in_pack_name": None})
+    back = Id.from_record(raw)
+    assert (back.name, back.issuer, back.in_bucket_name, back.in_pack_name) == ("", "", "", "")
 
 
 def test_id_from_record_requires_identity_keys() -> None:
