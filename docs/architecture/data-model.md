@@ -387,7 +387,7 @@ Storage ── BlockStore ── Vault ── Bucket(packs/) + Index(catalog.db)
 | 载体文件 | `CarrierFile` / `CarrierLayout` | `core/storage/io.py` / `carrier.py` | 已实现 |
 | 记录 | `Record` / `RecordHeader` | `core/storage/record.py` | 已实现 |
 | 索引库 | `Index` / `Difference` / `RebuildPlan` | `core/storage/index.py` | 已实现 |
-| 表声明 | `Table`（声明）/ `Column` / `RebuildTier` | `core/storage/tables.py` | 已实现 |
+| 表声明 | `TableSpec`（声明）/ `Column` / `RebuildTier` | `core/storage/tables.py` | 已实现 |
 | 领域表句柄 | `Table` / `create_table` | `core/storage/table.py` | 已实现 |
 | 块 | `Block` | `core/storage/block.py` | 已实现 |
 | 属性 / 数据字段 | `Attr` / `Data` | `core/types/attr.py` | 已实现 |
