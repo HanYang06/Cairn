@@ -85,7 +85,7 @@ class Difference:
     table: str
     kind: str
     """差异种类：``missing_table`` / ``missing_column`` / ``extra_column`` /
-    ``missing_index`` / ``column_mismatch`` / ``extra_table``。"""
+    ``missing_index`` / ``index_mismatch`` / ``column_mismatch`` / ``extra_table``。"""
 
     detail: str = ""
 

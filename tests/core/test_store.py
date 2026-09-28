@@ -342,6 +342,40 @@ def test_table_handle_does_not_commit_on_every_call(tmp_path: Path) -> None:
         assert storage.table("kv").count() == 0
 
 
+def test_listing_ids_and_infos_does_not_read_bodies(tmp_path: Path, monkeypatch) -> None:
+    """列身份与元数据**不许读正文**：全库正文可能很大，列举用不着它。
+
+    用"把取块这条路封死"来验：`ids()` / `infos()` 仍要能跑完。
+    """
+    with _storage(tmp_path) as storage:
+        storage.store(Note(body=["x"], attrs={"title": "T"}))
+        storage.store(Note(body=["y"], attrs={"title": "U"}))
+
+        def explode(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("列举不该读正文")
+
+        monkeypatch.setattr("core.storage.blocks.BlockStore.fetch", explode)
+
+        assert len(list(storage.ids())) == 2
+        infos = storage.infos()
+        assert [info.title for info in infos] == ["T", "U"]
+        assert all(info.size > 0 for info in infos)  # 长度随块记录存了一份
+
+
+def test_execute_does_not_commit_implicitly(tmp_path: Path) -> None:
+    """应急口写语句也**不隐式提交**：与 `table()` 同一纪律，回滚才救得回来。"""
+    with _storage(tmp_path) as storage:
+        storage.table("kv", k="TEXT PRIMARY KEY")
+        conn = storage.vault.index.conn
+        conn.execute("INSERT INTO kv(k) VALUES('a')")
+        storage.commit()
+
+        storage.execute("UPDATE kv SET k = 'b'")
+        conn.rollback()
+
+        assert storage.table("kv").select(k="a")  # 改动没被隐式提交
+
+
 def test_custom_table_crud(tmp_path: Path) -> None:
     with _storage(tmp_path) as storage:
         kv = storage.table("kv", k="TEXT PRIMARY KEY", v="TEXT")

@@ -174,22 +174,26 @@ class BlockStore:
         """这个身份在库里有没有定位行。"""
         return self.vault.index.record_row(str(oid)) is not None
 
+    def iter_block_records(self) -> Iterator[tuple[sqlite3.Row, Record]]:
+        """**轻量列举**：只读出定位行与块记录（载荷＝属性），**不读正文**。
+
+        列举身份与元数据用不着正文，而正文可能很大（多媒体块）：走 :meth:`iter_blocks`
+        会把全库正文读进内存再丢掉。要正文的入口是 :meth:`fetch` / :meth:`get`。
+        """
+        rows = self.vault.index.conn.execute("SELECT * FROM record ORDER BY value_uuid").fetchall()
+        for row in rows:
+            record = self.vault.get(str(row["value_uuid"]))
+            if _is_block(record):
+                yield row, record
+
     def iter_blocks(self) -> Iterator[Block]:
-        """遍历全部块：**按索引走**，一个身份一次。
+        """遍历全部块（**连正文一起**）：要元数据请走 :meth:`iter_block_records`。
 
         为什么不是顺扫：同一次身份重写会在载体里留下旧副本（更新即留旧副本，等压实回收），
         顺扫会把同一个身份读出来两次；**索引里的那一行才代表"这个对象现在在哪一份"**。
         行丢了的字节不在这儿兜底——那是巡检与重建的活（`Vault.patrol` / `Vault.repair`）。
-
-        代价写明：``attrs`` 不在索引里（它属于载荷），故每条都要读回记录。
-        要不要把属性投影进库是表声明的字段问题（设计篇 §12）。
         """
-        rows = self.vault.index.conn.execute("SELECT * FROM record ORDER BY value_uuid").fetchall()
-        for row in rows:
-            value_uuid = str(row["value_uuid"])
-            record = self.vault.get(value_uuid)
-            if not _is_block(record):
-                continue  # 内容记录不是块
+        for row, record in self.iter_block_records():
             yield self._finish(self._block_of(record, kind=str(row["kind"])), row)
 
     # ---- 内部 ----
@@ -278,12 +282,25 @@ def _digest_or_none(value: Any) -> ValueHash | None:
         return None
 
 
+def block_fields(record: Record) -> dict[str, Any]:
+    """块记录载荷里的字段（``attrs`` / ``config`` / ``author`` / 指针 / 正文长度）。
+
+    **列举只看这些**：它们都在块记录里，故列一遍 id 与元数据不必把正文读进内存。
+    """
+    return _decode_blob(record.payload)
+
+
 def _blob_of(block: Block, digest: ValueHash) -> dict[str, Any]:
-    """块记录的载荷：随块行单独存的东西 ＋ **指向 body 的地址**。"""
+    """块记录的载荷：随块行单独存的东西 ＋ **指向 body 的地址** ＋ 正文长度。
+
+    ``body_size`` 是为**列举**服务的投影：正文长度本来能由正文算出，但列举时不想读正文
+    （多媒体块很大），故随块记录存一份。它不在表声明里，属块记录载荷格式的一部分。
+    """
     return {
         "attrs": block.attrs,
         "config": block.config,
         "author": block.author,
+        "body_size": block.content_size(),
         BODY_POINTER_KEY: str(digest),
     }
 
@@ -299,4 +316,4 @@ def _decode_blob(payload: bytes) -> dict[str, Any]:
     return {str(key): value for key, value in raw.items()}
 
 
-__all__ = ["BlockStore"]
+__all__ = ["BODY_POINTER_KEY", "BlockStore", "block_fields"]
