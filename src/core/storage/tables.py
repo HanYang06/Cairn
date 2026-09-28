@@ -7,8 +7,8 @@
 
 - **配置文件**（`config/settings/core/storage/conf.json` 的 ``storage.db.tables``）是**声明本体**：
   人写得出来、改得动、评审时一眼读完，不必读 Python；
-- **本模块**只做三件事：把配置描述解析成 :class:`Table`（**顺带校验，非法即抛**）、
-  编译成建表与建索引语句（:meth:`Table.ddl`）、供索引库做对比与处置；
+- **本模块**只做三件事：把配置描述解析成 :class:`TableSpec`（**顺带校验，非法即抛**）、
+  编译成建表与建索引语句（:meth:`TableSpec.ddl`）、供索引库做对比与处置；
 - **源码内不出现建表 SQL**：方言只出现在编译器一处。
 
 配置里那一项是**文件引用**：它的值是相对引用名（默认 ``tables.yaml``，同层级），
@@ -191,7 +191,7 @@ class Index:
 
 
 @dataclass(frozen=True, slots=True)
-class Table:
+class TableSpec:
     """一张表：名字、列、索引、重建档、归属、说明。"""
 
     name: str
@@ -237,6 +237,21 @@ class Table:
         statements = [f'CREATE TABLE IF NOT EXISTS "{self.name}" ({columns})']
         statements.extend(index.clause().format(table=self.name) for index in self.indexes)
         return tuple(statements)
+
+    def add_column_ddl(self, column: Column) -> str | None:
+        """给**已存在的**表补一列：``ALTER TABLE … ADD COLUMN``；补不上则 ``None``。
+
+        为什么需要它：``ddl()`` 的第一条是 ``CREATE TABLE IF NOT EXISTS``——表已存在时
+        它是空操作，**不会**补上后来声明的列。缺这一条，声明里加一列就会让库打不开
+        （对齐后仍有差异）。
+
+        SQLite 的 ``ADD COLUMN`` 有三条限制：**不能是主键、不能带 UNIQUE、
+        NOT NULL 必须给默认值**。撞上限制的列不是"补一下"能解决的，返回 ``None``
+        交给调用方按**重建**处置（要显式授权，见 §8.4）。
+        """
+        if column.primary_key or column.unique or (column.not_null and column.default is None):
+            return None
+        return f'ALTER TABLE "{self.name}" ADD COLUMN {column.clause()}'
 
     def to_config(self) -> dict[str, Any]:
         """写成配置形状（人读的那一份；顺序即书写顺序）。"""
@@ -346,7 +361,7 @@ def parse_index(raw: Mapping[str, Any], *, table: str) -> Index:
     )
 
 
-def parse_table(raw: Mapping[str, Any]) -> Table:
+def parse_table(raw: Mapping[str, Any]) -> TableSpec:
     """解析一张表；项名写错即抛（表 / 列 / 索引三级都查未知项）。"""
     where = "表声明"
     name = str(_require(raw, "name", where=where))
@@ -372,7 +387,7 @@ def parse_table(raw: Mapping[str, Any]) -> Table:
     raw_indexes = raw.get("indexes", [])
     if not isinstance(raw_indexes, list):
         raise CairnError(f"{where} 的 indexes 必须是列表")
-    return Table(
+    return TableSpec(
         name=name,
         columns=tuple(parse_column(item, table=name) for item in raw_columns),
         tier=tier,
@@ -383,7 +398,7 @@ def parse_table(raw: Mapping[str, Any]) -> Table:
     )
 
 
-def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[Table, ...]:
+def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[TableSpec, ...]:
     """解析整组声明；表名重复即抛。"""
     parsed = tuple(parse_table(item) for item in raw)
     names = [table.name for table in parsed]
@@ -403,7 +418,7 @@ def _read_yaml(path: Path) -> Any:
         raise CairnError(f"表声明文件解析失败: {path}（{exc}）") from exc
 
 
-def load_tables(path: Path | str | None = None) -> tuple[Table, ...]:
+def load_tables(path: Path | str | None = None) -> tuple[TableSpec, ...]:
     """读入并校验表声明（**运行时唯一入口**）。
 
     不传路径时走配置引擎的**文件引用**：配置项 ``storage.db.tables`` 的值是相对引用名
@@ -425,22 +440,22 @@ def load_tables(path: Path | str | None = None) -> tuple[Table, ...]:
     return parse_tables(raw)
 
 
-def declared_tables() -> tuple[Table, ...]:
+def declared_tables() -> tuple[TableSpec, ...]:
     """当前生效的表声明（本体在被引用的那份 YAML 里）。"""
     return load_tables()
 
 
-def core_tables() -> tuple[Table, ...]:
+def core_tables() -> tuple[TableSpec, ...]:
     """内核表（归属为 core 的那些），开库时对齐。"""
     return tuple(table for table in declared_tables() if table.owner is Owned.CORE)
 
 
-def domain_tables() -> tuple[Table, ...]:
+def domain_tables() -> tuple[TableSpec, ...]:
     """领域表（挂载该域时才对齐）。"""
     return tuple(table for table in declared_tables() if table.owner is Owned.DOMAIN)
 
 
-def table(name: str) -> Table | None:
+def table(name: str) -> TableSpec | None:
     """按表名取声明；没声明返回 ``None``。"""
     for found in declared_tables():
         if found.name == name:
@@ -454,7 +469,7 @@ __all__ = [
     "Index",
     "Owned",
     "RebuildTier",
-    "Table",
+    "TableSpec",
     "core_tables",
     "declared_tables",
     "domain_tables",

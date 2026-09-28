@@ -50,7 +50,7 @@ def slots_for(length: int, slot_bytes: int) -> int:
 
 
 def slot_offset(slot: int, slot_bytes: int) -> int:
-    """第 ``slot`` 个槽的字节偏移（相对象限起点，即文件头之后）。"""
+    """第 ``slot`` 个槽的字节偏移（**相对载体起点**，即文件头之后）。"""
     if slot < 0:
         raise SlotError(f"槽号非法: {slot}")
     if slot_bytes < MIN_SLOT_BYTES:

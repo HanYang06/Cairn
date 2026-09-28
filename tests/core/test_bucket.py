@@ -34,6 +34,7 @@ from core.types import (
     BucketNotFoundError,
     CorruptObjectError,
     Id,
+    IndexSchemaError,
     ObjectNotFoundError,
     SlotRange,
     StorageError,
@@ -525,6 +526,51 @@ def test_patrol_reports_a_corrupt_carrier_and_keeps_scanning(tmp_path: Path) -> 
         assert "missing_row" not in kinds  # 好载体那一条没有差异
         assert vault.get(str(good.id.value_uuid)) == good
         assert vault.repair() == ()  # 坏点修不了
+
+
+def test_patrol_reports_a_carrier_that_is_not_a_carrier_at_all(tmp_path: Path) -> None:
+    """**打开载体**这一步坏掉也要记成发现，不能让巡检抛出去。
+
+    `CarrierFile.open` 会校验文件头魔数：文件是空的、或被别的程序写了垃圾、
+    或根本不是载体——异常在那里就抛了。只包住 `scan()` 的话，一个坏文件就会
+    让整个巡检崩掉，而"还坏在哪儿"正是巡检要回答的问题。
+    """
+    with _vault(tmp_path) as vault:
+        good = _record(b"good")
+        vault.put(good)
+        junk = vault.bucket().packs_dir / "not-a-carrier.pack"
+        junk.write_bytes(b"")  # 空文件：魔数都没有
+
+        report = vault.patrol()
+
+        assert report.counts() == {"corrupt_carrier": 1}
+        assert report.findings[0].pack == "not-a-carrier.pack"
+        assert vault.get(str(good.id.value_uuid)) == good  # 好载体照旧读得出来
+
+
+def test_open_closes_the_connection_when_align_refuses(tmp_path: Path, monkeypatch) -> None:
+    """对齐失败时**必须把连接关掉**：库结构不符是用户真会撞到的路径，
+    反复失败不能一次漏一个 sqlite 连接。"""
+    with _vault(tmp_path) as vault:
+        vault.index.conn.execute('DROP INDEX "idx_value_hash"')
+        vault.index.conn.execute('ALTER TABLE "record" DROP COLUMN "value_hash"')  # 补不上的列
+        vault.index.commit()
+        root = vault.root
+
+    closed: list[object] = []
+    real_close = Vault.close
+
+    def spy(self: Vault) -> None:
+        """记录一次关闭，并**照旧真的关**——不然侦测本身就把连接漏掉、测试反而报资源警告。"""
+        closed.append(self)
+        real_close(self)
+
+    monkeypatch.setattr(Vault, "close", spy)
+
+    with pytest.raises(IndexSchemaError):
+        Vault.open(root)  # 破坏性差异没授权 → align 抛
+
+    assert len(closed) == 1
 
 
 def test_repair_is_idempotent(tmp_path: Path) -> None:

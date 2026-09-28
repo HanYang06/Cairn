@@ -15,7 +15,7 @@
 1. **物理坐标是投影，不是事实**：记录内容不带坐标，索引里的 ``(桶, 载体, 槽区间)``
    只是"少读一遍"的映射，丢了可以顺扫重建（§5.2、§8.5 档一）；
 2. **先落字节、后记目录**：索引行指向的位置必然已经存在；反过来只会留下空洞，
-   要到读的时候才发现。中途失败留下的孤儿字节由 :meth:`Vault.rebuild_records` 收编；
+   要到读的时候才发现。中途失败留下的孤儿字节由 :meth:`Vault.repair` 收编；
 3. **命名无语义**：载体名取随机串（§5.1），故"载体序号"这种概念不存在，
    也就不会有人把顺序当含义用；
 4. **配置只在写入的这一刻读**：槽长随载体走（写进文件头，§5.5），
@@ -223,6 +223,28 @@ def _pack_path(packs_dir: Path, name: str) -> Path:
     if not name or name != Path(name).name or name in {".", ".."}:
         raise StorageError(f"载体名非法: {name!r}")
     return packs_dir / name
+
+
+def _pack_paths(bucket: Bucket, found: list[_Difference]) -> list[Path]:
+    """桶内全部载体文件（按名排序）；**列目录失败也记成发现，不抛**。
+
+    目录读不出来（权限、被删）与文件坏掉是同一类事：巡检要报告它，而不是死在它上面。
+    """
+    if not bucket.packs_dir.is_dir():
+        return []
+    try:
+        return sorted(bucket.packs_dir.glob(f"*{PACK_SUFFIX}"))
+    except OSError as exc:
+        found.append(
+            _Difference(
+                Finding(
+                    FindingKind.CORRUPT_CARRIER,
+                    bucket=bucket.name,
+                    detail=f"载体目录读不出来：{exc}",
+                )
+            )
+        )
+        return []
 
 
 def _is_carrier(path: Path) -> bool:
@@ -448,7 +470,13 @@ class Vault:
         if fresh:
             _refuse_foreign_packs(target)
         vault = cls(target, pack_max_bytes=pack_max_bytes)
-        remaining = [item for item in vault.index.align(rebuild=rebuild) if not item.warning]
+        try:
+            remaining = [item for item in vault.index.align(rebuild=rebuild) if not item.warning]
+        except Exception:
+            # 对齐会因"破坏性差异没授权"而抛（库结构不符时用户真会撞到）。
+            # 那条路径同样要**把连接关掉**：反复失败不能一次漏一个 sqlite 连接。
+            vault.close()
+            raise
         if remaining:
             vault.close()
             raise CairnError(f"索引库对齐后仍有差异（不假装成功）：{remaining}")
@@ -692,9 +720,15 @@ class Vault:
 
         与 :meth:`Bucket.records` 的区别只在这一处：重建要停下来（半份结果不能当结果），
         巡检要接着看完——"还坏在哪儿"正是它要回答的问题。
+
+        **打开载体这一步也在保护范围内**：`CarrierFile.open` 会校验文件头的魔数，
+        坏掉的（或空的、或根本不是载体的）文件在那里就抛了——只包住 `scan()` 的话，
+        一个坏文件会让整个巡检抛出去，而不是记成 :attr:`FindingKind.CORRUPT_CARRIER`。
+        故这里逐个文件开、逐个文件扫，坏一个不影响其余的。
         """
-        for carrier in bucket.packs():
+        for path in _pack_paths(bucket, found):
             try:
+                carrier = CarrierFile.open(path)
                 for span, record in carrier.scan():
                     yield (
                         Placement(
@@ -705,13 +739,13 @@ class Vault:
                         ),
                         record,
                     )
-            except (CorruptObjectError, RecordFormatError, SlotError) as exc:
+            except (CorruptObjectError, OSError, RecordFormatError, SlotError) as exc:
                 found.append(
                     _Difference(
                         Finding(
                             FindingKind.CORRUPT_CARRIER,
                             bucket=bucket.name,
-                            pack=carrier.path.name,
+                            pack=path.name,
                             detail=str(exc),
                         )
                     )

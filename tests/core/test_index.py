@@ -19,7 +19,7 @@ from core.storage.tables import (
     ColumnType,
     Owned,
     RebuildTier,
-    Table,
+    TableSpec,
     core_tables,
     declared_tables,
     load_tables,
@@ -116,7 +116,7 @@ def test_parse_rejects_missing_required_item() -> None:
 
 def test_table_requires_exactly_one_primary_key() -> None:
     with pytest.raises(CairnError, match="恰好一个主键"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER1,
             rebuild_from="x",
@@ -126,7 +126,7 @@ def test_table_requires_exactly_one_primary_key() -> None:
 
 def test_table_rejects_duplicate_columns() -> None:
     with pytest.raises(CairnError, match="列名重复"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER1,
             rebuild_from="x",
@@ -141,7 +141,7 @@ def test_table_rejects_index_on_unknown_column() -> None:
     from core.storage.tables import Index as TableIndex  # noqa: PLC0415 — 与 sqlite 索引区分
 
     with pytest.raises(CairnError, match="索引列不存在"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER1,
             rebuild_from="x",
@@ -152,7 +152,7 @@ def test_table_rejects_index_on_unknown_column() -> None:
 
 def test_tier3_must_not_declare_rebuild_source() -> None:
     with pytest.raises(CairnError, match="不该写重建来源"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER3,
             rebuild_from="载体",
@@ -162,7 +162,7 @@ def test_tier3_must_not_declare_rebuild_source() -> None:
 
 def test_tier1_must_declare_rebuild_source() -> None:
     with pytest.raises(CairnError, match="重建来源必填"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER1,
             columns=(Column("a", ColumnType.TEXT, primary_key=True),),
@@ -328,6 +328,48 @@ def test_missing_index_is_fixable(tmp_path: Path) -> None:
     assert differ
     assert differ[0].fixable
     assert index.align() == []
+    index.close()
+
+
+def test_align_adds_a_missing_column(tmp_path: Path) -> None:
+    """已存在的表缺一列 → `align()` 必须真把它补上（`CREATE TABLE IF NOT EXISTS` 补不了）。
+
+    漏了这条，"声明里加一列"就会变成"库打不开"：对齐说补了、实际没补，
+    再比一次仍报缺列。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute('ALTER TABLE "record" DROP COLUMN "size"')  # 非索引列，可原地补
+
+    differ = [item for item in index.differences() if item.kind == "missing_column"]
+    assert [item.detail for item in differ] == ["size"]
+    assert differ[0].fixable
+
+    assert index.align() == []  # 补齐之后没有差异
+    assert "size" in index.actual_tables()["record"]
+    index.close()
+
+
+def test_a_column_that_cannot_be_added_requires_rebuild(tmp_path: Path) -> None:
+    """补不上的列（NOT NULL 无默认值 / 主键 / UNIQUE）**按破坏性差异报**，要显式授权。
+
+    否则它会落在"可原位补齐"里，对齐时补不上、却又不许重建——卡死在"仍有差异"。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute('DROP INDEX "idx_value_hash"')
+    index.conn.execute('ALTER TABLE "record" DROP COLUMN "value_hash"')  # not_null 且无默认值
+
+    differ = [item for item in index.differences() if item.table == "record"]
+    assert "column_mismatch" in [item.kind for item in differ]
+    destructive = next(item for item in differ if item.kind == "column_mismatch")
+    assert destructive.destructive
+    assert "须重建" in destructive.detail
+
+    with pytest.raises(IndexSchemaError, match="RebuildPlan"):
+        index.align()
+
+    assert index.align(rebuild=RebuildPlan(tables=("record",), reason="测试：补不上的列")) == []
     index.close()
 
 

@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 from core.types import RecordFormatError, ValueHash, now_ms
 from core.types.errors import IndexSchemaError
 
-from .tables import Table, declared_tables, sql_type_name
+from .tables import Column, TableSpec, declared_tables, sql_type_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -96,7 +96,7 @@ class Index:
 
     path: Path
     conn: sqlite3.Connection
-    declarations: tuple[Table, ...] = field(default_factory=declared_tables)
+    declarations: tuple[TableSpec, ...] = field(default_factory=declared_tables)
 
     # ---- 生命周期 ----
     @classmethod
@@ -179,7 +179,21 @@ class Index:
             wanted = {column.name: column for column in table.columns}
             for column in table.columns:
                 if column.name not in columns:
-                    found.append(Difference(name, "missing_column", column.name))
+                    # 缺列分两种：**能原地补**的（ALTER TABLE ADD COLUMN）与**补不上**的
+                    # （主键 / UNIQUE / NOT NULL 无默认值）。后者只能重建，故按破坏性差异报，
+                    # 免得落在"可原位补齐"里、对齐时却补不上而卡在"仍有差异"。
+                    statement = table.add_column_ddl(column)
+                    if statement is None:
+                        found.append(
+                            Difference(
+                                name,
+                                "column_mismatch",
+                                f"{column.name}: 缺列且无法原地补"
+                                "（主键 / UNIQUE / NOT NULL 无默认值），须重建",
+                            )
+                        )
+                    else:
+                        found.append(Difference(name, "missing_column", column.name))
                 elif columns[column.name] != sql_type_name(column.type):
                     found.append(
                         Difference(
@@ -221,16 +235,32 @@ class Index:
 
     # ---- 处置 ----
     def align(self, *, rebuild: RebuildPlan | None = None) -> list[Difference]:
-        """对齐声明：原位补齐照做；**破坏性差异无授权即拒绝**。
+        """对齐声明：原位补齐照做（缺表建表、**缺列补列**、缺索引建索引）；破坏性差异无授权即拒绝。
+
+        "缺列补列"由 :meth:`TableSpec.add_column_ddl` 生成 ``ALTER TABLE … ADD COLUMN``：
+        ``ddl()`` 里那句 ``CREATE TABLE IF NOT EXISTS`` 对**已存在的表**是空操作，
+        只靠它补不上列——那会让"声明加一列"变成"库打不开"。
 
         返回处置后仍存在的差异（应为空）；非空即抛错——不静默放过。
         """
         differences = self.differences()
+        destructive = self._authorize(differences, rebuild)
+        for table in self.declarations:
+            self._align_table(table, differences, destructive)
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
+            (_META_KEY, json.dumps(_canonical_declarations(), ensure_ascii=False, sort_keys=True)),
+        )
+        self.conn.commit()
+        return self.differences()
+
+    def _authorize(self, differences: list[Difference], rebuild: RebuildPlan | None) -> set[str]:
+        """破坏性差异的授权检查（**没授权就不动库**）；返回获准重建的表名集合。"""
         destructive = {item.table for item in differences if item.destructive}
         if destructive and rebuild is None:
             raise IndexSchemaError(
-                f"以下表的列型或约束与声明不符，SQLite 无法原地修改，需重建并搬运："
-                f"{sorted(destructive)}（调用方须显式给出 RebuildPlan）"
+                f"以下表的列型或约束与声明不符（或缺列且补不上），SQLite 无法原地修改，"
+                f"需重建并搬运：{sorted(destructive)}（调用方须显式给出 RebuildPlan）"
             )
         allowed = set(rebuild.tables) if rebuild is not None else set()
         unauthorized = destructive - allowed
@@ -242,17 +272,33 @@ class Index:
             _logger.warning(
                 "按授权重建表（数据由调用方搬运）：%s；原因：%s", rebuild.tables, rebuild.reason
             )
-        for table in self.declarations:
-            if table.name in destructive:
-                self.conn.execute(f'DROP TABLE IF EXISTS "{table.name}"')
+        return destructive
+
+    def _align_table(
+        self, table: TableSpec, differences: list[Difference], destructive: set[str]
+    ) -> None:
+        """处置一张表：按授权重建（整表按声明重来），否则原位补列 + 建索引。"""
+        if table.name in destructive:
+            self.conn.execute(f'DROP TABLE IF EXISTS "{table.name}"')
             for statement in table.ddl():
                 self.conn.execute(statement)
-        self.conn.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-            (_META_KEY, json.dumps(_canonical_declarations(), ensure_ascii=False, sort_keys=True)),
-        )
-        self.conn.commit()
-        return self.differences()
+            return  # 重建已按声明建好整张表，缺列随之补齐
+        for statement in table.ddl():
+            self.conn.execute(statement)
+        for column in self._missing_columns(table, differences):
+            alter = table.add_column_ddl(column)
+            if alter is not None:  # 补不上的那些已在 differences() 里按破坏性报出
+                self.conn.execute(alter)
+
+    @staticmethod
+    def _missing_columns(table: TableSpec, differences: list[Difference]) -> list[Column]:
+        """这张表里"缺、且能原地补"的列（顺序即声明顺序）。"""
+        missing = {
+            item.detail
+            for item in differences
+            if item.kind == "missing_column" and item.table == table.name
+        }
+        return [column for column in table.columns if column.name in missing]
 
     def verify_declarations(self) -> None:
         """校验库里记的声明投影与程序当前声明一致；不一致即报错。
@@ -371,7 +417,7 @@ def _stranger_tables(conn: sqlite3.Connection) -> list[str]:
 
 
 def _canonical_declarations() -> dict[str, object]:
-    """当前声明的规范化投影：按表名归拢的 :meth:`Table.signature`（列与索引有序，摘要稳定）。"""
+    """当前声明的规范化投影：按表名归拢的 :meth:`TableSpec.signature`（列与索引有序，摘要稳定）。"""
     return {table.name: table.signature() for table in declared_tables()}
 
 
