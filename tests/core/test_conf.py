@@ -255,9 +255,14 @@ def test_edited_reference_is_not_overwritten(engine: ConfEngine) -> None:
 
 @pytest.mark.usefixtures("declared")
 def test_absolute_reference_is_refused(engine: ConfEngine) -> None:
-    """绝对路径绑死本机目录 → 拒收（配置文件要跟仓走，跟仓走的只能是相对引用）。"""
+    """绝对路径绑死本机目录 → 拒收；**写入侧就拒**，手改文件落到读取侧也拒。"""
     engine.sync()
-    engine.set(_REF, str(_ref_file(engine)))
+    absolute = str(_ref_file(engine))
+
+    with pytest.raises(ConfigValueError, match="相对引用"):
+        engine.set(_REF, absolute)
+
+    _write(engine, {_REF: absolute})  # 模拟手改值文件：读取侧同样不放过
     with pytest.raises(ConfigValueError, match="相对引用"):
         engine.get(_REF)
 
@@ -272,8 +277,11 @@ def test_reference_may_not_escape_the_repo(engine: ConfEngine) -> None:
     outside.write_text("- name: 仓外\n", encoding="utf-8")
     engine.sync()
     escape = os.path.relpath(outside, _value_file(engine).parent).replace("\\", "/")
-    engine.set(_REF, escape)
 
+    with pytest.raises(ConfigValueError, match="跑出仓根"):
+        engine.set(_REF, escape)
+
+    _write(engine, {_REF: escape})
     with pytest.raises(ConfigValueError, match="跑出仓根"):
         engine.get(_REF)
 
@@ -481,6 +489,17 @@ def test_seal_line_rejects_non_integer_value(tmp_path: Path) -> None:
             _ = vault.bucket("main").pack_max_bytes
     finally:
         engine_conf.set("storage.pack.max_bytes", original)
+
+
+def test_slot_bytes_rejects_non_integer_value(tmp_path: Path) -> None:
+    """槽长同样在配置边界报清楚：值文件可被人改成字符串，别把 `TypeError` 留给建载体那一刻。"""
+    original = engine_conf.get("storage.pack.slot_bytes")
+    try:
+        engine_conf.set("storage.pack.slot_bytes", "65536")
+        with pytest.raises(CairnError, match="slot_bytes 必须是不小于"):
+            CarrierFile.create(tmp_path / "pack")
+    finally:
+        engine_conf.set("storage.pack.slot_bytes", original)
 
 
 def test_kernel_log_level_is_applied() -> None:

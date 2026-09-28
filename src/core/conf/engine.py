@@ -463,14 +463,19 @@ class ConfEngine:
         写入前过一遍 :meth:`_clash`：路径上压着别人的文件时同样**拒写**——
         「绝不覆盖别人的文件」不是只有批量写才守；单值写也同样整份重写目标文件。
 
-        **读写口径对称**：文件引用的项，写进去的必须是引用名（非空字符串）——
-        与 :meth:`_resolved_value` 的判据同一处口径；否则会落成一份"写得进、读不出"的配置。
+        **读写口径对称**：文件引用的项走**同一处**校验（:meth:`reference_path` 先试算一遍），
+        而不是另立一条"只判非空"的宽松口径——两处口径分家，就会漏出
+        `set(绝对路径)` 能落盘、`get()` 却抛错的"写得进、读不出"。
         """
         declared = _declared_map().get(key)
         if declared is None:
             raise ConfigKeyError(f"配置项未登记，不能写：{key}")
-        if declared.file_type and not (isinstance(value, str) and value.strip()):
-            raise ConfigValueError(f"文件引用的项要写引用名（非空字符串），得到 {value!r}：{key}")
+        if declared.file_type:
+            if not isinstance(value, str):
+                raise ConfigValueError(
+                    f"文件引用的项要写引用名（非空字符串），得到 {value!r}：{key}"
+                )
+            self.reference_path(declared, value)  # 试算：绝对路径 / 跑出仓根在这里就被拒
         path = self.config_path(self._folder_of(declared))
         self._write_value_file(path, {**self._read_file(path), key: value})
         self._cache.pop(key, None)
