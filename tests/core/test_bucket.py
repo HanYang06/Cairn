@@ -166,6 +166,14 @@ def test_bucket_name_with_a_separator_is_refused(tmp_path: Path) -> None:
                 vault.bucket(bad)
 
 
+def test_bucket_name_rejects_windows_reserved_devices(tmp_path: Path) -> None:
+    """Windows 保留设备名不能当目录名：那边它们指向设备而不是普通目录（不区分大小写）。"""
+    with _vault(tmp_path) as vault:
+        for bad in ("CON", "nul", "Com1", "LPT9", "aux.txt"):
+            with pytest.raises(StorageError, match="保留设备名"):
+                vault.bucket(bad)
+
+
 def test_plain_directory_is_not_adopted_as_a_bucket(tmp_path: Path) -> None:
     """库里还会有别的东西：只有带 ``packs/`` 的直接子目录才算桶。"""
     with _vault(tmp_path) as vault:
@@ -571,6 +579,28 @@ def test_open_closes_the_connection_when_align_refuses(tmp_path: Path, monkeypat
         Vault.open(root)  # 破坏性差异没授权 → align 抛
 
     assert len(closed) == 1
+
+
+def test_repaired_rows_get_a_sane_timestamp(tmp_path: Path) -> None:
+    """补出来的行取不到落盘时刻（记录头里没有时间）→ 落 `now_ms()`，**不是 0**。
+
+    时间列上有索引、也参与排序；写 0 会把这些行堆到纪元去。
+    """
+    with _vault(tmp_path) as vault:
+        record = _record(b"x")
+        vault.put(record, kind="notedata")
+        vault.index.conn.execute(
+            "DELETE FROM record WHERE value_uuid = ?", (str(record.id.value_uuid),)
+        )
+        vault.index.commit()
+
+        assert len(vault.repair()) == 1
+
+        row = vault.index.record_row(str(record.id.value_uuid))
+        assert row is not None
+        assert int(row["created"]) > 0
+        assert int(row["updated"]) > 0
+        assert row["issued"] == record.id.issued  # 签发时刻仍从记录头还原
 
 
 def test_repair_is_idempotent(tmp_path: Path) -> None:

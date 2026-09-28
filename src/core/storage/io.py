@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from core.types import CairnError, RecordFormatError, SlotError, SlotRange
 
-from .carrier import CARRIER_HEADER_BYTES, CarrierLayout
+from .carrier import CARRIER_HEADER_BYTES, MIN_SLOT_BYTES, CarrierLayout
 from .record import Record
 
 if TYPE_CHECKING:
@@ -38,11 +38,19 @@ def _configured_slot_bytes() -> int:
 
     **先引入声明模块再取值**：配置引擎按"谁声明谁报到"工作，没导入过的声明它不认识；
     在别处引用本模块时，声明未必已经报到。延迟导入同时避免存储地基在加载期拉起引擎。
+
+    值文件是**用户可编辑**的，故在这里校验成整数并给出清楚的报错——把字符串带进
+    `CarrierLayout` 的比较式，报出来的是难以定位的 `TypeError`
+    （与 `vault._configured_pack_max_bytes` 同一口径）。
     """
     from . import conf as _declared  # noqa: PLC0415 — 先让声明报到
 
-    slot_bytes: int = _declared.conf.pack_slot_bytes
-    return slot_bytes
+    value: object = _declared.conf.pack_slot_bytes
+    if isinstance(value, bool) or not isinstance(value, int) or value < MIN_SLOT_BYTES:
+        raise CairnError(
+            f"配置 storage.pack.slot_bytes 必须是不小于 {MIN_SLOT_BYTES} 的整数，得到 {value!r}"
+        )
+    return value
 
 
 class CarrierFile:

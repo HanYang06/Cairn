@@ -385,13 +385,16 @@ def test_table_none_predicate_and_arg_validation(tmp_path: Path) -> None:
 
 
 def test_create_table_rejects_bad_identifier(tmp_path: Path) -> None:
+    """领域表的标识符校验与内核声明表**同一处口径**（同一个索引库，规则不能分家）。"""
     with _storage(tmp_path) as storage:
+        conn = storage.vault.index.conn
         for name, columns in (
             ("bad name", {"id": "TEXT"}),
             ("ok", {"bad col": "TEXT"}),
+            ("Upper", {"id": "TEXT"}),  # 大写也不行：声明表只认小写
         ):
             with pytest.raises(CairnError, match="非法"):
-                create_table(storage.vault.index.conn, name, columns)
+                create_table(conn, name, columns)
 
 
 def test_create_table_rejects_bad_spec(tmp_path: Path) -> None:

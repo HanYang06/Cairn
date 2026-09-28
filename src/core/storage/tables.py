@@ -74,10 +74,13 @@ class Owned(Enum):
     """领域增量：挂载该域时才对齐。"""
 
 
-def _check_ident(value: str, *, what: str) -> str:
+def check_ident(value: str, *, what: str) -> str:
     """标识符校验：小写字母 / 数字 / 下划线，且不以数字开头。
 
     表名与列名会进 SQL（哪怕是从配置编译来的），故在**解析口**就卡死。
+
+    **领域表与内核声明表共用这一处**：两者落在同一个索引库里，规则分家就会漂移成
+    "创建得出、声明校验不过"——`core/storage/table.py` 的 `create_table` 也走这里。
     """
     if not value or value[0].isdigit() or not set(value) <= _IDENT_ALLOWED:
         raise CairnError(f"非法{what}: {value!r}（只允许小写字母 / 数字 / 下划线，且不以数字开头）")
@@ -99,7 +102,7 @@ class Column:
 
     def __post_init__(self) -> None:
         """校验：标识符合法；主键必然非空；默认值只收标量。"""
-        _check_ident(self.name, what="列名")
+        check_ident(self.name, what="列名")
         if self.primary_key and not self.not_null:
             object.__setattr__(self, "not_null", True)  # 主键非空：由声明推出，不必手写
         if self.default is not None and not isinstance(self.default, (str, int, float, bool)):
@@ -161,7 +164,7 @@ class Index:
         if not self.columns:
             raise CairnError("索引至少要有一列")
         for name in self.columns:
-            _check_ident(name, what="索引列名")
+            check_ident(name, what="索引列名")
         if len(set(self.columns)) != len(self.columns):
             raise CairnError(f"索引列重复: {self.columns!r}")
 
@@ -208,7 +211,7 @@ class TableSpec:
 
         档三**不得**写重建来源、档一 / 档二**必须**写：含糊的重建档等于没有档。
         """
-        _check_ident(self.name, what="表名")
+        check_ident(self.name, what="表名")
         if not self.columns:
             raise CairnError(f"表 {self.name} 至少要有一列")
         names = [column.name for column in self.columns]
@@ -470,6 +473,7 @@ __all__ = [
     "Owned",
     "RebuildTier",
     "TableSpec",
+    "check_ident",
     "core_tables",
     "declared_tables",
     "domain_tables",

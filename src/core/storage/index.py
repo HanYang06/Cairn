@@ -59,6 +59,7 @@ class Difference:
             "missing_table",
             "missing_column",
             "missing_index",
+            "index_mismatch",
             "extra_column",
             "extra_table",
         }
@@ -111,14 +112,24 @@ class Index:
         target.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(target))
         conn.row_factory = sqlite3.Row
-        strangers = _stranger_tables(conn)
+        try:
+            strangers = _stranger_tables(conn)
+        except Exception:
+            conn.close()  # 库坏掉时认表这一步就会抛：抛之前先关，不得漏连接
+            raise
         if strangers:
             conn.close()
             raise IndexSchemaError(
                 f"库里已有的表 {strangers} 一张都不是本程序声明的，不接管：{target}"
                 "（旧格式的库不予读取；换目录或人工处置）"
             )
-        conn.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+        except Exception:
+            conn.close()
+            raise
         return cls(path=target, conn=conn)
 
     def close(self) -> None:
@@ -153,8 +164,12 @@ class Index:
 
     def actual_indexes(self, table: str) -> set[tuple[tuple[str, ...], bool]]:
         """实际索引：``{(列组合, 是否唯一)}``。"""
+        return set(self.actual_index_defs(table).values())
+
+    def actual_index_defs(self, table: str) -> dict[str, tuple[tuple[str, ...], bool]]:
+        """实际索引：``{索引名: (列组合, 是否唯一)}``（按**名字**索引，比对同名不同定义用）。"""
         quoted = '"' + table.replace('"', '""') + '"'
-        found: set[tuple[tuple[str, ...], bool]] = set()
+        found: dict[str, tuple[tuple[str, ...], bool]] = {}
         for row in self.conn.execute(f"PRAGMA index_list({quoted})"):
             index_name = str(row["name"])
             if index_name.startswith("sqlite_autoindex"):
@@ -163,7 +178,7 @@ class Index:
                 str(item["name"])
                 for item in self.conn.execute(f'PRAGMA index_info("{index_name}")')
             )
-            found.add((columns, bool(row["unique"])))
+            found[index_name] = (columns, bool(row["unique"]))
         return found
 
     def differences(self) -> list[Difference]:
@@ -207,12 +222,22 @@ class Index:
                 Difference(name, "extra_column", extra)
                 for extra in sorted(set(columns) - set(wanted))
             )
-            indexes = self.actual_indexes(name)
-            found.extend(
-                Difference(name, "missing_index", index.name)
-                for index in table.indexes
-                if (index.columns, index.unique) not in indexes
-            )
+            defs = self.actual_index_defs(name)
+            for index in table.indexes:
+                defined = defs.get(index.name)
+                if defined is None:
+                    found.append(Difference(name, "missing_index", index.name))
+                elif defined != (index.columns, index.unique):
+                    # 同名、不同定义（索引名只由列推出，故**唯一性变化**正好落在这里）。
+                    # 得先 DROP 再建：`CREATE INDEX IF NOT EXISTS` 见到同名会跳过，
+                    # 光靠它永远改不过来，差异就卡在"对齐后仍有"。
+                    found.append(
+                        Difference(
+                            name,
+                            "index_mismatch",
+                            f"{index.name}: 实际 {defined} ≠ 声明 {(index.columns, index.unique)}",
+                        )
+                    )
         found.extend(
             Difference(extra_table, "extra_table", "库里有、声明没有")
             for extra_table in sorted(set(actual) - set(declared))
@@ -277,18 +302,36 @@ class Index:
     def _align_table(
         self, table: TableSpec, differences: list[Difference], destructive: set[str]
     ) -> None:
-        """处置一张表：按授权重建（整表按声明重来），否则原位补列 + 建索引。"""
+        """处置一张表：按授权重建（整表按声明重来），否则**先建表、再补列、最后建索引**。
+
+        三步的顺序不能反：``ddl()`` 把建表与建索引混在一起返回，若整段先跑，
+        "这次新增一列、并且给它建了索引"就会先执行 ``CREATE INDEX … ("新列")``——
+        那时列还没补上，SQLite 报 ``no such column``，库随即打不开。
+        """
+        statements = table.ddl()
         if table.name in destructive:
             self.conn.execute(f'DROP TABLE IF EXISTS "{table.name}"')
-            for statement in table.ddl():
+            for statement in statements:
                 self.conn.execute(statement)
             return  # 重建已按声明建好整张表，缺列随之补齐
-        for statement in table.ddl():
-            self.conn.execute(statement)
+        self.conn.execute(statements[0])  # 建表
         for column in self._missing_columns(table, differences):
             alter = table.add_column_ddl(column)
             if alter is not None:  # 补不上的那些已在 differences() 里按破坏性报出
                 self.conn.execute(alter)
+        for index_name in self._stale_indexes(table, differences):
+            self.conn.execute(f'DROP INDEX IF EXISTS "{index_name}"')  # 同名不同定义 → 拆掉重建
+        for statement in statements[1:]:  # 建索引（必须在补列之后）
+            self.conn.execute(statement)
+
+    @staticmethod
+    def _stale_indexes(table: TableSpec, differences: list[Difference]) -> list[str]:
+        """同名、定义已变的索引（先拆掉，随后按声明重建）。"""
+        return [
+            item.detail.split(":", 1)[0]
+            for item in differences
+            if item.kind == "index_mismatch" and item.table == table.name
+        ]
 
     @staticmethod
     def _missing_columns(table: TableSpec, differences: list[Difference]) -> list[Column]:

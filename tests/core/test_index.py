@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -24,6 +25,9 @@ from core.storage.tables import (
     declared_tables,
     load_tables,
     parse_tables,
+)
+from core.storage.tables import (
+    Index as TableIndex,
 )
 from core.types.errors import CairnError, IndexSchemaError
 
@@ -371,6 +375,87 @@ def test_a_column_that_cannot_be_added_requires_rebuild(tmp_path: Path) -> None:
 
     assert index.align(rebuild=RebuildPlan(tables=("record",), reason="测试：补不上的列")) == []
     index.close()
+
+
+def test_align_adds_a_column_before_building_its_index(tmp_path: Path) -> None:
+    """ "新增一列 + 给它建索引"要一次对齐成功：**补列必须在建索引之前**。
+
+    `ddl()` 把建表与建索引混在一串里；若整段先跑，`CREATE INDEX … ("新列")` 会先执行，
+    SQLite 报 `no such column`，库随即打不开（这是上一轮整改自己碰出来的坑）。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute('ALTER TABLE "record" DROP COLUMN "size"')
+    index.declarations = tuple(
+        replace(
+            table,
+            indexes=(*table.indexes, TableIndex(columns=("size",), doc="测试：给新列建索引")),
+        )
+        if table.name == "record"  # 只有 record 有 size 这一列
+        else table
+        for table in declared_tables()
+    )
+
+    kinds = [item.kind for item in index.differences()]
+    assert "missing_column" in kinds
+    assert "missing_index" in kinds
+
+    assert index.align() == []  # 先补列、再建索引：一次成功
+    assert "size" in index.actual_tables()["record"]
+    index.close()
+
+
+def test_index_uniqueness_change_is_fixable(tmp_path: Path) -> None:
+    """索引名只由列推出，故**唯一性变化**是"同名不同定义"——要拆掉重建，不是干等。
+
+    `CREATE INDEX IF NOT EXISTS` 见到同名会跳过，光靠它永远改不过来：
+    差异会卡在"对齐后仍有"，而这差异既不在破坏性分类里、也拿不到重建授权。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.declarations = tuple(
+        replace(
+            table,
+            indexes=tuple(
+                replace(found, unique=True) if found.columns == ("kind",) else found
+                for found in table.indexes
+            ),
+        )
+        for table in declared_tables()
+    )
+
+    differ = [item for item in index.differences() if item.kind == "index_mismatch"]
+    assert [item.detail.split(":")[0] for item in differ] == ["idx_kind"]
+    assert differ[0].fixable
+
+    assert index.align() == []
+    assert (("kind",), True) in index.actual_indexes("record")  # 唯一索引真建上了
+    index.close()
+
+
+def test_open_closes_the_connection_when_the_file_is_not_a_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """文件不是数据库时：认表那一步就抛，**抛之前要把连接关掉**（反复失败不能一次漏一个）。"""
+    path = tmp_path / "catalog.db"
+    path.write_bytes(b"not a database at all" * 8)
+
+    made: list[sqlite3.Connection] = []
+    real_connect = sqlite3.connect
+
+    def spy(*args: object, **kwargs: object) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)  # type: ignore[arg-type]
+        made.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", spy)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        Index.open(path)
+
+    assert len(made) == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        made[0].execute("SELECT 1")  # 已关闭：再用就当头报错
 
 
 def test_column_type_change_needs_rebuild_authorization(tmp_path: Path) -> None:

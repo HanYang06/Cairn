@@ -76,6 +76,13 @@ PACK_NAME_BYTES = 8
 
 _BAD_NAME_CHARS = frozenset('<>:"/\\|?*')
 
+_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{digit}" for digit in "123456789"}
+    | {f"LPT{digit}" for digit in "123456789"}
+)
+"""Windows 保留设备名：这些名字在那边指向设备而不是普通文件 / 目录。"""
+
 
 class BucketRole(Enum):
     """桶的形态（登记列 ``bucket.role`` 的取值域）。"""
@@ -205,9 +212,11 @@ class Placement:
 
 
 def _check_bucket_name(name: str) -> str:
-    """桶名校验：它会成为目录名，故不许带路径分隔符与平台保留字符。
+    """桶名校验：它会成为目录名，故不许带路径分隔符、平台保留字符与保留设备名。
 
     索引里的桶名是**数据**，读路径会拿它拼目录；不挡住 ``../`` 就等于把越界读的口子留着。
+    Windows 的保留设备名（``CON`` / ``NUL`` / ``COM1`` …）同样要挡：它们在那边会映射到
+    设备而不是普通目录，建桶会得到莫名其妙的行为（一律**不区分大小写**、含带扩展名的形态）。
     """
     if not name or name in {".", ".."}:
         raise StorageError(f"桶名非法: {name!r}")
@@ -215,6 +224,9 @@ def _check_bucket_name(name: str) -> str:
         raise StorageError(f"桶名含平台非法字符: {name!r}")
     if name != name.strip() or name.endswith("."):
         raise StorageError(f"桶名不得以空白或点收尾: {name!r}")
+    stem = name.split(".", 1)[0].upper()
+    if stem in _RESERVED_NAMES:
+        raise StorageError(f"桶名是平台保留设备名，不能当目录: {name!r}")
     return name
 
 
@@ -603,6 +615,10 @@ class Vault:
         内容没了、桶没了、载体坏了——这些删行就等于把"丢了东西"抹掉，
         只能报告，交由备份与人工（§8.7）。改动坐标时**保留类型与时间**：
         本次是修坐标，不是写数据。
+
+        补出来的**新行**取不到落盘时刻（记录头里没有时间，§3.5），故交给 `_write_row`
+        落 `now_ms()`：时间列上有索引、要参与排序，写 0 会把这些行堆到纪元去。
+        `issued` 是从记录头的 ID 里还原的，不受影响。
         """
         fixed: list[Finding] = []
         for item in self._differences():
@@ -615,8 +631,8 @@ class Vault:
                 self._write_row(
                     item.place,
                     item.ident,
-                    created=int(row["created"]) if row is not None else 0,
-                    updated=int(row["updated"]) if row is not None else 0,
+                    created=int(row["created"]) if row is not None else None,
+                    updated=int(row["updated"]) if row is not None else None,
                 )
             fixed.append(item.finding)
         if fixed:
