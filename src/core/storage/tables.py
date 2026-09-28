@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -27,7 +28,7 @@ import yaml
 from core.types.errors import CairnError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
 _IDENT_ALLOWED = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
@@ -406,7 +407,15 @@ def parse_table(raw: Mapping[str, Any]) -> TableSpec:
 
 
 def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[TableSpec, ...]:
-    """解析整组声明；表名重复即抛。"""
+    """解析整组声明；**元素不是映射**或表名重复即抛。
+
+    元素类型要在进门处就查：手写 ``tables.yaml`` 时很容易写出 ``- foo`` 这种标量，
+    直接交给 :func:`parse_table` 会在 ``key not in mapping`` 上抛 ``TypeError``——
+    与本模块"非法即抛 ``CairnError``"的口径不一致，调用方按类型捕获就漏掉了。
+    """
+    for item in raw:
+        if not isinstance(item, Mapping):
+            raise CairnError(f"表声明里混进了非映射的项: {item!r}（一项一张表）")
     parsed = tuple(parse_table(item) for item in raw)
     names = [table.name for table in parsed]
     duplicated = {name for name in names if names.count(name) > 1}

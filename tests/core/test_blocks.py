@@ -15,11 +15,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from core.storage import Block, BlockStore, Record, canonical
+from core.storage import Block, BlockStore, Body, Record, canonical
 from core.storage.block import decode_canonical
 from core.storage.blocks import BODY_POINTER_KEY
 from core.types import CorruptObjectError, KindMismatchError, ObjectNotFoundError, ValueHash
@@ -230,6 +230,40 @@ def test_a_body_that_looks_like_a_blob_is_not_taken_for_a_block(tmp_path: Path) 
         ]
         assert len(copies) == 1
         assert {item.id for item in store.iter_blocks()} == {block.id, again.id}
+
+
+class PanelBody(Body):
+    """**两套口径不同**的 body（像 `CanvasBody`）：`content()` 是逻辑内容、`to_data()` 还带状态。
+
+    它逼出"块签名"与"内容地址"的分工：签名按 `content()`（`body_hash()`），
+    落盘字节是 `to_data()` 的编码——把两者混成一个值，写完的块与读回的块就会自称不同的签名。
+    """
+
+    def __init__(self, value: int = 0) -> None:
+        self.value = value
+        self.hash = ""
+        self.refresh()
+
+    def content(self) -> Any:
+        return {"value": self.value}
+
+    def to_data(self) -> Any:
+        return {"value": self.value, "digest": self.hash}
+
+
+def test_checksum_follows_the_block_contract_not_the_payload(tmp_path: Path) -> None:
+    """块签名按块自己的口径算（`compute_checksum()`），**不是**内容地址。
+
+    结构化 body 若没覆写 `body_hash()`，签名算的是 `content()`、落盘字节是 `to_data()` 的编码，
+    两者不同；把内容地址塞进 `checksum` 会让 `verify()` 直接失败。
+    """
+    with _store(tmp_path) as store:
+        block = Block(body=PanelBody(1), type="blob")
+        store.store(block)
+
+        assert block.checksum == block.compute_checksum()  # 块签名
+        assert block.checksum != _body_addr(block)  # 内容地址是另一回事
+        assert store.fetch(block.id).verify()  # 读回自校验成立
 
 
 def test_repaired_block_rows_are_still_recognised_as_blocks(tmp_path: Path) -> None:

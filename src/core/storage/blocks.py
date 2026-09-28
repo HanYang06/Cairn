@@ -114,6 +114,7 @@ class BlockStore:
         """
         block.validate()
         body = block.encode_body()
+        # **内容地址**：实际落盘字节的摘要。同字节只存一份，故它是去重与反查的口径。
         digest = ValueHash.of(body)
         if self._content_of(digest) is None:
             self.vault.put(Record(id=Id.new(body), payload=body), bucket=bucket)
@@ -129,7 +130,11 @@ class BlockStore:
         )
         self.vault.put(Record(id=ident, payload=blob), kind=type_name(block.type), bucket=bucket)
 
-        block.checksum = str(digest)
+        # **块签名按块自己的口径**（`compute_checksum()`，`Block.decode` 读回时也用它）。
+        # 它和上面的内容地址**不必相等**：结构化 body 若没覆写 `body_hash()`，
+        # 签名算的是 `content()`（逻辑内容），而落盘字节是 `to_data()` 的编码——两者不同。
+        # 把内容地址塞进 `checksum` 会让"写完的块"与"读回的块"自称不同的签名，`verify()` 随即失败。
+        block.checksum = block.compute_checksum()
         # 落盘时刻以索引行为准（它是"写进去"这件事的真源），故写完再读回来贴一次：
         # 自己在内存里另算一个 now 只会与行里差那么一毫秒，然后两边都自称是"创建时间"。
         row = self.vault.index.record_row(block.id)

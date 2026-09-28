@@ -404,3 +404,13 @@ def test_create_table_rejects_bad_spec(tmp_path: Path) -> None:
             "ok",
             {"id": "TEXT); DROP TABLE bucket; --"},
         )
+
+
+def test_create_table_rejects_loose_default_syntax(tmp_path: Path) -> None:
+    """DEFAULT 的数值形态要收紧：`DEFAULT +` / `DEFAULT .` 不是合法 SQL，
+    松口径会把这种拼写错误推到 `CREATE TABLE` 才炸（解析口就该拦）。"""
+    with _storage(tmp_path) as storage:
+        conn = storage.vault.index.conn
+        for spec in ("TEXT DEFAULT +", "TEXT DEFAULT .", "TEXT DEFAULT --"):
+            with pytest.raises(CairnError, match="列定义"):
+                create_table(conn, "ok", {"id": spec})

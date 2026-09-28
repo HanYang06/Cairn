@@ -29,10 +29,14 @@ _SPEC_RE = re.compile(
     r"^[A-Za-z][A-Za-z0-9_]*"
     r"(?:\s*\([0-9,\s]+\))?"
     r"(?:\s+(?:PRIMARY\s+KEY|NOT\s+NULL|UNIQUE))?"
-    r"(?:\s+DEFAULT\s+('[^']*'|[0-9.+-]+))?$",
+    r"(?:\s+DEFAULT\s+('[^']*'|[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)))?$",
     re.IGNORECASE,
 )
-"""列定义白名单：``类型[(长度)] [PRIMARY KEY|NOT NULL|UNIQUE] [DEFAULT 值]``，其余一律拒绝。"""
+"""列定义白名单：``类型[(长度)] [PRIMARY KEY|NOT NULL|UNIQUE] [DEFAULT 值]``，其余一律拒绝。
+
+DEFAULT 收字符串字面量与**真正的数值形态**：``[0-9.+-]+`` 那种松口径会放行
+``DEFAULT +`` / ``DEFAULT .`` 这类非法 SQL，把错误推到 ``CREATE TABLE`` 才炸。
+"""
 
 
 def create_table(conn: sqlite3.Connection, name: str, columns: Mapping[str, str]) -> None:

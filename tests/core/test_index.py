@@ -487,6 +487,18 @@ def test_constraint_drift_is_detected(tmp_path: Path) -> None:
     index.close()
 
 
+def test_load_tables_rejects_a_non_mapping_item(tmp_path: Path) -> None:
+    """声明里混进标量（手写 YAML 很容易写成 `- foo`）要报 `CairnError`，不是 `TypeError`。"""
+    path = tmp_path / "tables.yaml"
+    path.write_text(
+        "- name: ok\n  tier: tier1\n  rebuild_from: 测试\n  columns: []\n- foo\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CairnError, match="非映射"):
+        load_tables(path)
+
+
 def test_column_type_change_needs_rebuild_authorization(tmp_path: Path) -> None:
     """列的型变了：SQLite 改不了，无授权即**拒绝**（默认不重建，防静默丢数据）。"""
     index = _index(tmp_path)
