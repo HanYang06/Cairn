@@ -324,6 +324,24 @@ def test_content_corruption_is_reported(tmp_path: Path) -> None:
 # ---- 领域表：关系行赖以存在的那张表 ----
 
 
+def test_table_handle_does_not_commit_on_every_call(tmp_path: Path) -> None:
+    """取句柄不再反复建表、也不旁路提交。
+
+    调用方（`feature/shared/relation.py`）每次读写都传 `columns`；若每次都
+    `CREATE TABLE IF NOT EXISTS` + `commit()`，就等于把 DDL 与提交塞回读写路径，
+    还会把调用方**尚未提交**的写入一并提交掉（回滚救不回来）。
+    """
+    with _storage(tmp_path) as storage:
+        storage.table("kv", k="TEXT PRIMARY KEY")  # 首次：真建表
+        conn = storage.vault.index.conn
+        conn.execute("INSERT INTO kv(k) VALUES('a')")  # 未提交，挂在连接的事务里
+
+        storage.table("kv", k="TEXT PRIMARY KEY")  # 再取句柄：不该提交
+
+        conn.rollback()  # 上一步若提交了，这一行就回滚不掉
+        assert storage.table("kv").count() == 0
+
+
 def test_custom_table_crud(tmp_path: Path) -> None:
     with _storage(tmp_path) as storage:
         kv = storage.table("kv", k="TEXT PRIMARY KEY", v="TEXT")

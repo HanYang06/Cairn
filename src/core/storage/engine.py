@@ -46,6 +46,8 @@ class Storage:
     def __init__(self, blocks: BlockStore) -> None:
         self.id = "storage"
         self.blocks = blocks
+        self._tables: set[str] = set()
+        """本实例已经确认存在的领域表（免得每次取句柄都重跑一遍建表）。"""
 
     # ---- 生命周期 ----
     @classmethod
@@ -116,11 +118,21 @@ class Storage:
     def table(self, name: str, **columns: str) -> Table:
         """按需建一张**领域表**并返回句柄：``storage.table("relation", id="TEXT PRIMARY KEY")``。
 
-        建表在这里发生（只此一次），且与新索引库共用连接；表结构由调用方给出、经白名单校验。
+        两条纪律（评审指出的两条都在这）：
+
+        - **建表只在本实例第一次取这张表时发生**，之后取句柄是纯读操作——
+          调用方（如 `feature/shared/relation.py`）每次读写都传 ``columns``，
+          若每次都建表 + 提交，就等于把 DDL 与提交放回了读写路径（§8.4 明令不许）；
+        - **不额外提交**：只有真建了表才提交一次。否则调用方尚未提交的写入会被旁路提交，
+          回滚就救不回来了。
+        列的声明以第一次为准：同一实例里再传一套不同的列不会改结构（改结构是显式动作）。
         """
-        if columns:
-            create_table(self.vault.index.conn, name, columns)
-            self.commit()
+        if columns and name not in self._tables:
+            existed = _table_exists(self.vault.index.conn, name)
+            if not existed:
+                create_table(self.vault.index.conn, name, columns)
+                self.commit()
+            self._tables.add(name)
         return Table(self.vault.index.conn, name)
 
     def query(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> list[sqlite3.Row]:
@@ -140,6 +152,14 @@ class Storage:
 def _by_id(block: Block) -> str:
     """排序键：对象身份（时间有序，故即创建顺序）。"""
     return block.id
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    """库里有没有这张表（`sqlite_master` 是唯一权威）。"""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone()
+    return row is not None
 
 
 def _info_of(block: Block) -> ObjectInfo:
