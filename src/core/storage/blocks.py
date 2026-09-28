@@ -63,6 +63,16 @@ if TYPE_CHECKING:
     from .index import RebuildPlan
 
 
+BODY_POINTER_KEY = "\x00cairn.body_addr"
+"""块记录载荷里指向 body 的**保留键**。
+
+为什么不叫朴素的 ``body_addr``：内容记录的载荷就是业务 body 本身，而 body 由领域决定。
+用一个业务可能用到的普通键当判据，一份形如 ``{"body_addr": "<64 位十六进制>"}`` 的正文
+就会被误判成块记录——去重失效，列举还会整体报错。带上不可打印前缀即"业务数据不可能占用"
+的命名空间（CBOR 文本串允许 NUL，解码照常）。
+"""
+
+
 class BlockStore:
     """块面的存储：一块进、一块出（内部是两条记录）。
 
@@ -234,23 +244,23 @@ class BlockStore:
 
 
 def _is_block(record: Record) -> bool:
-    """这条记录是不是**块记录**：载荷里带着 body 地址。
+    """这条记录是不是**块记录**：载荷里带着 body 地址（那个**保留键**）。
 
-    这是本层**载荷格式**的判据（内容记录的载荷就是内容本身，不会有这个字段），
+    这是本层**载荷格式**的判据（内容记录的载荷就是内容本身，不会有这个键），
     也是"重建补回的块行照样认得出是块"的原因——它不依赖索引里的任何一列。
     """
     return _body_pointer(record) is not None
 
 
 def _body_pointer(record: Record) -> ValueHash | None:
-    """块记录载荷里的 ``body_addr``；不是块记录即 ``None``。"""
+    """块记录载荷里的 body 地址；不是块记录即 ``None``。"""
     try:
         raw: Any = decode_canonical(record.payload) if record.payload else None
     except Exception:  # noqa: BLE001 — 内容记录的载荷是任意字节，解不出属正常
         return None
     if not isinstance(raw, dict):
         return None
-    return _digest_or_none(raw.get("body_addr"))
+    return _digest_or_none(raw.get(BODY_POINTER_KEY))
 
 
 def _digest_or_none(value: Any) -> ValueHash | None:
@@ -269,7 +279,7 @@ def _blob_of(block: Block, digest: ValueHash) -> dict[str, Any]:
         "attrs": block.attrs,
         "config": block.config,
         "author": block.author,
-        "body_addr": str(digest),
+        BODY_POINTER_KEY: str(digest),
     }
 
 

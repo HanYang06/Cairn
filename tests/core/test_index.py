@@ -458,6 +458,35 @@ def test_open_closes_the_connection_when_the_file_is_not_a_database(
         made[0].execute("SELECT 1")  # 已关闭：再用就当头报错
 
 
+def test_constraint_drift_is_detected(tmp_path: Path) -> None:
+    """已存在列上的**约束漂移**（非空 / 默认值 / 主键）同样要报出来。
+
+    只比类型会让"声明给某列加了 not_null、或改了默认值"静默放过：
+    开库一路绿灯，而库里的结构与声明已经不一致。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute('ALTER TABLE "bucket" RENAME TO "bucket_old"')
+    index.conn.execute(
+        'CREATE TABLE "bucket" ("name" TEXT PRIMARY KEY NOT NULL, "role" TEXT,'
+        ' "state" TEXT NOT NULL, "created" INTEGER NOT NULL DEFAULT 7)'
+    )
+
+    drift = [
+        item
+        for item in index.differences()
+        if item.table == "bucket" and item.kind == "column_mismatch"
+    ]
+    details = " | ".join(item.detail for item in drift)
+    assert "非空" in details  # role 丢了 NOT NULL
+    assert "默认值" in details  # created 的默认值从 0 变成 7
+    assert all(item.destructive for item in drift)
+
+    with pytest.raises(IndexSchemaError, match="RebuildPlan"):
+        index.align()
+    index.close()
+
+
 def test_column_type_change_needs_rebuild_authorization(tmp_path: Path) -> None:
     """列的型变了：SQLite 改不了，无授权即**拒绝**（默认不重建，防静默丢数据）。"""
     index = _index(tmp_path)

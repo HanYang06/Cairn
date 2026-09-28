@@ -126,6 +126,16 @@ def test_slot_range_parse_only_accepts_ascii_digits() -> None:
             SlotRange.parse(bad)
 
 
+def test_slot_range_parse_rejects_absurdly_long_numbers() -> None:
+    """超长数字串也走 `InvalidIdError`（`int()` 的位数上限会抛 `ValueError`）。
+
+    契约是"非法槽区间一律抛 `InvalidIdError`"——漏出去一个原始 `ValueError`，
+    调用方按类型捕获就漏掉了这条。
+    """
+    with pytest.raises(InvalidIdError):
+        SlotRange.parse("9" * 5000 + ":1")
+
+
 @pytest.mark.parametrize(
     ("start", "count", "head"),
     [(-1, 1, 0), (0, 0, 0), (0, -3, 0), (0, 1, -2)],

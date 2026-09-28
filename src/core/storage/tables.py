@@ -121,7 +121,7 @@ class Column:
         if self.unique:
             parts.append("UNIQUE")
         if self.default is not None:
-            parts.append(f"DEFAULT {_literal(self.default)}")
+            parts.append(f"DEFAULT {default_literal(self.default)}")
         return " ".join(parts)
 
     def to_config(self) -> dict[str, Any]:
@@ -303,8 +303,12 @@ def sql_type_name(kind: ColumnType) -> str:
     return _SQL_TYPE_NAMES[kind]
 
 
-def _literal(value: object) -> str:
-    """把默认值编成 SQL 字面量（只收标量，故不必担心注入）。"""
+def default_literal(value: object) -> str:
+    """把默认值编成 SQL 字面量（只收标量，故不必担心注入）。
+
+    公开出来是为了让**比对**用同一处写法：`PRAGMA table_info` 回的默认值是 SQL 文本，
+    若比对另写一套编法，就会出现"声明写 0、库里存 '0'"这种假差异。
+    """
     if isinstance(value, bool):
         return "1" if value else "0"
     if isinstance(value, (int, float)):

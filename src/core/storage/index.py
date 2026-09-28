@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 from core.types import RecordFormatError, ValueHash, now_ms
 from core.types.errors import IndexSchemaError
 
-from .tables import Column, TableSpec, declared_tables, sql_type_name
+from .tables import Column, TableSpec, declared_tables, default_literal, sql_type_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -39,6 +39,43 @@ INDEX_NAME = "catalog.db"
 
 _META_KEY = "schema.declared"
 """`meta` 里存的那份声明投影（用来发现"库里记的"与"程序认的"不一致）。"""
+
+
+def _column_drift(column: Column, actual: ColumnState) -> str:
+    """已存在的列与声明的不符之处（空串 = 一致）。
+
+    比四项：类型、主键、非空、默认值。列级 ``UNIQUE`` 不在 ``PRAGMA table_info`` 里，
+    由声明的**索引**那一侧比（`differences` 的索引分支）——那是唯一性的实际载体。
+    默认值比的是 SQL 文本：用 `TableSpec` 编译器**同一处**的字面量写法，
+    免得"声明写 0、库里存 '0'"这种假差异。
+    """
+    if actual.type != sql_type_name(column.type):
+        return f"{column.name}: 实际类型 {actual.type} ≠ 声明 {sql_type_name(column.type)}"
+    if actual.primary_key != column.primary_key:
+        return f"{column.name}: 主键 实际 {actual.primary_key} ≠ 声明 {column.primary_key}"
+    if actual.not_null != column.not_null:
+        return f"{column.name}: 非空 实际 {actual.not_null} ≠ 声明 {column.not_null}"
+    wanted = None if column.default is None else default_literal(column.default)
+    if actual.default != wanted:
+        return f"{column.name}: 默认值 实际 {actual.default} ≠ 声明 {wanted}"
+    return ""
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnState:
+    """库里一列的实际样子：类型 ＋ 约束（比对声明用）。"""
+
+    type: str
+    """方言类型名（大写）。"""
+
+    not_null: bool = False
+    """是否 NOT NULL。"""
+
+    primary_key: bool = False
+    """是否主键。"""
+
+    default: str | None = None
+    """默认值的 **SQL 文本**（``PRAGMA`` 原样给出，如 ``'main'`` / ``0``）；没有即 ``None``。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,9 +178,9 @@ class Index:
         self.conn.commit()
 
     # ---- 对比 ----
-    def actual_tables(self) -> dict[str, dict[str, str]]:
-        """实际表结构：``{表名: {列名: 类型}}``（不含 ``meta`` 与 sqlite 内部表）。"""
-        found: dict[str, dict[str, str]] = {}
+    def actual_tables(self) -> dict[str, dict[str, ColumnState]]:
+        """实际表结构：``{表名: {列名: 列的实际样子}}``（不含 ``meta`` 与 sqlite 内部表）。"""
+        found: dict[str, dict[str, ColumnState]] = {}
         rows = self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
@@ -154,11 +191,20 @@ class Index:
             found[name] = self._columns_of(name)
         return found
 
-    def _columns_of(self, name: str) -> dict[str, str]:
-        """按 ``PRAGMA table_info`` 取列与类型（**引号内是表名，来自声明，已校验标识符**）。"""
+    def _columns_of(self, name: str) -> dict[str, ColumnState]:
+        """按 ``PRAGMA table_info`` 取列的**类型与约束**（引号内是表名，来自声明，已校验标识符）。
+
+        只比类型是不够的：``not_null`` / ``default`` / 主键的漂移同样是"库里与声明不符"，
+        静默放过就等于库结构悄悄跑偏（声明改了一列的非空或默认值，开库却一路绿灯）。
+        """
         quoted = '"' + name.replace('"', '""') + '"'
         return {
-            str(row["name"]): str(row["type"]).upper()
+            str(row["name"]): ColumnState(
+                type=str(row["type"]).upper(),
+                not_null=bool(row["notnull"]),
+                primary_key=bool(row["pk"]),
+                default=None if row["dflt_value"] is None else str(row["dflt_value"]),
+            )
             for row in self.conn.execute(f"PRAGMA table_info({quoted})")
         }
 
@@ -209,15 +255,10 @@ class Index:
                         )
                     else:
                         found.append(Difference(name, "missing_column", column.name))
-                elif columns[column.name] != sql_type_name(column.type):
-                    found.append(
-                        Difference(
-                            name,
-                            "column_mismatch",
-                            f"{column.name}: 实际 {columns[column.name]}"
-                            f" ≠ 声明 {sql_type_name(column.type)}",
-                        )
-                    )
+                else:
+                    drifted = _column_drift(column, columns[column.name])
+                    if drifted:
+                        found.append(Difference(name, "column_mismatch", drifted))
             found.extend(
                 Difference(name, "extra_column", extra)
                 for extra in sorted(set(columns) - set(wanted))

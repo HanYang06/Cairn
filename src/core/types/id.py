@@ -168,9 +168,11 @@ class SlotRange:
             part.isascii() and part.isdecimal() for part in parts
         ):
             raise InvalidIdError(f"非法槽区间: {value!r}")
-        start, count = int(parts[0]), int(parts[1])
-        head = int(parts[2]) if len(parts) == 3 else 0
         try:
+            # `int()` 也算进来：超长数字串（Python 3.11+ 的位数上限）会抛 `ValueError`，
+            # 漏在外面就违背了"非法槽区间一律抛 InvalidIdError"这条契约。
+            start, count = int(parts[0]), int(parts[1])
+            head = int(parts[2]) if len(parts) == 3 else 0
             return cls(start, count, head)
         except ValueError as exc:  # 槽数为 0 等情况由数据类校验拦下
             raise InvalidIdError(f"非法槽区间: {value!r}") from exc
