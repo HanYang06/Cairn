@@ -191,25 +191,25 @@
   之后 `main` 的文档变更自动发布到 <https://hanyang06.github.io/cairn/>。自定义域名暂不需要。
 - [ ] **可选**：多语言（zh/en）站点；依赖图 / 类型表等更多"从代码投影"的页面（`docgen.py` 已有落点）。
 
-## 配置引擎（2026-09-26 立项；片 1–2 已落）
+## 配置引擎（2026-09-29 重定；**实现已清空，待重做**）
 
-> 方向见 `decisions.md`「配置（2026-09-26 定）」：声明即事实、两个投影落盘、取值三条。
-> **先做配置、再动存储、最后补信号**（作者定的顺序）。
+> ⚠️ 2026-09-29：旧的 `Cfg` 声明式实现（`core/types/cfg.py`、`core/conf/` 引擎、`core/storage/conf.py`、
+> `tests/core/test_conf.py`）在内核重建里**整条删除**，`src/core/conf/` 只剩包 docstring；
+> `tools/gen_conf.py` 已标"当前不可运行"。这一片的旧条目与旧投影约定见 `changes.md`，
+> **方向改由 `decisions.md`「配置（2026-09-29 重定 + 已定形）」定**，下面只记待做。
 
-- [x] **片 1 · 引擎与投影**：`core/types/cfg.py`（`Cfg` 声明/取值）、`core/conf/`（engine + schema +
-  errors + params）、`core/storage/conf.py`（存储那组声明，**各管各的**）、`tools/gen_conf.py`（`--check`）、
-  `tests/core/test_conf.py`（含重名检查、接线与端到端投影一致）、`docs/architecture/config.md`。
-  投影：`config/settings/core/{conf/params,storage/conf}.json` ↔ `schema/settings/…` + `schema/settings.json`
-  （hub 默认 `settings`；重名检查拒写别人的文件）。
-- [x] **片 2 · 接线**：`core.log.level` 在导入 `core` 时设到 `core.*` 这族 logger（不劫持 root）。
-  存储参数（封口线 / 槽长 / 分片粒度）由声明供值，取用方式见存储重设计那片
-  （旧 `BucketConfig` 与"每桶一份配置"已随旧层退役；槽长写进载体文件头，封口线每次写入按配置判）。
-  一并：`db__engine.py`（空骨架 + 多一个下划线）删除，等 `DB` 设计定了再落。
-- [x] **片 2b · 文件引用**：`Cfg(file_type=…)` 让配置项的值放独立文件，引用名相对值文件自己解析
-  （默认同层级的 `<字段名>.<类型>`）；表声明（`tables.yaml`）就走这条通道。
-- [ ] **片 3 · 手写口 / 校验**：第二个 hub（个人覆写 / 多 hub 合并）；可选 `jsonschema` 校验。
-- [ ] **遗留**：环境旋钮 `CAIRN_VAULT` / `CAIRN_THEME_DIR` / `CAIRN_SHAPES` 暂不进配置
-  （开发 / 部署入口，测试靠它重定向）；`gen_conf.py` 不清理"曾声明、后删除"的键（理由见存储那片）。
+按新方向（`conf(key, default, …)` 声明 / `conf(key)` 取值，单文件投影，`scope` 事务批量落盘）：
+
+- [x] **清理**：旧引擎、旧声明、旧测试、`tools/gen_conf.py` 的 import 清单随内核重建一并离线。
+- [ ] **待作者点题后再拆片**：`src/core/conf/` 引擎、`conf` 面、`scope` 事务、单文件值投影、
+  词表（`config/schema/settings.json`）、扫描工具（按 `conf(` 扫全仓）、旧接线修回
+  （`core.log.level`、`PackPolicy` 三键）。
+- [ ] **目录尾巴**：`schema/` → `config/schema/` 的迁移未收尾——`config/schema/*.json` 的 `$id`、
+  `config/settings/**` 的 `$schema`、`config/theme/*.json` 的 `$schema` 仍写旧 `schema/…` 路径；
+  `.github/workflows/ci.yml`（38/42 行）、`tools/docgen.py`（源改成 `schema/settings.json`）、
+  `rules/references/docs.md`、`docs/architecture/config.md` 同待改。
+  **口径改了以后再统一改**（单文件投影会把这批路径整段换掉），别先修一遍再返工。
+- [ ] **遗留**：环境旋钮 `CAIRN_VAULT` / `CAIRN_THEME_DIR` / `CAIRN_SHAPES` 暂不进配置。
 
 ## 内核重构（2026-09-22 立项；规格 `docs/architecture/kernel-spec.md`，2026-09-24 核对至 v1.4）
 
