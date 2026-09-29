@@ -17,7 +17,7 @@ from core.storage.hub import Hub, find_hubs
 from core.storage.index import Index
 from core.storage.patrol import FindKind, patrol, repair
 from core.storage.rows import Location
-from core.storage.tables import KERNEL_TABLES, Declaration
+from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -31,7 +31,7 @@ def vault(tmp_path: Path) -> Iterator[Storage]:
     """一个能落盘的引擎（库根 ＋ 已对齐的索引库）。"""
     root = tmp_path / "vault"
     root.mkdir()
-    with Index.open(root / "catalog.db", Declaration(KERNEL_TABLES), create=True) as index:
+    with Index.open(root / "catalog.db", Declaration(kernel_tables()), create=True) as index:
         yield Storage(index, root)
 
 

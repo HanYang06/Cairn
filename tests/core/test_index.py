@@ -14,7 +14,7 @@ import pytest
 
 from core.exc import IndexNotFoundError, IndexSchemaError
 from core.storage.index import DROPPED_SUFFIX, DiffKind, Index, RebuildPlan
-from core.storage.tables import KERNEL_TABLES, Declaration, TableSpec
+from core.storage.tables import Declaration, TableSpec, kernel_tables
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -89,7 +89,7 @@ def _columns_of(path: Path, table: str) -> list[str]:
 def test_create_builds_every_declared_table(tmp_path: Path):
     """新库：声明里的表与索引都建出来，并登记声明签名。"""
     path = tmp_path / "catalog.db"
-    declaration = Declaration(KERNEL_TABLES)
+    declaration = Declaration(kernel_tables())
     with Index.open(path, declaration, create=True) as index:
         assert index.declaration is declaration
         assert index.tables() == ("edge", "hub", "meta", "record")
@@ -101,9 +101,9 @@ def test_create_builds_every_declared_table(tmp_path: Path):
 def test_second_open_has_nothing_to_do(tmp_path: Path):
     """对齐一次之后，再开不带任何差异：开库是幂等的。"""
     path = tmp_path / "catalog.db"
-    Index.open(path, Declaration(KERNEL_TABLES), create=True).close()
+    Index.open(path, Declaration(kernel_tables()), create=True).close()
 
-    with Index.open(path, Declaration(KERNEL_TABLES)) as index:
+    with Index.open(path, Declaration(kernel_tables())) as index:
         assert index.alignment.clean
         assert index.alignment.applied == ()
         assert not index.alignment.declaration_changed

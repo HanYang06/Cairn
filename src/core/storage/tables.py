@@ -24,12 +24,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+
+import yaml
 
 from core.exc import TableDeclarationError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+    from pathlib import Path
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -101,6 +104,9 @@ IDENTITY_TABLE = "record"
 IDENTITY_SCOPE_COLUMN = "name"
 IDENTITY_KEY_COLUMN = "value_uuid"
 
+#: 作用域名那列的限定词：`id(scope).name`——它不是指向某处的指针，而是"由引用方写下的名字"
+SCOPE_QUALIFIER = "scope"
+
 _SQL_TYPES: dict[ColumnType, str] = {
     ColumnType.TEXT: "TEXT",
     ColumnType.INTEGER: "INTEGER",
@@ -156,6 +162,19 @@ class Column:
         """在签名与报错里用的完整写法：`限定词.列名` 或裸列名。"""
         return f"{self.qualifier}.{self.name}" if self.qualifier else self.name
 
+    @property
+    def sql_name(self) -> str:
+        """库里的列名。
+
+        带限定词的列加前缀（`id(body).value_hash` → `body_value_hash`），免得同一张表里
+        两个 ID 的同名字段撞名；不带限定词的（以及身份表那个判别列）就是裸字段名。
+        """
+        if not self.qualifier or (
+            self.name == IDENTITY_SCOPE_COLUMN and self.qualifier == SCOPE_QUALIFIER
+        ):
+            return self.name
+        return f"{self.qualifier}_{self.name}"
+
     def bound_field(self) -> str:
         """绑定列取的 ID 字段名；不是绑定列即报错。"""
         if not self.bound:
@@ -167,7 +186,7 @@ class Column:
 
         主键由 :meth:`TableSpec.create_table_ddl` 以表级约束写出（复合主键没法写在列上）。
         """
-        parts = [quote_identifier(self.name), sql_type(self.type)]
+        parts = [quote_identifier(self.sql_name), sql_type(self.type)]
         if self.not_null:
             parts.append("NOT NULL")
         if self.unique:
@@ -340,14 +359,14 @@ class TableSpec:
         covered = {index.columns[0] for index in resolved}
         covered.update(self.primary_key[:1])
         for column in self.columns:
-            if column.queryable and column.name not in covered:
-                resolved.append(IndexSpec(columns=(column.name,)))
-                covered.add(column.name)
+            if column.queryable and column.sql_name not in covered:
+                resolved.append(IndexSpec(columns=(column.sql_name,)))
+                covered.add(column.sql_name)
         return tuple(resolved)
 
     def column_names(self) -> tuple[str, ...]:
         """全部列名，书写顺序。"""
-        return tuple(column.name for column in self.columns)
+        return tuple(column.sql_name for column in self.columns)
 
     def column(self, name: str) -> Column | None:
         """按名取列；不存在返回 ``None``。"""
@@ -386,6 +405,9 @@ class TableSpec:
         不是指向某处的指针，故不受"限定词只用两套凭证"那条约束（见设计篇 §8）。
         """
         if not column.identity:
+            return
+        if column.source is not ColumnSource.IDENTITY:
+            # 引用列（关系表的端点）值就是另一个 ID，只要类型与非空对得上即可。
             return
         if column.name not in BINDABLE_FIELDS:
             raise TableDeclarationError(
@@ -531,11 +553,14 @@ class Declaration:
 _TABLE_KEYS = frozenset(
     {"name", "tier", "columns", "indexes", "owner", "rebuild_from", "doc", "primary_key"}
 )
-_COLUMN_KEYS = frozenset({"name", "type", "from", "qualifier", "unique", "not_null", "default", "doc"})
+_COLUMN_KEYS = frozenset(
+    {"name", "type", "from", "qualifier", "unique", "not_null", "default", "doc"}
+)
 _INDEX_KEYS = frozenset({"columns", "unique", "doc"})
 
 _SOURCE_NAMES: dict[str, ColumnSource] = {
     "id": ColumnSource.IDENTITY,
+    "ref": ColumnSource.REFERENCE,
     "store": ColumnSource.STORED,
     "prog": ColumnSource.PROGRAM,
     "digest": ColumnSource.DIGEST,
@@ -585,48 +610,103 @@ def _column_type(value: object) -> ColumnType:
         raise TableDeclarationError(f"未知列类型 {value!r}（只认 {allowed}）") from error
 
 
-def _columns(raw: object) -> tuple[Column, ...]:
-    """解析列清单：绑定列（裸字段名或 `位置名.字段`）与派生列（写 `from:` 标来路）。
+def parse_id_ref(text: str) -> tuple[str, str]:
+    """解析 `id(名字).字段`：返回（名字，字段）；纯字符匹配，不用正则。
 
-    绑定列**不写类型**——类型从 `ID` 的字段推出；派生列必须写明 `type` 与 `from`，
-    因为那种值没有出处可推。
+    这是**绑定列的写法**，也是全篇最省的一行：
+
+    - `id(block).value_uuid` —— 取 block 这个 ID 的 value_uuid（本行主语就是 block）；
+    - `id(body).value_uuid` —— 载荷里指向的那个 ID（限定词 body）；
+    - 名字不写（`id().value_uuid`）＝ 本行主语那个 ID。
+
+    提到一个名字就**建立一条指向它的引用**，取它的字段就是**从那张表取值**——
+    关系因此不需要第二种语法（设计篇 §8.1.3）。
+
+    Raises:
+        TableDeclarationError: 形状不是 `id(…).字段`。
+    """
+    head, dot, field = text.partition(".")
+    if not dot or not (head.startswith("id(") and head.endswith(")")):
+        raise TableDeclarationError(f"绑定列要写成 `id(名字).字段`：{text!r}")
+    _identifier(field, "列名")
+    name = head[len("id(") : -1].strip()
+    if name:
+        _identifier(name, "ID 名字")
+    return name, field
+
+
+def _columns(raw: object) -> tuple[Column, ...]:
+    """解析列清单：绑定列写字面式 `id(名字).字段`，非绑定列写映射并标 `from:`。
+
+    绑定列**类型与说明都不在声明里**：它们随 `ID` 的字段走，抄一份就是第二份事实。
+    非绑定列（观测 / 程序 / 派生）必须写明 `type` 与 `from`，因为那种值没有出处可推。
     """
     if not isinstance(raw, (list, tuple)) or not raw:
         raise TableDeclarationError(f"表声明必须给出非空的列清单: {raw!r}")
     columns: list[Column] = []
     for entry in raw:
-        item: object = entry
-        if isinstance(item, str):
-            if item not in BINDABLE_FIELDS:
-                raise TableDeclarationError(f"列声明必须是映射或 ID 字段名: {item!r}")
-            item = {"name": item, "from": "id", "type": _COLUMN_TYPE_OF_ID[item].value}
-        if not isinstance(item, dict):
-            raise TableDeclarationError(f"列声明必须是映射或字符串: {item!r}")
-        _reject_unknown(item, _COLUMN_KEYS, "列声明")
-        qualifier, name = _qualified(item.get("name"))
-        if any(column.name == name for column in columns):
-            raise TableDeclarationError(f"列名重复: {name}")
-        source = _column_source(item.get("from"), name)
-        identity = source is ColumnSource.IDENTITY
-        # 绑定列的类型**一律由 ID 的字段推出**：声明里写什么都不作数（写了也推得回来）。
-        column_type = _COLUMN_TYPE_OF_ID[name] if identity else _column_type(item.get("type"))
-        columns.append(
-            Column(
-                name=name,
-                type=column_type,
-                unique=_flag(item.get("unique", False), "unique"),
-                not_null=_flag(item.get("not_null", identity), "not_null"),
-                default=item.get("default"),
-                doc=_text(item.get("doc", ""), "列说明"),
-                qualifier=qualifier,
-                source=source,
-                identity=identity,
-            )
-        )
-    names = [column.name for column in columns]
+        if isinstance(entry, str):
+            qualifier, field = parse_id_ref(entry)
+            columns.append(_bound_column(qualifier, field))
+            continue
+        if not isinstance(entry, dict):
+            raise TableDeclarationError(f"列声明必须是映射或 `id(名字).字段` 字符串: {entry!r}")
+        _reject_unknown(entry, _COLUMN_KEYS, "列声明")
+        columns.append(_plain_column(entry))
+    names = [_column_key(column) for column in columns]
     if len(set(names)) != len(names):
         raise TableDeclarationError(f"列名重复: {', '.join(sorted(names))}")
     return tuple(columns)
+
+
+def _bound_column(qualifier: str, field: str) -> Column:
+    """造一条绑定列：字段必须是 `ID` 的字段，类型与说明都随 `ID` 走。"""
+    if field not in BINDABLE_FIELDS:
+        raise TableDeclarationError(
+            f"ID 的字段 {field!r} 绑不了：可绑的是 {sorted(BINDABLE_FIELDS)}"
+            "（落盘子集，设计篇 §3.5）"
+        )
+    if qualifier and qualifier != SCOPE_QUALIFIER and field not in POINTER_FIELDS:
+        raise TableDeclarationError(
+            f"`id({qualifier}).{field}` 取不到：载荷里的指针只带两套凭证 {sorted(POINTER_FIELDS)}"
+        )
+    return Column(
+        name=field,
+        type=_COLUMN_TYPE_OF_ID[field],
+        not_null=field not in _BINDABLE_NULLABLE,
+        qualifier=qualifier,
+        source=ColumnSource.IDENTITY,
+        identity=True,
+    )
+
+
+def _plain_column(item: Mapping[str, object]) -> Column:
+    """造一条**非绑定列**：观测 / 程序 / 派生，`type` 与 `from` 都得写。"""
+    qualifier, name = _qualified(item.get("name"))
+    source = _column_source(item.get("from"), name)
+    return Column(
+        name=name,
+        type=_column_type(_type_of_plain(item, name)),
+        unique=_flag(item.get("unique", False), "unique"),
+        not_null=_flag(item.get("not_null", False), "not_null"),
+        default=_default_of(item),
+        doc=_text(item.get("doc", ""), "列说明"),
+        qualifier=_text(item.get("qualifier", qualifier), "限定词"),
+        source=source,
+    )
+
+
+def _column_key(column: Column) -> str:
+    """列在表里的唯一键：限定词 + 字段名（两个 ID 的同名字段不撞）。"""
+    return f"{column.qualifier}.{column.name}" if column.qualifier else column.name
+
+
+def _default_of(item: Mapping[str, object]) -> DefaultValue | None:
+    """取非绑定列的默认值；类型对不上由编译期（`_literal`）兜住。"""
+    raw = item.get("default")
+    if raw is None or isinstance(raw, str | int | float | bytes | bool):
+        return raw
+    raise TableDeclarationError(f"默认值只能是字面量: {raw!r}")
 
 
 def _key_columns(raw: object) -> tuple[str, ...]:
@@ -664,11 +744,22 @@ def _column_source(raw: object, name: str) -> ColumnSource:
     return _SOURCE_NAMES[raw]
 
 
+def _type_of_plain(item: Mapping[str, object], name: str) -> object:
+    """非绑定列的显式类型：不给就在这里报错（那种值没有出处可推）。"""
+    declared = item.get("type")
+    if declared is None:
+        raise TableDeclarationError(f"列 {name} 不是绑定列，必须写明 type 与 from")
+    return declared
+
+
 def _indexes(raw: object, columns: tuple[Column, ...]) -> tuple[IndexSpec, ...]:
     """解析索引声明，顺带查列存在、查同一列组合重复。"""
     if not isinstance(raw, (list, tuple)):
         raise TableDeclarationError(f"索引清单必须是序列: {raw!r}")
-    names = {column.name for column in columns}
+    by_name: dict[str, str] = {}
+    for column in columns:
+        by_name[column.sql_name] = column.sql_name
+        by_name[column.reference] = column.sql_name
     indexes: list[IndexSpec] = []
     seen: set[tuple[tuple[str, ...], bool]] = set()
     for item in raw:
@@ -678,10 +769,11 @@ def _indexes(raw: object, columns: tuple[Column, ...]) -> tuple[IndexSpec, ...]:
         raw_columns = item.get("columns")
         if not isinstance(raw_columns, (list, tuple)) or not raw_columns:
             raise TableDeclarationError(f"索引必须给出非空的列组合: {raw_columns!r}")
-        index_columns = tuple(_identifier(name, "索引列名") for name in raw_columns)
-        missing = [name for name in index_columns if name not in names]
+        wanted = [_text(name, "索引列名") for name in raw_columns]
+        missing = [name for name in wanted if name not in by_name]
         if missing:
             raise TableDeclarationError(f"索引列不在表内: {', '.join(missing)}")
+        index_columns = tuple(by_name[name] for name in wanted)
         unique = _flag(item.get("unique", False), "unique")
         key = (tuple(sorted(index_columns)), unique)
         if key in seen:
@@ -735,192 +827,69 @@ def _literal(value: DefaultValue, column_type: ColumnType) -> str:
             raise TableDeclarationError(f"默认值 {value!r} 与列类型 {column_type.value} 不符")
 
 
-KERNEL_TABLES: tuple[TableSpec, ...] = (
-    TableSpec(
-        name="record",
-        tier=Tier.DERIVED,
-        rebuild_from="载体记录头（设计篇 §8.5 档一）",
-        doc="身份表：一行一个 ID（块记录与内容记录同表）；name 是作用域名，由引用方写下",
-        columns=(
-            Column(
-                IDENTITY_SCOPE_COLUMN,
-                ColumnType.TEXT,
-                not_null=True,
-                doc="作用域名（引用方写下的名字，如 block / body）",
-                qualifier="scope",
-                source=ColumnSource.IDENTITY,
-                identity=True,
-            ),
-            Column(
-                IDENTITY_KEY_COLUMN,
-                ColumnType.TEXT,
-                not_null=True,
-                doc="分配形态凭证（同一个值在不同作用域下各占一行）",
-                source=ColumnSource.IDENTITY,
-                identity=True,
-            ),
-            Column(
-                "value_hash",
-                ColumnType.TEXT,
-                doc="摘要形态凭证（指向内容）",
-                source=ColumnSource.IDENTITY,
-                identity=True,
-            ),
-            Column(
-                "kind",
-                ColumnType.TEXT,
-                doc="类型标号；由程序给出，不在记录头里",
-                source=ColumnSource.PROGRAM,
-            ),
-            Column(
-                "hub",
-                ColumnType.TEXT,
-                not_null=True,
-                doc="所属 hub（目录名）",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "pack",
-                ColumnType.TEXT,
-                not_null=True,
-                doc="载体文件名",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "slot_first",
-                ColumnType.INTEGER,
-                not_null=True,
-                doc="起始格（两数格模型的第一个数字）",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "slot_last",
-                ColumnType.INTEGER,
-                not_null=True,
-                doc="末格（闭区间上界）",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "size",
-                ColumnType.INTEGER,
-                not_null=True,
-                doc="记录字节数，便于估算与巡检",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "birth_time",
-                ColumnType.INTEGER,
-                doc="ID 签发时刻（unix 纳秒）",
-                source=ColumnSource.IDENTITY,
-                identity=True,
-            ),
-            Column(
-                "created",
-                ColumnType.INTEGER,
-                doc="落盘时刻（unix 毫秒）",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "updated",
-                ColumnType.INTEGER,
-                doc="最近一次改写时刻（unix 毫秒）",
-                source=ColumnSource.STORED,
-            ),
-        ),
-        indexes=(
-            IndexSpec(columns=("value_hash",)),
-            IndexSpec(columns=("kind",)),
-            IndexSpec(columns=("hub", "pack")),
-            IndexSpec(columns=("updated",)),
-        ),
-        primary_key=(IDENTITY_SCOPE_COLUMN, IDENTITY_KEY_COLUMN),
-    ),
-    TableSpec(
-        name="hub",
-        tier=Tier.DERIVED,
-        rebuild_from="vault 下的 hub 目录（设计篇 §6）",
-        doc="登记表：位置由目录名推出，真源是目录本身；主语不是 ID，故没有绑定列",
-        columns=(
-            Column(
-                "name",
-                ColumnType.TEXT,
-                not_null=True,
-                doc="hub 名（目录名）",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "role",
-                ColumnType.TEXT,
-                doc="主 hub / 短命 hub；短命 hub 为未来项",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "state",
-                ColumnType.TEXT,
-                doc="登记状态；合并期为未来项",
-                source=ColumnSource.STORED,
-            ),
-            Column(
-                "created",
-                ColumnType.INTEGER,
-                doc="第一次见到它的时刻（unix 毫秒）",
-                source=ColumnSource.STORED,
-            ),
-        ),
-        primary_key=("name",),
-    ),
-    TableSpec(
-        name="edge",
-        tier=Tier.DERIVED,
-        rebuild_from="关系数据落在块内时的块记录（设计篇 §8.2 注；归属待定）",
-        doc="关系表：一行一条；src 与 dst 两列指向 ID，关系不需要第二种语法",
-        columns=(
-            Column(
-                "id",
-                ColumnType.TEXT,
-                not_null=True,
-                doc="边身份摘要（由下列各列算出）",
-                source=ColumnSource.DIGEST,
-            ),
-            Column(
-                "src",
-                ColumnType.TEXT,
-                not_null=True,
-                doc="起点 ID",
-                source=ColumnSource.REFERENCE,
-            ),
-            Column(
-                "dst",
-                ColumnType.TEXT,
-                not_null=True,
-                doc="终点 ID",
-                source=ColumnSource.REFERENCE,
-            ),
-            Column(
-                "kind", ColumnType.TEXT, not_null=True, doc="关系种类", source=ColumnSource.PROGRAM
-            ),
-            Column("domain", ColumnType.TEXT, doc="所属领域", source=ColumnSource.PROGRAM),
-            Column(
-                "created",
-                ColumnType.INTEGER,
-                doc="建立时刻（unix 毫秒）",
-                source=ColumnSource.STORED,
-            ),
-        ),
-        indexes=(IndexSpec(columns=("src", "kind")), IndexSpec(columns=("dst", "kind"))),
-        primary_key=("id",),
-    ),
-)
-"""内核三表：`record` / `hub` / `edge`（设计篇 §8.2、§8.6）。
+#: 表声明的本体所在文件（相对配置根 `config/`）；由 `core/storage/conf.py` 的
+#: `storage.db.tables` 指向它。**改表即改这份 YAML**，Python 只负责读、校验、编译。
+TABLES_FILENAME = "tables.yaml"
 
-- `record` 是**身份表**：只放 ID 的面（作用域名 / 两套凭证 / 签发时刻）与存储层观测到的坐标；
-  主键是 `(name, value_uuid)`——作用域名由引用方写下（设计篇 §8）。
-- `hub` 是**登记表**：主语是载体目录、不是 ID，故一列绑定都写不出来（它进不了身份表）。
-- `edge` 是**关系表**：两端各一列绑定，另有身份摘要与标签。
+_TABLES: tuple[TableSpec, ...] | None = None
+"""惰性缓存：读一次就记住（导入存储不该要求表声明文件已经在那儿）。"""
 
-绑定列（`identity=True`）的索引由 `TableSpec.resolved_indexes()` 兜底补上，
-故这里只写"额外的"那些。
-"""
+
+def tables_path() -> Path:
+    """表声明文件的实际路径：从配置面拿配置根，再拼上文件名。
+
+    配置根有自己的规矩（`CAIRN_CONFIG` 旋钮 / 仓根下的 `config/`），故这里不自己猜路径——
+    "配置在哪"这个问题只由配置面回答。这一句导入故意放在函数里：**导入存储不该要求配置文件
+    已经在那儿**，只有真要读表声明时才问。
+    """
+    from core.conf import conf
+
+    return conf.settings_path().parent / TABLES_FILENAME
+
+
+def load_tables(path: Path | None = None) -> tuple[TableSpec, ...]:
+    """读表声明文件并逐张解析成 :class:`TableSpec`。
+
+    解析口是 `TableSpec.from_mapping`：未知项、非法类型、重复表名、档与来源不匹配一律报错。
+    坏 YAML 与"根不是列表"同样当场报错，不静默出一份空声明——**空声明比没有声明更坏**
+    （它会把库里已有的表判成"多出来的"）。
+
+    Raises:
+        TableDeclarationError: 文件不在、读不成 YAML，或任一项不合解析口规矩。
+    """
+    target = tables_path() if path is None else path
+    if not target.is_file():
+        raise TableDeclarationError(f"表声明文件不在: {target}")
+    try:
+        raw = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        raise TableDeclarationError(f"表声明文件读不出来: {target}（{error}）") from error
+    if not isinstance(raw, list) or not raw:
+        raise TableDeclarationError(f"表声明文件必须是一张表一项的非空列表: {target}")
+    tables: list[TableSpec] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise TableDeclarationError(f"每一项表声明必须是映射: {item!r}")
+        tables.append(TableSpec.from_mapping(cast("Mapping[str, object]", item)))
+    return tuple(tables)
+
+
+def kernel_tables() -> tuple[TableSpec, ...]:
+    """内核三表：`record` / `hub` / `edge`（本体在 `config/tables.yaml`，设计篇 §8.2、§8.6）。
+
+    **惰性读、读一次就记住**：导入 `core.storage` 不该要求表声明文件已经在那儿——
+    引擎的装配（`index.py`）与工具在真正要用时才向这里要；文件不在就当场报错。
+
+    - `record` 是**身份表**：只放 ID 的面与存储层观测到的坐标；主键 `(name, value_uuid)`；
+    - `hub` 是**登记表**：主语是载体目录、不是 ID，故一列绑定都写不出来；
+    - `edge` 是**关系表**：两端各一列引用，另有身份摘要与标签。
+
+    绑定列与引用列的索引由 `TableSpec.resolved_indexes()` 兜底补上，故文件里只写"额外的"那些。
+    """
+    global _TABLES  # noqa: PLW0603 — 只在这里写一次，缓存换来"导入不依赖文件"
+    if _TABLES is None:
+        _TABLES = load_tables()
+    return _TABLES
 
 
 META_TABLE_SPEC = TableSpec(
@@ -936,7 +905,7 @@ META_TABLE_SPEC = TableSpec(
     ),
     primary_key=("name",),
 )
-"""索引库自用表 `meta`：不属于任何声明集，但**建表语句同样由声明编译**。
+"""索引库自用表 `meta`：**不属声明集**，故留在代码里（它是开库流程的脚手架，不是业务声明）。
 
 它由开库流程自己保证存在（见 `index.py`），故业务声明不必（也不许）写它——
 "源码内不得出现建表 SQL"这条规矩，`meta` 也不例外。
@@ -948,9 +917,9 @@ __all__ = [
     "IDENTITY_KEY_COLUMN",
     "IDENTITY_SCOPE_COLUMN",
     "IDENTITY_TABLE",
-    "KERNEL_TABLES",
     "META_TABLE_SPEC",
     "POINTER_FIELDS",
+    "TABLES_FILENAME",
     "Column",
     "ColumnSource",
     "ColumnType",
@@ -958,6 +927,9 @@ __all__ = [
     "IndexSpec",
     "TableSpec",
     "Tier",
+    "kernel_tables",
+    "load_tables",
     "quote_identifier",
     "sql_type",
+    "tables_path",
 ]

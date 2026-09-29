@@ -16,7 +16,7 @@ from core.storage.format.record import decode, encode
 from core.storage.hub import Hub
 from core.storage.index import Index
 from core.storage.rows import Location, rebuild
-from core.storage.tables import KERNEL_TABLES, Declaration
+from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -42,7 +42,7 @@ def _hub(root: Path, name: str = "main") -> Hub:
 
 def _index(root: Path) -> Index:
     """建一个对齐好的索引库。"""
-    return Index.open(root / "catalog.db", Declaration(KERNEL_TABLES), create=True)
+    return Index.open(root / "catalog.db", Declaration(kernel_tables()), create=True)
 
 
 # ---- 补登记与补行 ----

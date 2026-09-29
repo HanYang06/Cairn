@@ -33,7 +33,7 @@ from core.storage.hub import PackPolicy
 from core.storage.index import Index, RebuildPlan
 from core.storage.patrol import patrol as _patrol
 from core.storage.patrol import repair as _repair
-from core.storage.tables import KERNEL_TABLES, Declaration
+from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -49,7 +49,7 @@ CATALOG_FILENAME = "catalog.db"
 LOGGER_NAME = "cairn.kernel"
 """内核日志记录器名：统一日志的入口。"""
 
-KERNEL_DECLARATION = Declaration(KERNEL_TABLES)
+KERNEL_DECLARATION = Declaration(kernel_tables())
 """内核默认声明集：三张内核表登记成一份声明。"""
 
 

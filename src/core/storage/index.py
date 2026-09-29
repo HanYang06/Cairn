@@ -379,17 +379,19 @@ def _compare_columns(spec: TableSpec, found: _ActualTable) -> _Plan:
     warnings: list[str] = []
 
     for column in spec.columns:
-        actual_column = found.columns.get(column.name)
+        actual_column = found.columns.get(column.sql_name)
         if actual_column is None:
             differences.append(_missing_column(spec, column, statements))
             continue
-        drift = _column_drift(column, actual_column, key=column.name in spec.primary_key)
+        drift = _column_drift(column, actual_column, key=column.sql_name in spec.primary_key)
         if drift is not None:
             differences.append(
-                Difference(DiffKind.CHANGED_COLUMN, spec.name, column.name, drift, destructive=True)
+                Difference(
+                    DiffKind.CHANGED_COLUMN, spec.name, column.sql_name, drift, destructive=True
+                )
             )
 
-    declared_columns = {column.name for column in spec.columns}
+    declared_columns = {column.sql_name for column in spec.columns}
     for name in sorted(found.columns):
         if name not in declared_columns:
             differences.append(
@@ -401,7 +403,7 @@ def _compare_columns(spec: TableSpec, found: _ActualTable) -> _Plan:
         Difference(
             DiffKind.MISSING_UNIQUE,
             spec.name,
-            column.name,
+            column.sql_name,
             "声明为唯一，库内没有对应的唯一索引",
             destructive=True,
         )

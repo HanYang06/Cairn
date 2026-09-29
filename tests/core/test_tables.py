@@ -4,18 +4,25 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from core.exc import TableDeclarationError
 from core.storage.tables import (
-    KERNEL_TABLES,
     Column,
     ColumnType,
     Declaration,
     IndexSpec,
     TableSpec,
     Tier,
+    kernel_tables,
+    load_tables,
+    tables_path,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _mapping(**overrides: object) -> dict[str, object]:
@@ -106,7 +113,7 @@ def test_columns_are_checked_for_duplicates_and_one_key():
     with pytest.raises(TableDeclarationError, match="多个身份列"):
         TableSpec.from_mapping(
             _mapping(
-                columns=[{"name": "value_uuid"}, {"name": "value_hash"}],
+                columns=["id().value_uuid", "id().value_hash"],
                 primary_key=[],
             )
         )
@@ -361,7 +368,7 @@ def test_declaration_ddl_and_signature_are_ordered_by_table_name():
 
 def test_kernel_tables_declare_and_compile():
     """内核三表可登记、可编译；位置列按两数格模型给。"""
-    declaration = Declaration(KERNEL_TABLES)
+    declaration = Declaration(kernel_tables())
 
     assert {table.name for table in declaration.tables} == {"record", "hub", "edge"}
     assert all(statement.startswith("CREATE ") for statement in declaration.ddl())
@@ -372,13 +379,13 @@ def test_kernel_tables_declare_and_compile():
         "name",
         "value_uuid",
         "value_hash",
+        "birth_time",
         "kind",
         "hub",
         "pack",
         "slot_first",
         "slot_last",
         "size",
-        "birth_time",
         "created",
         "updated",
     )
@@ -389,9 +396,80 @@ def test_kernel_tables_declare_and_compile():
 
 def test_kernel_tables_are_all_rebuildable_or_explicitly_source():
     """每张内核表都写明重建来源（档一的硬规约）。"""
-    for table in KERNEL_TABLES:
+    for table in kernel_tables():
         assert table.rebuild_from, table.name
         assert table.tier is Tier.DERIVED
+
+
+# ---- 表声明文件的读取 ----
+
+
+def test_shipped_tables_file_loads():
+    """入库的 `config/tables.yaml` 可读，且逐张过解析口。"""
+    tables = load_tables()
+
+    assert [table.name for table in tables] == ["record", "hub", "edge"]
+    assert tables_path().name == "tables.yaml"
+
+
+def test_loader_reports_a_missing_file(tmp_path: Path):
+    """文件不在即报错，不静默出一份空声明（空声明会把库里的表判成多出来的）。"""
+    with pytest.raises(TableDeclarationError, match="不在"):
+        load_tables(tmp_path / "nope.yaml")
+
+
+def test_kernel_tables_read_the_path_the_config_points_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`kernel_tables()` 读的就是 `tables_path()` 指的那份文件；文件不在即当场报错。
+
+    **导入存储本身不要求文件在那儿**（惰性），但真要读表声明时不许含糊——
+    空声明比没有声明更坏，它会把库里已有的表判成"多出来的"。
+    """
+    target = tmp_path / "tables.yaml"
+    target.write_text(
+        "- name: t\n  tier: derived\n  rebuild_from: 载体\n  columns: [id().value_uuid]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.storage.tables.tables_path", lambda: target)
+    monkeypatch.setattr("core.storage.tables._TABLES", None)
+
+    assert [table.name for table in kernel_tables()] == ["t"]
+
+    monkeypatch.setattr("core.storage.tables.tables_path", lambda: tmp_path / "nope.yaml")
+    monkeypatch.setattr("core.storage.tables._TABLES", None)
+    with pytest.raises(TableDeclarationError, match="不在"):
+        kernel_tables()
+
+
+def test_loader_reports_broken_yaml(tmp_path: Path):
+    """读不成 YAML / 根不是列表 / 项不是映射：三种都当场报错。"""
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("name: [unclosed\n", encoding="utf-8")
+    with pytest.raises(TableDeclarationError, match="读不出来"):
+        load_tables(broken)
+
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("- 1\n", encoding="utf-8")
+    with pytest.raises(TableDeclarationError, match="必须是映射"):
+        load_tables(empty)
+
+
+def test_loader_propagates_parse_gate_errors(tmp_path: Path):
+    """文件写得不对（比如少写 from 的列）：解析口的报错原样出来。"""
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        "- name: t\n"
+        "  tier: derived\n"
+        "  rebuild_from: 载体\n"
+        "  columns:\n"
+        "    - { name: kind, type: text }\n"
+        "  primary_key: [kind]\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TableDeclarationError, match="from"):
+        load_tables(bad)
 
 
 # ---- 剩余的解析口分支 ----
@@ -423,7 +501,7 @@ def test_primary_key_may_sit_anywhere_in_the_list():
     [
         ({"owner": 7}, "归属"),
         ({"doc": 7}, "说明"),
-        ({"columns": [{"name": "value_uuid"}], "primary_key": ["nope"]}, "主键列不存在"),
+        ({"columns": ["id().value_uuid"], "primary_key": ["nope"]}, "主键列不存在"),
         ({"columns": [{"name": "id", "from": "prog", "type": 7}]}, "必须是字符串"),
         (
             {
@@ -437,7 +515,7 @@ def test_primary_key_may_sit_anywhere_in_the_list():
         ),
         ({"indexes": ["id"]}, "必须是映射"),
         ({"indexes": [{"columns": "payload"}]}, "非空的列组合"),
-        ({"indexes": [{"columns": [7]}]}, "标识符"),
+        ({"indexes": [{"columns": [7]}]}, "必须是字符串"),
     ],
 )
 def test_parse_gate_covers_remaining_branches(overrides: dict[str, object], match: str):

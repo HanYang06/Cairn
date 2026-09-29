@@ -18,7 +18,7 @@ from core.storage.format.block import body_addr_of, encode_block_payload
 from core.storage.format.id import digest
 from core.storage.index import Index
 from core.storage.rows import Location
-from core.storage.tables import KERNEL_TABLES, Declaration
+from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -32,7 +32,7 @@ def vault(tmp_path: Path) -> Iterator[tuple[Storage, Bus]]:
     """一个能落盘的引擎（库根 + 已对齐索引库 + 事件总线）。"""
     root = tmp_path / "vault"
     root.mkdir()
-    with Index.open(root / "catalog.db", Declaration(KERNEL_TABLES), create=True) as index:
+    with Index.open(root / "catalog.db", Declaration(kernel_tables()), create=True) as index:
         bus = Bus()
         yield Storage(index, root, bus=bus), bus
 
@@ -154,7 +154,7 @@ def test_engine_without_a_bus_still_works(tmp_path: Path):
     """不给总线也能跑：通知是可选件，不是依赖。"""
     root = tmp_path / "vault"
     root.mkdir()
-    with Index.open(root / "catalog.db", Declaration(KERNEL_TABLES), create=True) as index:
+    with Index.open(root / "catalog.db", Declaration(kernel_tables()), create=True) as index:
         engine = Storage(index, root)
 
         assert engine.default_hub == "main"

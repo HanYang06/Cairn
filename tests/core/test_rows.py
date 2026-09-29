@@ -11,7 +11,7 @@ import pytest
 from core.storage.carrier import SlotRange
 from core.storage.index import Index
 from core.storage.rows import EdgeRow, Location, Rows
-from core.storage.tables import KERNEL_TABLES, Declaration
+from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 @pytest.fixture
 def rows(tmp_path: Path) -> Iterator[Rows]:
     """一个开好并对齐的索引库的行层。"""
-    with Index.open(tmp_path / "catalog.db", Declaration(KERNEL_TABLES), create=True) as index:
+    with Index.open(tmp_path / "catalog.db", Declaration(kernel_tables()), create=True) as index:
         yield index.rows
 
 

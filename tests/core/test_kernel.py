@@ -18,7 +18,7 @@ from core.storage.format.id import ID
 from core.storage.format.record import encode
 from core.storage.hub import Hub, PackPolicy
 from core.storage.patrol import FindKind
-from core.storage.tables import KERNEL_TABLES, Declaration, TableSpec
+from core.storage.tables import Declaration, TableSpec, kernel_tables
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -129,7 +129,7 @@ def test_custom_declaration_is_forwarded(tmp_path: Path):
             "primary_key": ["id"],
         }
     )
-    declaration = Declaration((*KERNEL_TABLES, note))
+    declaration = Declaration((*kernel_tables(), note))
 
     with Kernel.create(tmp_path / "vault", declaration=declaration) as kernel:
         assert "note" in kernel.index.tables()

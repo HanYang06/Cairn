@@ -57,7 +57,7 @@ _LOCATION_COLUMNS = (
     "slot_first, slot_last, size, birth_time, created, updated"
 )
 _HUB_COLUMNS = "name, role, state, created"
-_EDGE_COLUMNS = "id, src, dst, kind, domain, created"
+_EDGE_COLUMNS = "id, src_value_uuid, dst_value_uuid, kind, domain, created"
 
 # 语句一律在这里拼好：表名来自声明层并经 quote_identifier 加引号，值全部参数化。
 # 调用点只传常量，故没有"现场拼 SQL"的地方（也就没有注入面）。
@@ -123,11 +123,11 @@ _INSERT_EDGE = (
 
 _EDGES_FROM = (
     f"SELECT {_EDGE_COLUMNS} FROM {quote_identifier(EDGE_TABLE)} "
-    "WHERE src = ? AND kind = ? ORDER BY created, id"
+    "WHERE src_value_uuid = ? AND kind = ? ORDER BY created, id"
 )
 _EDGES_TO = (
     f"SELECT {_EDGE_COLUMNS} FROM {quote_identifier(EDGE_TABLE)} "
-    "WHERE dst = ? AND kind = ? ORDER BY created, id"
+    "WHERE dst_value_uuid = ? AND kind = ? ORDER BY created, id"
 )
 
 
@@ -456,8 +456,8 @@ def _edge(row: sqlite3.Row) -> EdgeRow:
     """把一行读成关系边。"""
     return EdgeRow(
         id=str(row["id"]),
-        src=str(row["src"]),
-        dst=str(row["dst"]),
+        src=str(row["src_value_uuid"]),
+        dst=str(row["dst_value_uuid"]),
         kind=str(row["kind"]),
         domain=str(row["domain"] or ""),
         created=int(row["created"] or 0),
