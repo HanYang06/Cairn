@@ -533,6 +533,19 @@
   仓库层（`.editorconfig` + pre-commit 钩子 + CI + `REUSE.toml`），这样任何人 / 任何 IDE / AI agent
   都不会漏。VS Code 侧选 `TrevorNesbitt.smart-file-templates`（**MIT**）；同类
   `rioj7/vscode-file-templates` 仓库无 LICENSE（默认保留所有权利），**不选**。
+- 2026-09-30 · 已定 · **AI 评审暂转人工，OCR 配置保持原样**：本地 `deepseek-flash` 的 key 已失效
+  （`ocr llm test` 返回 401），远程通路当前不可用；作者裁定暂由人工评审。**未改动**
+  `~/.opencodereview/config.json`，Ollama 进程亦未改动。
+- 2026-09-30 · 已定 · **本地 Ollama 通路的实测边界**（日后启用直接照此办理，无需重测）：
+  ① **可用模型仅 `qwen3.5:2b` 与 `qwen3.5:4b`**——实测原生 function calling 通过；
+  `qwen2.5-coder:3b` 仅在正文内输出 JSON、无结构化 `tool_calls`，**不可用**（OCR 全程由工具调用驱动）。
+  ② **上下文被限制在 4096 token，且超长时保留尾部、丢弃头部**（首尾各置标记词实测）——
+  OCR 的系统规则位于 prompt 头部，会被静默丢弃；`num_ctx` 请求参数无效，
+  须以 `OLLAMA_CONTEXT_LENGTH` 环境变量重启 `ollama.exe serve` 方可提升。
+  ③ 硬件为 RTX 3050 Laptop（4 GiB 显存）：实测生成约 10~12 token/s，**并发须降为 1**；
+  `qwen3.5:4b` 默认开启思考（单次约 400 token），`reasoning.effort=none` 可关闭，`think=false` 无效。
+  ④ 自定义 provider 写法（OCR 官方文档）：`custom_providers.<name>.url = http://127.0.0.1:11434/v1`、
+  `protocol = openai`、`api_key` 须填占位值（Ollama 忽略该值）。
 
 ## 目录结构（2026-09-19，重定；同日再调）
 
