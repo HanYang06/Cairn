@@ -29,14 +29,17 @@ uv run pre-commit run --all-files         # 提交前全量门禁（SPDX -> 书�
 
 uv run mkdocs serve                       # 文档站本地预览 -> http://127.0.0.1:8000
 uv run mkdocs build --strict              # 文档站构建门禁（坏链接/缺页面/未知配置即失败）
-uv run python tools/docgen.py --check     # 生成页防漂移（配置参考 vs schema 词表）
+uv run python tools/docgen.py --check     # 生成页防漂移（配置参考 vs 声明现算的词表）
 uv run python tools/docgen.py --write     # 重新生成配置参考页（改了配置声明后跑）
 uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的公共成员会从 API 页消失）
 ```
 
-> 桌面入口 `uv run cairn`、打包（`tools/build.py` 与 `build-windows.yml`）、
-> 配置投影（`tools/gen_conf.py`）分别在 UI、应用层与配置引擎重建后恢复：
-> 那三个工具当前依赖已删除的层，`pyproject.toml` 里为它们留了 mypy 豁免，修回时一并摘掉。
+> 桌面入口 `uv run cairn`、打包（`tools/build.py` 与 `build-windows.yml`）分别在 UI 与应用层
+> 重建后恢复：那两个工具当前依赖已删除的层，`pyproject.toml` 里为它们留了 mypy 豁免，
+> 修回时一并摘掉。
+>
+> 配置投影**没有生成脚本**：跑一遍程序即可（值文件与词表在退出时落盘），
+> 入库产物与声明是否分叉由 `tests/core/test_conf_projection.py` 拦。
 
 提交前顺序：`ruff -> mypy -> pytest`。质量口径见 `.agents/skills/rules/references/quality.md`
 （企业级-ε：mypy strict、ruff ALL、warning 零容忍、覆盖率 ≥80%）。**只有用户明确要求才 commit。**
@@ -65,7 +68,8 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
   **事件引擎**（`core/event/`：`Event` / `Bus` / 事件目录）、**存储引擎**（`core/storage/`：
   格式与身份 `format/`、载体 `carrier.py`、hub `hub.py`、表声明 `tables.py`、索引库 `index.py`、
   行层 `rows.py`、引擎 `engine.py`、巡检 `patrol.py`）、**异常层**（`core/exc.py`）；
-  装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，配置引擎 `core/conf/` 重做中。
+  装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置引擎**在 `core/conf/`
+  （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/config.md`）。
 - `src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
   **共享件**（`shared/`）；域之间互不依赖；领域结构直接继承 `Block`，扩展只走子类字段、
   新 `type` 或新关系 `kind`。
@@ -88,9 +92,11 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
 
 ## 环境与坑
 
-- 库根由调用方显式给出（`Kernel.create(root)` / `Kernel.open(root)`）；**尚无环境旋钮**——
+- 库根由调用方显式给出（`Kernel.create(root)` / `Kernel.open(root)`）；**尚无库旋钮**——
   `CAIRN_VAULT` 一类的重定向随 App 或测试夹具重建再定。**本地不加密**（设计篇 §9.5），
   故没有口令 / 密钥类环境变量。
+- 配置根有一个旋钮 `CAIRN_CONFIG`：只给测试与部署重定向，**不是配置项**
+  （它是"找到配置的办法"）；不给就用仓根下的 `config/`。
 - `.gitignore` 里仍留着 `vault/`（开发库的默认位置）：开发时别把库提交进来。
 - Python 3.13；`uv.lock` + 阿里云 PyPI 镜像（`pyproject.toml` 的 `[[tool.uv.index]]`）。
 - 图片走 Git LFS（`.gitattributes`）；未装 LFS 时 clone 到的 png 只是指针。

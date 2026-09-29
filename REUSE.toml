@@ -12,12 +12,11 @@
 
 version = 1
 
-# —— 自有素材与数据：图标 / 启动图 / 画布形状 / 主题 / schema / 编辑器配置 ——
+# —— 自有素材与数据：图标 / 启动图 / 主题与图形集 / 配置投影 / 编辑器配置 ——
 [[annotations]]
 path = [
   "assets/**",
   "config/**",
-  "schema/**",
   ".vscode/**",
   "skills-lock.json",
 ]

@@ -123,12 +123,12 @@ python_version = "3.13"
 strict = true
 plugins = ["tools/mypy_plugin.py"]
 
-# 两个退役工具：它们依赖的层（`app` / `ui_tools` / 旧配置引擎）在本次重建里被整条删除，
-# 故现在既跑不起来、也过不了类型检查。文件留着当参考（各自的 docstring 写明了状态），
-# 这里显式放行以免整仓 mypy 门禁被这两处拖红；不放进 `exclude` 是为了让它们仍在检查范围内
-# ——一旦被谁 import，或被修回可运行，就该把它们从这个豁免里摘出去。
+# 退役工具：它依赖的层（`app` / `ui_tools`）在本次重建里被整条删除，
+# 故现在既跑不起来、也过不了类型检查。文件留着当参考（docstring 写明了状态），
+# 这里显式放行以免整仓 mypy 门禁被它拖红；不放进 `exclude` 是为了让它仍在检查范围内
+# ——一旦被谁 import，或被修回可运行，就该把它从这个豁免里摘出去。
 [[tool.mypy.overrides]]
-module = ["tools.preview_shell", "tools.gen_conf"]
+module = ["tools.preview_shell"]
 ignore_errors = true
 
 [tool.pytest.ini_options]

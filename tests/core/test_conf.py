@@ -406,7 +406,7 @@ def test_schema_carries_type_default_and_owner(conf: Config):
     assert properties["a.b"]["type"] == "integer"
     assert properties["a.b"]["default"] == 1
     assert properties["a.b"]["description"] == "说明"
-    assert properties["a.b"]["x-cairn-owner"].startswith("test_conf.")
+    assert properties["a.b"]["x-cairn-owner"].startswith("tests.core.test_conf.")
     assert "tests/core/test_conf.py:" in properties["a.b"]["x-cairn-site"]
 
 

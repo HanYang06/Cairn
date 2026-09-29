@@ -35,13 +35,9 @@ jobs:
       - name: Prose check (书面语)
         run: uv run python tools/prose.py
 
-      # 配置投影（config/ 与 schema/）的防漂移这一步**暂缺**：它的工具 `tools/gen_conf.py`
-      # 依赖的配置引擎在 2026-09-29 的重建里被删除，正由作者在新结构下重做（`src/core/conf/`）。
-      # 引擎落地后把这步加回来（工具修回时记得摘掉 pyproject 里给它的 mypy 豁免）：
-      #
-      #     # 两个投影（config/ 与 schema/）是否与声明一致：docgen 只比参考页，投影漂移看这里
-      #     - name: Config projections (no drift)
-      #       run: uv run python tools/gen_conf.py --check
+      # 配置投影（config/settings.json 与 config/schema/settings.json）**没有生成脚本**：
+      # 跑一遍程序就顺带生成，入库的产物与声明是否分叉由 pytest 的投影契约用例拦住
+      # （`tests/core/test_conf_projection.py`）。详情见 docs/architecture/config.md。
 
       - name: Generated config reference (no drift)
         run: uv run python tools/docgen.py --check

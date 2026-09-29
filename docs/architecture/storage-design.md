@@ -523,9 +523,10 @@ vault/
 | 索引库自用表 | `meta`（不属任何声明集，由开库流程保证） | 同上 |
 | 通用表 / 领域表 | 确实需要可查询面者 | 同上，标 `owner: domain` |
 
-**位置约定**（配置引擎落地后）：`config/<hub>/<包树>/<文件>`——与配置引擎的镜子约定一致
-（`src/core/storage/conf.py` ↔ `config/settings/core/storage/`），故结构描述与同一包的标量配置
-**分文件、同约定**，谁也不挤谁。
+**位置约定**（2026-09-30 按配置引擎的新形状更正）：标量配置收在**单文件** `config/settings.json`，
+而结构描述（本文这份表声明）**放独立文件** `config/tables.yaml`，由配置键 `storage.db.tables`
+经"文件引用"指向它（见[配置引擎](config.md) §7）。当前 `core/storage/tables.py` 里的三表
+仍是代码常量，这份 YAML 是**未来接回的本体**（尚未接线，如实记）。
 
 **声明内容**（每条表声明）：表名、`doc`、`tier`（重建档）、`owner`（归属）、
 `rebuild_from`（重建来源）、`columns`、`indexes`。

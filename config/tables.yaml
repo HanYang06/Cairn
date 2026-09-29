@@ -66,3 +66,7 @@
   indexes:
     - { columns: [src, kind], doc: 出边（正向遍历） }
     - { columns: [dst, kind], doc: 反查（backlinks） }
+
+- name: block
+  doc:xxx
+  

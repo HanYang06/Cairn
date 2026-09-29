@@ -76,6 +76,6 @@
   选择器为 `widget.<类型>[:<状态>]`；声明键取该部件的可样式属性。
 - 加载时展开为点分路径（`token.<字段>` / `widget.<类型>[.<状态>].<属性>`）并由 schema 自动校验；
   未知段 / 选择器 / 属性**报错**（不静默失效）。
-- 供 IDE 校验的 JSON Schema 落 `schema/theme.json`，由 `tools/gen_theme_schema.py` 生成；
-  改 schema 后必须重跑，`test_theme_schema_file.py` 会检查漂移。
+- 供 IDE 校验的 JSON Schema 落 `config/schema/theme.json`（**随 UI 重建**：生成器
+  `tools/gen_theme_schema.py` 与漂移用例随界面工具箱一并删除，回来时同款两段式重建）。
 - 只有 `cairn.ui.components` 下的部件进主题词汇表；外壳 / 页面 / 测试类不入，保证 schema 确定。

@@ -5,38 +5,31 @@
 
 !!! danger "本页由工具生成，请勿手改"
 
-    由 `uv run python tools/docgen.py --write` 生成，表来自 **`schema/settings.json`**
-    （配置引擎的生成物）。改口径请改生成器，改配置请改声明类；
-    `--check` 已进 CI，漂移即失败。**手改这一页会在下一次生成时被抹掉。**
+    由 `uv run python tools/docgen.py --write` 生成，表来自 **配置声明现算**（`core/conf` 的
+    词表投影，副本落在 `config/schema/settings.json`）。改口径请改生成器，改配置请改声明的
+    那个 `conf(...)` 调用点；`--check` 已进 CI，漂移即失败。**手改这一页会在下一次生成时被抹掉。**
 
 ## 怎么读这张表
 
-- **键** = 点分路径，写进 `config/<hub>/…` 的值文件里（用户改过的值永不覆写）。
-- **归属** = 该键由哪个声明类定义（`x-cairn-owner`）——**谁用配置谁在自己包里声明**。
-- **默认值** = 声明里给的默认；`—` 表示没有默认值（这时键丢了就报错，见下）。
+- **键** = 点分路径，也是 `config/settings.json` 里的属性名（不展开成嵌套对象）。
+- **默认值** = 声明里给的默认；`—` 表示没有默认值（那种键的值必须由文件给，丢了即报错）。
+- **取值** = `conf("键")`；**声明** = `conf("键", 默认值, type=…, doc=…)`——同一个调用形，
+  差别只在给不给参数。写入方向是单向的：改值改 `config/settings.json`，除非显式 `force=True`。
 
-## 取值三条（不猜、不自动修）
+## 全部配置项（4 条）
 
-| 情形 | 行为 |
-|---|---|
-| 键在、值空 | **报错** |
-| 键丢、有默认值 | **补回来**（只补缺失的键） |
-| 键丢、没默认值 | **报错** |
-
-## 全部配置项（5 条）
-
-| 键 | 类型 | 默认值 | 说明 | 归属 |
+| 键 | 类型 | 默认值 | 说明 | 声明处 |
 |---|---|---|---|---|
-| `core.log.level` | `string` | `WARNING` | 内核日志级别 | `core.conf.params.CoreConf` |
-| `storage.block.max_bytes` | `integer` | `1048576` | 单个块的字节上限，超过即分片（分片 + 索引块） | `core.storage.conf.StorageConf` |
-| `storage.db.tables` | `string` | `tables.yaml` | 索引库表声明所在文件（**结构本体在那**；值写相对本文件的引用名，默认同层级同名） | `core.storage.conf.StorageConf` |
-| `storage.pack.max_bytes` | `integer` | `2147483648` | 单个载体的字节上限，写满即封口（只管封口线，不定槽长） | `core.storage.conf.StorageConf` |
-| `storage.pack.slot_bytes` | `integer` | `65536` | 槽长：载体内的定长分配与定位单位，建载体时写进文件头 | `core.storage.conf.StorageConf` |
+| `core.log.level` | `string` | `WARNING` | 内核日志级别：导入内核时设到 core.* 这族记录器 | `src/core/conf/params.py:16` |
+| `storage.block.max_bytes` | `integer` | `1048576` | 单个块的字节上限，超过即分片（预留，尚未接线） | `src/core/storage/conf.py:39` |
+| `storage.pack.max_bytes` | `integer` | `2147483648` | 单个载体的字节上限，写满即封口（只管封口线，不定槽长） | `src/core/storage/conf.py:33` |
+| `storage.pack.slot_bytes` | `integer` | `512` | 槽长：载体内的定长分配与定位单位，写进文件头 | `src/core/storage/conf.py:32` |
 
 ## 另见
 
-- 用法契约与两个投影的由来：[配置引擎](../architecture/config.md)
-- 值文件与词表分别落在 `config/<hub>/…` 与 `schema/<hub>/…`；总词表是 `schema/settings.json`。
+- 用法契约与形状由来：[配置引擎](../architecture/config.md)
+- 值文件 `config/settings.json`、词表 `config/schema/settings.json`——**跑一遍程序就生成**
+  （引擎退出时落盘，不需要专门的生成脚本）。
 - 格式常量（载体魔数、文件头长度、记录头布局这类改了会坏库的）**故意不进配置**，留在实现处。
 - 想加一条配置：在**用到它的那个包**里声明（例：`src/core/storage/conf.py`），
-  然后跑 `uv run python tools/gen_conf.py` 与 `uv run python tools/docgen.py --write`。
+  再跑一次 `uv run python tools/docgen.py --write` 把这一页更新。

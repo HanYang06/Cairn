@@ -146,9 +146,9 @@
 - 遗留 · 写路径无事务：先落字节、后记目录；块面写两条记录（内容 ＋ 块）同理——
   中途失败可能留下没人指向的内容记录，属孤儿（由巡检补行收编，或将来清）。
 - 遗留 · 更新留下的**旧副本**没有回收（同一身份盘上多份），属压实与空洞回收（设计篇 §12）。
-- 遗留 · `gen_conf.py` 重复跑会**留下曾声明、后已删除的键**（本轮手工清了 `storage.db.tables_file`、
-  `storage.tables.declared` 一类残留）；生成器缺"清理过期键"这一步。
-  **不修的理由**：引擎无法区分"用户自己加的键"与"删除过的键"，而"用户改过的值一个字都不动"是硬口径。
+- 已解决 · ~~`gen_conf.py` 重复跑会留下曾声明、后已删除的键~~：2026-09-30 配置引擎重做后，
+  该工具**已删除**；新引擎用一份"谁登记过"的账区分用户键与过期键——用户自己加的键留着，
+  曾声明后删除的键随下一轮落盘消失（见 `changes.md` 2026-09-30）。
 
 ## 书面语（2026-09-26 立项；全仓已清零，门禁已阻断）
 
@@ -176,7 +176,8 @@
   `docs/reference/glossary.md` + `docs/api/`（四层包自动抽取）+ `.github/workflows/docs.yml`
   + `rules/references/docs.md` + README 重写为稳定门面。
 - [x] **片 2 · 生成补真**：`tools/docgen.py` —— 配置参考页 `docs/reference/config.md`
-  由 `schema/settings.json` **整页生成**（入库，`--check` 防漂移进 CI）；
+  **整页生成**（入库，`--check` 防漂移进 CI；2026-09-30 起取材改为**从声明现算**，
+  不再读入库的副本，见 `changes.md` 那条）；
   `--coverage` 出 docstring 覆盖报告。**规则：能算的就不写、能查的就不写。**
 - [ ] **片 3 · docstring 覆盖补齐（有缺口，勿忘）**：公共类 / 函数 **579 个、117 个没 docstring
   （79.8%）**，因 `show_if_no_docstring: false` 而**从 API 页静默消失**。
@@ -191,25 +192,29 @@
   之后 `main` 的文档变更自动发布到 <https://hanyang06.github.io/cairn/>。自定义域名暂不需要。
 - [ ] **可选**：多语言（zh/en）站点；依赖图 / 类型表等更多"从代码投影"的页面（`docgen.py` 已有落点）。
 
-## 配置引擎（2026-09-29 重定；**实现已清空，待重做**）
+## 配置引擎（2026-09-29 重定；**2026-09-30 已落地**，只余未来项）
 
-> ⚠️ 2026-09-29：旧的 `Cfg` 声明式实现（`core/types/cfg.py`、`core/conf/` 引擎、`core/storage/conf.py`、
-> `tests/core/test_conf.py`）在内核重建里**整条删除**，`src/core/conf/` 只剩包 docstring；
-> `tools/gen_conf.py` 已标"当前不可运行"。这一片的旧条目与旧投影约定见 `changes.md`，
-> **方向改由 `decisions.md`「配置（2026-09-29 重定 + 已定形）」定**，下面只记待做。
+> 形状见 `decisions.md`「配置（2026-09-29 重定 + 已定形）」，用法契约是 `docs/architecture/config.md`
+> （**现行**），落地记录见 `changes.md` 2026-09-30 那条。**不再有 `scope`**：
+> 事务由引擎自己组织（写只记一笔、退出统一落盘）。
 
-按新方向（`conf(key, default, …)` 声明 / `conf(key)` 取值，单文件投影，`scope` 事务批量落盘）：
-
-- [x] **清理**：旧引擎、旧声明、旧测试、`tools/gen_conf.py` 的 import 清单随内核重建一并离线。
-- [ ] **待作者点题后再拆片**：`src/core/conf/` 引擎、`conf` 面、`scope` 事务、单文件值投影、
-  词表（`config/schema/settings.json`）、扫描工具（按 `conf(` 扫全仓）、旧接线修回
-  （`core.log.level`、`PackPolicy` 三键）。
-- [ ] **目录尾巴**：`schema/` → `config/schema/` 的迁移未收尾——`config/schema/*.json` 的 `$id`、
-  `config/settings/**` 的 `$schema`、`config/theme/*.json` 的 `$schema` 仍写旧 `schema/…` 路径；
-  `.github/workflows/ci.yml`（38/42 行）、`tools/docgen.py`（源改成 `schema/settings.json`）、
-  `rules/references/docs.md`、`docs/architecture/config.md` 同待改。
-  **口径改了以后再统一改**（单文件投影会把这批路径整段换掉），别先修一遍再返工。
-- [ ] **遗留**：环境旋钮 `CAIRN_VAULT` / `CAIRN_THEME_DIR` / `CAIRN_SHAPES` 暂不进配置。
+- [x] **引擎**：`core/conf/` 的 `conf` 面（声明 = 取值）、待写批与批内可见、单向写入 + `force`、
+  `sync()`、类型判据（`type(v) is T`、`bool` 不冒充 `int`、`int`→`float` 提升、JSON 值域）、
+  `file=` 引用、`atexit` 落盘、`CAIRN_CONFIG` 旋钮。
+- [x] **投影**：`config/settings.json`（值）＋ `config/schema/settings.json`（词表）；
+  **跑一遍就生成**（不单开生成脚本，旧 `tools/gen_conf.py` 已删）。
+  防漂移由 `tests/core/test_conf_projection.py` 承担（含子进程验证"退出即生成"）。
+- [x] **接线**：`core.log.level` → `core.*` 这族记录器（导入内核即设）；`Kernel` 缺省策略向配置要值。
+- [x] **文档**：`docs/architecture/config.md` 按实现重写、`index.md` 改"现行"、
+  `docs/reference/config.md` 由声明现算重生成；`AGENTS.md` / `guides/development.md` /
+  `rules/references/{docs,ui-boundary}.md` / `storage-design.md` 的旧路径与旧工具名同批改掉。
+- [ ] **未来项（都不阻塞）**：
+  ① **"流写" / 定时窗口落盘**——重启条件见 `decisions.md`（出现"长驻进程 + 外部读者要看到较新文件"）；
+  ② **手写口 / 多来源合并**（个人覆写、部署覆盖）未做；
+  ③ **值投影分文件**：十万行以内不分（作者定的量级标准），真要分再谈坐标；
+  ④ `config/tables.yaml` 是表声明**本体**、待存储那轮经 `storage.db.tables` 接回，
+     届时 `core/storage/tables.py` 的三表常量改成读它；
+  ⑤ 库旋钮 `CAIRN_VAULT` / `CAIRN_THEME_DIR` / `CAIRN_SHAPES` 仍不进配置（随 App / UI 重建再定）。
 
 ## 内核重构（2026-09-22 立项；规格 `docs/architecture/kernel-spec.md`，2026-09-24 核对至 v1.4）
 

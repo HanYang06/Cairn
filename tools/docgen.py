@@ -5,24 +5,23 @@
 
 分工原则（见 `rules/references/docs.md`）：
 
-- **能算的就不写**：配置参考页从 `schema/settings.json`（配置引擎的生成物）生成，不手抄；
+- **能算的就不写**：配置参考页从**声明现算**（`core/conf` 的词表投影），不读入库的那份副本；
 - **能查的就不写**：docstring 覆盖率从 AST 直接量，进 CI 当门禁，防止以后悄悄烂掉。
 
 用法：
 
     uv run python tools/docgen.py --write      # 重新生成 docs/reference/config.md
-    uv run python tools/docgen.py --check      # 防漂移门禁（页面与词表不一致即失败）
+    uv run python tools/docgen.py --check      # 防漂移门禁（页面与声明不一致即失败）
     uv run python tools/docgen.py --coverage   # 只打印 docstring 覆盖率报告（报告模式）
     uv run python tools/docgen.py --coverage --gate   # 同上，并低于阈值即非零退出（门禁模式）
 
-生成的文件自己带 SPDX 头与"勿手改"声明；正文**没有一句是手写的**——表来自词表，
+生成的文件自己带 SPDX 头与"勿手改"声明；正文**没有一句是手写的**——表来自声明，
 说明文字来自本文件的模板常量（改口径改这里，不改正生成物）。
 """
 
 from __future__ import annotations
 
 import ast
-import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,11 +32,17 @@ if TYPE_CHECKING:
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:  # 直接跑脚本时，`tools` 未必在导入路径上
     sys.path.insert(0, str(ROOT))
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
+# 导入即登记：**每加一个带配置的模块，在这里补一行**——参考页的取材就是这些声明现算出来的。
+import core.conf.params  # noqa: E402
+import core.storage.conf  # noqa: E402,F401
+from core.conf import conf  # noqa: E402
 from tools._iosafe import _say  # noqa: E402 — 见上：先补路径再导入
 
-#: 配置词表的单一事实源（配置引擎生成，勿手改）
-SETTINGS_SCHEMA = ROOT / "schema" / "settings.json"
+#: 词表投影（声明现算；入库的那份副本在 `config/schema/settings.json`）
+SETTINGS_SCHEMA = ROOT / "config" / "schema" / "settings.json"
 
 #: 生成出来的参考页
 CONFIG_PAGE = ROOT / "docs" / "reference" / "config.md"
@@ -59,23 +64,16 @@ _PAGE_HEAD = """\
 
 !!! danger "本页由工具生成，请勿手改"
 
-    由 `uv run python tools/docgen.py --write` 生成，表来自 **`schema/settings.json`**
-    （配置引擎的生成物）。改口径请改生成器，改配置请改声明类；
-    `--check` 已进 CI，漂移即失败。**手改这一页会在下一次生成时被抹掉。**
+    由 `uv run python tools/docgen.py --write` 生成，表来自 **配置声明现算**（`core/conf` 的
+    词表投影，副本落在 `config/schema/settings.json`）。改口径请改生成器，改配置请改声明的
+    那个 `conf(...)` 调用点；`--check` 已进 CI，漂移即失败。**手改这一页会在下一次生成时被抹掉。**
 
 ## 怎么读这张表
 
-- **键** = 点分路径，写进 `config/<hub>/…` 的值文件里（用户改过的值永不覆写）。
-- **归属** = 该键由哪个声明类定义（`x-cairn-owner`）——**谁用配置谁在自己包里声明**。
-- **默认值** = 声明里给的默认；`—` 表示没有默认值（这时键丢了就报错，见下）。
-
-## 取值三条（不猜、不自动修）
-
-| 情形 | 行为 |
-|---|---|
-| 键在、值空 | **报错** |
-| 键丢、有默认值 | **补回来**（只补缺失的键） |
-| 键丢、没默认值 | **报错** |
+- **键** = 点分路径，也是 `config/settings.json` 里的属性名（不展开成嵌套对象）。
+- **默认值** = 声明里给的默认；`—` 表示没有默认值（那种键的值必须由文件给，丢了即报错）。
+- **取值** = `conf("键")`；**声明** = `conf("键", 默认值, type=…, doc=…)`——同一个调用形，
+  差别只在给不给参数。写入方向是单向的：改值改 `config/settings.json`，除非显式 `force=True`。
 
 ## 全部配置项（{count} 条）
 
@@ -84,25 +82,23 @@ _PAGE_HEAD = """\
 _PAGE_TAIL = """
 ## 另见
 
-- 用法契约与两个投影的由来：[配置引擎](../architecture/config.md)
-- 值文件与词表分别落在 `config/<hub>/…` 与 `schema/<hub>/…`；总词表是 `schema/settings.json`。
+- 用法契约与形状由来：[配置引擎](../architecture/config.md)
+- 值文件 `config/settings.json`、词表 `config/schema/settings.json`——**跑一遍程序就生成**
+  （引擎退出时落盘，不需要专门的生成脚本）。
 - 格式常量（载体魔数、文件头长度、记录头布局这类改了会坏库的）**故意不进配置**，留在实现处。
 - 想加一条配置：在**用到它的那个包**里声明（例：`src/core/storage/conf.py`），
-  然后跑 `uv run python tools/gen_conf.py` 与 `uv run python tools/docgen.py --write`。
+  再跑一次 `uv run python tools/docgen.py --write` 把这一页更新。
 """
 
 Residue = tuple[str, int, int]
 
 
 def read_settings() -> dict[str, Any]:
-    """读总词表；缺文件直接报错（宁可失败，也不静默出一张空表）。"""
-    if not SETTINGS_SCHEMA.is_file():
-        raise FileNotFoundError(
-            f"找不到配置词表 {SETTINGS_SCHEMA.relative_to(ROOT)}："
-            "先跑 `uv run python tools/gen_conf.py` 重新生成投影"
-        )
-    data: dict[str, Any] = json.loads(SETTINGS_SCHEMA.read_text(encoding="utf-8"))
-    return data
+    """词表（**声明现算**，不读入库副本）：声明一份都不在就直接失败，不静默出空表。"""
+    document = conf.schema_document()
+    if not document.get("properties"):
+        raise FileNotFoundError("没有算到任何配置声明：检查上方 import 清单是否漏了声明模块")
+    return document
 
 
 def _cell(value: Any) -> str:
@@ -120,15 +116,15 @@ def _text(value: Any) -> str:
 
 
 def config_table(settings: dict[str, Any] | None = None) -> str:
-    """由总词表渲染配置表（键 / 类型 / 默认值 / 说明 / 归属）。"""
+    """由词表渲染配置表（键 / 类型 / 默认值 / 说明 / 出处）。"""
     data = settings if settings is not None else read_settings()
     properties: dict[str, Any] = data.get("properties", {})
-    lines = ["| 键 | 类型 | 默认值 | 说明 | 归属 |", "|---|---|---|---|---|"]
+    lines = ["| 键 | 类型 | 默认值 | 说明 | 声明处 |", "|---|---|---|---|---|"]
     for key in sorted(properties):
         spec: dict[str, Any] = properties[key] or {}
         lines.append(
             f"| `{key}` | `{spec.get('type', '—')}` | {_cell(spec.get('default'))} "
-            f"| {_text(spec.get('description', '—'))} | `{_text(spec.get('x-cairn-owner', '—'))}` |"
+            f"| {_text(spec.get('description', '—'))} | `{_text(spec.get('x-cairn-site', '—'))}` |"
         )
     return "\n".join(lines)
 
@@ -219,13 +215,13 @@ def coverage_report() -> str:
 
 
 def _gate() -> int:
-    """防漂移门禁：生成物与词表不一致即失败。"""
+    """防漂移门禁：生成物与声明现算的结果不一致即失败。"""
     expected = render_page()
     actual = current_page()
     if expected == actual:
-        _say(f"[docgen] {CONFIG_PAGE.relative_to(ROOT)} 与 schema/settings.json 一致。")
+        _say(f"[docgen] {CONFIG_PAGE.relative_to(ROOT)} 与声明一致。")
         return 0
-    _say(f"[docgen] {CONFIG_PAGE.relative_to(ROOT)} 已漂移（与 schema/settings.json 不一致）。")
+    _say(f"[docgen] {CONFIG_PAGE.relative_to(ROOT)} 已漂移（与声明现算的结果不一致）。")
     _say("         跑 `uv run python tools/docgen.py --write` 重新生成。")
     return 1
 
@@ -245,7 +241,7 @@ def _write() -> int:
 def main(argv: list[str]) -> int:
     """`--write` 生成 / `--check` 防漂移 / `--coverage` 报告（`--gate` 时按阈值判退出码）。
 
-    未知参数一律报错退出（与 `tools/gen_conf.py` 同口径）：拼错成 `--chek` 之类的写法
+    未知参数一律报错退出（与其余工程工具同口径）：拼错成 `--chek` 之类的写法
     若静默落进默认的防漂移门禁，本意写盘的人只会看到"检查通过"，意图与行为对不上。
     """
     unknown = [arg for arg in argv if arg not in {"--write", "--check", "--coverage", "--gate"}]

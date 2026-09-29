@@ -1,5 +1,5 @@
 {
-  "$schema": "../../schema/theme.json",
+  "$schema": "../schema/theme.json",
   "name": "github-light",
   "dark": false,
   "token": {

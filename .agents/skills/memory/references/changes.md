@@ -3,6 +3,27 @@
 
 # 变更
 
+- 2026-09-30 · 已定 · **配置引擎落地（`conf` 面 + 单文件投影，旧 `Cfg` 那套全撤）**：
+  按作者口径重做（形状见 `decisions.md`「配置（2026-09-29 重定 + 已定形）」，用法契约回写
+  `docs/architecture/config.md`，状态从"草案 / 意图"改成**现行**）。
+  **引擎**：`src/core/conf/types.py`（取值域、`spec_of`/`check_type`：`type(v) is T`、`bool`
+  不冒充 `int`、`int` 值可配 `float` 并按浮点算、只收 JSON 能表示的类型与一层元素）、
+  `schema.py`（词表现算）、`registry.py`（`Config`：待写批、批内可见、单向写入 + `force`、
+  `sync()`、扫描登记 `reduce()`、`file=` 引用、`atexit` 落盘、`CAIRN_CONFIG` 旋钮）、
+  `params.py`（内核自己那组）；`core/exc.py` 补 `ConfigError` 一族五个异常。
+  **接线**：`core/__init__.py` 导入即把 `core.log.level` 设到 `core.*` 这族记录器（不劫持 root）；
+  `core/storage/conf.py` 三条（槽长 / 封口线直接引用 `hub.DEFAULT_*`，分片粒度标预留）；
+  `core/init.py` 的 `Kernel` 缺省策略改为**向配置要值**。
+  **投影**：`config/settings.json`（值）＋ `config/schema/settings.json`（词表）；旧的按包树分文件
+  投影（`config/settings/**`、`config/schema/settings/**`）与 `schema/` 整棵目录清掉；
+  `tables.yaml` 归位 `config/tables.yaml`（表声明本体，待存储那轮接回）。
+  **工具**：`tools/gen_conf.py` **删除**（作者定：跑一遍程序即生成，不单开生成脚本），
+  它原来那两件事分别改由 `tests/core/test_conf_projection.py`（防漂移，含子进程验证退出即生成）
+  与 `tools/docgen.py`（参考页改从**声明现算**渲染）承担；`ci.yml` 的注释块与
+  `pyproject.toml` 给 `gen_conf` 的 mypy 豁免一并摘掉。
+  **测试**：`tests/core/test_conf.py` 55 例（调用形 / 批 / 单向写入 / 手改文件 / 类型判据 /
+  坏文件 / 文件引用 / 路径装配）＋ `test_conf_projection.py` 5 例；六道门禁全绿
+  （273 通过、覆盖率 98%）。
 - 2026-09-29 · 已定 · **片 10：文档回写——事实源按实现重写，"作废主轴"改存档**：
   ① **L0 唯一事实来源 `storage-design.md`** 通篇与代码对齐：术语"桶"全部换 **hub**（64 处）；
   §3 的 ID 字段表改成实现的 `ID`（`value_uuid` `uuid4` ＋ `value_hash` `sha256` ＋ `name` ＋
