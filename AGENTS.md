@@ -110,7 +110,7 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
   来源记在 `skills-lock.json`。
 - 索引分工：
   - `rules` —— **规则总入口**，按场景分发到自己的 `references/`。规则只写这里。
-  - `memory` —— **项目记忆本体**（可变、活文件）：变更 / 决策 / 进度 / TODO。
+  - `memory` —— **项目记忆本体**（可变、活文件）：变更（`references/changes/`，按日期分）/ 决策（`references/decisions/`，按主题分）/ 进度（`progress.md`）。
   - `git-commit` —— 提交规范（Conventional Commits）；来自 `github/awesome-copilot`（MIT）。
   - `skill-creator` —— 写 / 改 skill；来自 `anthropics/skills`（Apache-2.0）。
 - 现状：`rules`、`memory` 为自建骨架（备注待补）；`git-commit`、`skill-creator` 为第三方安装。

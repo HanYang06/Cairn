@@ -4,7 +4,7 @@
 # ui_tools（界面工具层）· 待重建
 
 > **这一层在 2026-09-29 的内核重建里被整条删除**（见
-> `.agents/skills/memory/references/progress.md`「内核重建」）：`src/ui_tools/` 已不存在，
+> `.agents/skills/memory/progress.md`「内核重建」）：`src/ui_tools/` 已不存在，
 > 故本页暂时没有可抽取的代码。
 
 原定位（重建后照这个方向回来）：
