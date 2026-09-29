@@ -19,7 +19,7 @@ uv run pytest                              # 全部测试（含覆盖率；CI �
 uv run pytest tests/core/test_conf.py -x   # 单个测试
 uv run ruff check .                        # lint（--fix 自动修）
 uv run ruff format .                       # 格式化（提交前用 --check）
-uv run mypy src tools                      # 类型检查（strict）
+uv run mypy src tools tests                 # 类型检查（strict）
 uv run python tools/spdx.py --check        # SPDX 头门禁（缺头用 --fix 自动补）
 uv run pre-commit run --all-files          # 提交前全量门禁（SPDX → ruff → mypy）
 ```

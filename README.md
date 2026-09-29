@@ -81,7 +81,7 @@ data = note.create("第一块石头", title="试笔")
 ```powershell
 uv run pytest                      # 全部测试（无需外部服务，全部用临时本地库）
 uv run ruff check .                # lint（--fix 自动修）
-uv run mypy src tools              # 类型检查（strict）
+uv run mypy src tools tests        # 类型检查（strict）
 uv run python tools/spdx.py --check  # SPDX 头门禁
 uv run mkdocs serve                # 本地预览文档站
 ```

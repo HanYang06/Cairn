@@ -24,8 +24,13 @@
 
 ### 3. 类型：按静态语言口径
 
-- `mypy strict = true`，覆盖 `src` 与 `tools`。
+- `mypy strict = true`，覆盖 `src`、`tools` 与 `tests`（门禁命令 `uv run mypy src tools tests`）。
+- `mypy_path = "src"` 指明源码根：不指路时 mypy 把 `core` 当成缺 `py.typed` 的已装包，
+  测试侧的 `core.*` 全成 `Any`，报错数仍在、判据已失效。
 - 未注解、隐式 `Any`、`Any` 返回值、缺泛型参数一律报错。
+- **测试只豁免签名**（`tests.*` 关 `disallow_untyped_defs` / `disallow_incomplete_defs`）：
+  函数体仍在 `check_untyped_defs` 下受检，对 `core.*` 的调用判据一条不少；
+  口径与 ruff 对 `tests/**` 豁免 `ANN` 一致。
 - `Attr[T] = 值` 这类字段由 `tools/mypy_plugin.py` 还原可见类型，**不靠 ignore**。
 - 例外：`id` / `type` / `hash` 是本项目的**领域词汇**，豁免 `A002` / `A003`。
 

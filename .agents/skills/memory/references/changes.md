@@ -3,6 +3,33 @@
 
 # 变更
 
+- 2026-09-30 · 已定 · **类型门禁扩到测试侧（`mypy src tools tests`）**：
+  `pyproject.toml` 加 `mypy_path = "src"`（mypy 不读 pytest 的 `pythonpath`，此前单跑
+  `mypy tests` 会把 `core` 当成缺 `py.typed` 的已装包，测试侧 `core.*` 全为 `Any`、判据失效）
+  与 `tests.*` 的两条签名豁免（`disallow_untyped_defs` / `disallow_incomplete_defs`）；
+  pre-commit 钩子、`ci.yml`、`AGENTS.md`、`README.md`、`docs/guides/development.md`、
+  `rules/references/{quality,commit}.md` 的命令与口径同步。
+  扩面后暴露的 3 处一并修掉：`test_block.py` 的 `Block[None]()`（`Block[T]` 为泛型，裸 `Block()`
+  推不出类型参数）、`test_conf.py` 的 `value: JsonValue`（原标 `object`，与 `check_type` 的值域不符）。
+  验证：`mypy src tools tests` 53 文件 0 错、单跑 `mypy tests` 0 错、`ruff check .` /
+  `ruff format --check .` / SPDX 167 文件 / 书面语 0 命中 / pytest 273 通过（覆盖率 95.13%）全绿。
+- 2026-09-30 · 已定 · **存储声明层改到"ID 面"口径（去数据库化）+ `record` 主键改 `(name, value_uuid)`**：
+  按作者口径把声明层重做（设计篇 §8.1.1–§8.1.4 新写，§8.2 表速览按实现改）：
+  ① **死线**：库里只放 ID 的面（身份 / 指针 / 标签 / 地址坐标），内容的载荷一律不进；
+  ② **列的来源五种**（`ColumnSource`：绑定 identity / 引用 ref / 观测 store / 程序 prog / 派生 digest），
+  绑定列的**列名就是 `ID` 的字段名**、类型由 ID 推出（声明里写错也推得回来）、
+  限定词只许两套凭证（载荷指针只带这两样），**能绑的字段只有落盘子集那四个**；
+  ③ **三类表**：身份表（主语是 ID）/ 关系表（两列引用）/ 登记表（主语不是 ID，如 `hub`）；
+  ④ **`record` 加 `name` 判别列、主键改 `(name, value_uuid)`**（作用域名由引用方写下：
+  块记录 `block`、内容记录 `body`）；`issued` 改名 `birth_time` 与 `ID` 对齐；
+  ⑤ **绑定列与引用列默认建索引**（`resolved_indexes()`，主键开头那列跳过）。
+  **运行时跟改**：`rows.py`（`Location` 加 `name`、SQL 全按 `(name, value_uuid)`、
+  摘行 / 挪行给"不带作用域名"的降级路——顺扫载体读不出作用域名）、`engine.py`（写记录带作用域名）、
+  `patrol.py`（补行给空 name，与 `kind` / `created` 同一种降级）。
+  **一并修掉三个真 bug**：`_qualified` 的 `partition` 解错位（限定词与列名反了）、
+  `index.py` 的 `_column_drift` 还在读列级 `primary_key`（主键挪表级后每张表都被判"主键变了"）、
+  索引比对只认显式声明（绑定列兜底索引被当成"库里多出的索引"）。
+  测试夹具按新形状迁移；六道门禁全绿（273 通过、覆盖率 98%，`mypy src tools tests` 53 文件）。
 - 2026-09-30 · 已定 · **配置引擎落地（`conf` 面 + 单文件投影，旧 `Cfg` 那套全撤）**：
   按作者口径重做（形状见 `decisions.md`「配置（2026-09-29 重定 + 已定形）」，用法契约回写
   `docs/architecture/config.md`，状态从"草案 / 意图"改成**现行**）。
@@ -52,7 +79,7 @@
   **验证**：书面语 0 命中、SPDX 149 文件合规、`mkdocs build --strict` 通过、pytest 213 例全绿。
 
 - 2026-09-29 · 进行中 · **片 9：仓库尾巴——把还指向已删模块的引用清掉，仓库级门禁重新可用**：
-  修之前实测坏的四处：`mypy src tools`（pre-commit 的 mypy 钩子就是这条）卡在两个退役工具上、
+  修之前实测坏的四处：`mypy src tools`（pre-commit 的 mypy 钩子当时就是这条）卡在两个退役工具上、
   `mkdocs build --strict` 因 nav 指向已删的 `docs/review/ocr-2026-09-22.md` 与 `api/app.md`
   抽取不存在的包而中止、`ci.yml` 里 `gen_conf.py --check` 会在运行时 ImportError、
   打标签触发的 `build-windows.yml` 依赖已删的应用入口。逐条处置：

@@ -89,6 +89,12 @@
 
 > ⚠️ 2026-09-29：本条所述实现已随 `refactor/clean-local-code` 整条删除，仅存档；当前主线见「内核重建」。
 
+> 2026-09-30 补记（**当前口径**）：声明层已按"ID 面 + 三类表"重做（见 `changes.md` 同日那条、
+> 设计篇 §8.1.1–§8.1.4）：列的来源分五种、绑定列的列名即 ID 字段名、`record` 主键
+> 改成 `(name, value_uuid)`、绑定列默认建索引。**待接回的只剩**：把 `KERNEL_TABLES`
+> 挪进 `config/tables.yaml`（经 `storage.db.tables` 的文件引用），届时 `core/storage/tables.py`
+> 的三表常量改成读它——接法已定，不必再议形状。
+
 > 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，已落地，v1.3）。
 > 方向见 `decisions.md`「存储重设计」。分支 `feat/storage-redesign`（已并回 `main`）。
 > 旧层（旧 `Bucket` / `Catalog` / `Oid` / `Cid`）与旧篇 `storage.md` **已删除**。

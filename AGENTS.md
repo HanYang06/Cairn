@@ -22,7 +22,7 @@ uv run pytest                             # 全部测试（含覆盖率；CI 用
 uv run pytest tests/core/test_engine.py::test_store_then_load_roundtrip   # 单个测试
 uv run ruff check .                       # lint（--fix 自动修）
 uv run ruff format .                      # 格式化（提交前用 --check）
-uv run mypy src tools                     # 类型检查（strict）
+uv run mypy src tools tests               # 类型检查（strict）
 uv run python tools/spdx.py --check       # SPDX 头门禁（缺头用 --fix 自动补）
 uv run python tools/prose.py              # 书面语门禁（文档/注释不得口语，词典即标准）
 uv run pre-commit run --all-files         # 提交前全量门禁（SPDX -> 书面语 -> ruff -> mypy）

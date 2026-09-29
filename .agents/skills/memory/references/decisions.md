@@ -475,10 +475,20 @@
 - 2026-09-16 · 已定 · UI：精简、自然；色盘照 GitHub，圆角与阴影照苹果；中英统一等宽字体
   （链条首为「更纱黑体 / Sarasa Mono SC」）。
 - 2026-09-16 · 已定 · 只引不传染许可（MIT/BSD/Apache）的依赖；GPL/AGPL 禁用。
-- 2026-09-17 · 已定 · **质量口径 =「企业级-ε」**（企业级略降半档）：mypy strict（`src`+`tools`）、
+- 2026-09-17 · 已定 · **质量口径 =「企业级-ε」**（企业级略降半档）：mypy strict（`src`+`tools`，
+  2026-09-30 起含 `tests`、测试豁免签名，见下条）、
   ruff `select=ALL` + 逐条有理由的 ignore、`ruff format` 强制、warning 零容忍、覆盖率行+分支 ≥80%。
   中文项目现实豁免：中文标点（RUF001-003/D415）、方法级 docstring（D102/105/107）、领域词汇 id/type/hash（A002/A003）。
   标准见 `rules/references/quality.md`，配置事实源在 `pyproject.toml`。
+- 2026-09-30 · 已定 · **测试纳入 mypy 门禁，但豁免函数签名**：门禁命令改为
+  `uv run mypy src tools tests`；`tests.*` 关 `disallow_untyped_defs` 与
+  `disallow_incomplete_defs`，strict 其余保留（`check_untyped_defs` 仍在其中，函数体受检）。
+  判据：单跑 `mypy tests` 实测 318 条，其中 74 条 `import-untyped` 是 mypy 不读 pytest
+  `pythonpath`、把 `core` 认成缺 `py.typed` 的已装包所致（此时测试侧 `core.*` 全为 `Any`，
+  报错数在、判据已失效），237 条是缺 `-> None`，真发现仅 3 条；
+  故 `mypy_path = "src"` 一并写进 `[tool.mypy]`，否则单独跑 `mypy tests` 得到的是静默失效的结果。
+  放行签名后函数体仍逐条受检（`Carrier` 参数类型错、属性名错均复现报出），
+  与 ruff 对 `tests/**` 豁免 `ANN` 同口径；全 strict 扫测试的增量价值不抵常驻摩擦，故不取。
 - 2026-09-17 · 已定 · **代码是唯一事实，文档随代码回写**；旧概念（manifest / space / chunk / 基板 substrate /
   keyed CID）不再复活，架构文档与 `README.md` / `AGENTS.md` 已同步。
 - 2026-09-19 · 已定 · **导入面必须统一、直观**：同一件事的代码收在同一个目录 / 包下、从一处可导入，
