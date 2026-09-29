@@ -74,6 +74,27 @@ def test_slot_span_count_covers_length() -> None:
     assert slot_span(0, 65, SLOT).count == 2
 
 
+@pytest.mark.parametrize(
+    ("offset", "length", "expected"),
+    [
+        (0, 4, 1),  # 起点对齐：4 字节正好占满第 0 槽
+        (1, 4, 2),  # 起点偏了 1：末字节落到第 1 槽，跨两槽
+        (3, 1, 1),  # 末字节仍在第 0 槽内
+        (3, 2, 2),  # 末字节跨到第 1 槽
+        (0, 0, 1),  # 空跨度也至少占 1 槽
+    ],
+)
+def test_slot_span_counts_the_head_offset(offset: int, length: int, expected: int) -> None:
+    """槽数要把槽内偏移算进去，不能只按长度取整。
+
+    起点向下取整之后，末字节落在 ``(head + length - 1) // 槽长`` 号槽里：
+    ``offset=1, length=4, 槽长 4`` 的字节落在 ``[1, 5)``，横跨第 0、1 两槽。
+    只报 1 槽会与 :meth:`CarrierLayout.record_bytes` 的下界不变式
+    （"记录必须越出前 ``槽数 - 1`` 个槽"）矛盾，按槽记账时就是槽数偏差。
+    """
+    assert slot_span(offset, length, 4).count == expected
+
+
 @pytest.mark.parametrize(("offset", "length"), [(-1, 1), (0, -1)])
 def test_slot_helpers_reject_negative(offset: int, length: int) -> None:
     with pytest.raises(SlotError):

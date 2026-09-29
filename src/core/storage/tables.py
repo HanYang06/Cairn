@@ -222,6 +222,14 @@ class TableSpec:
         keys = [column.name for column in self.columns if column.primary_key]
         if len(keys) != 1:
             raise CairnError(f"表 {self.name} 必须恰好一个主键，得到 {keys!r}")
+        index_names = [index.name for index in self.indexes]
+        repeated = {name for name in index_names if index_names.count(name) > 1}
+        if repeated:
+            raise CairnError(
+                f"表 {self.name} 索引重名: {sorted(repeated)}"
+                "（索引名由列组合推出，列组合相同即同名；同一列组合不得声明两次——"
+                "第二条 CREATE INDEX 会被 SQLite 静默跳过，声明的唯一性随之落空）"
+            )
         missing = [name for index in self.indexes for name in index.columns if name not in names]
         if missing:
             raise CairnError(f"表 {self.name} 的索引列不存在: {sorted(set(missing))}")
@@ -327,6 +335,19 @@ def _require(mapping: Mapping[str, Any], key: str, *, where: str) -> Any:
     return mapping[key]
 
 
+def _as_mapping(item: object, *, where: str) -> Mapping[str, Any]:
+    """元素必须是映射，否则立即抛 ``CairnError``。
+
+    手写 ``tables.yaml`` 时很容易写出 ``- foo`` 这类标量；直接把它交给解析函数，
+    会在 ``key not in mapping`` 上抛 ``TypeError``——与本模块"非法即抛 ``CairnError``"
+    的口径不一致，调用方按 ``CairnError`` 捕获就会漏掉这一种。
+    表 / 列 / 索引三级都走这里，写坏了与没写才始终可分。
+    """
+    if not isinstance(item, Mapping):
+        raise CairnError(f"{where} 混进了非映射的项: {item!r}")
+    return item
+
+
 def parse_column(raw: Mapping[str, Any], *, table: str) -> Column:
     """解析一列；未知键一律报错（防拼错后静默失效）。"""
     where = f"表 {table} 的列"
@@ -353,24 +374,31 @@ def parse_column(raw: Mapping[str, Any], *, table: str) -> Column:
 
 
 def parse_index(raw: Mapping[str, Any], *, table: str) -> Index:
-    """解析一个索引。"""
+    """解析一个索引；列名必须是字符串（写错类型不在别处才报）。"""
     where = f"表 {table} 的索引"
     columns = _require(raw, "columns", where=where)
     if not isinstance(columns, (list, tuple)):
         raise CairnError(f"{where} 的 columns 必须是列表")
+    for name in columns:
+        if not isinstance(name, str):
+            raise CairnError(
+                f"{where} 的列名必须是字符串，得到 {name!r}"
+                "（静默转成名字，会让配置写错类型这件事报成非法索引列名，"
+                "错误信息与真实问题对不上）"
+            )
     known = {"columns", "unique", "doc"}
     unknown = sorted(set(raw) - known)
     if unknown:
         raise CairnError(f"{where} 有未知项: {unknown}")
     return Index(
-        columns=tuple(str(name) for name in columns),
+        columns=tuple(columns),
         unique=bool(raw.get("unique", False)),
         doc=str(raw.get("doc", "")),
     )
 
 
 def parse_table(raw: Mapping[str, Any]) -> TableSpec:
-    """解析一张表；项名写错即抛（表 / 列 / 索引三级都查未知项）。"""
+    """解析一张表；**表 / 列 / 索引三级都查**未知项，也三级都查元素是不是映射。"""
     where = "表声明"
     name = str(_require(raw, "name", where=where))
     where = f"表 {name}"
@@ -397,11 +425,17 @@ def parse_table(raw: Mapping[str, Any]) -> TableSpec:
         raise CairnError(f"{where} 的 indexes 必须是列表")
     return TableSpec(
         name=name,
-        columns=tuple(parse_column(item, table=name) for item in raw_columns),
+        columns=tuple(
+            parse_column(_as_mapping(item, where=f"{where} 的列"), table=name)
+            for item in raw_columns
+        ),
         tier=tier,
         rebuild_from=str(raw.get("rebuild_from", "")),
         owner=owner,
-        indexes=tuple(parse_index(item, table=name) for item in raw_indexes),
+        indexes=tuple(
+            parse_index(_as_mapping(item, where=f"{where} 的索引"), table=name)
+            for item in raw_indexes
+        ),
         doc=str(raw.get("doc", "")),
     )
 
@@ -409,14 +443,12 @@ def parse_table(raw: Mapping[str, Any]) -> TableSpec:
 def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[TableSpec, ...]:
     """解析整组声明；**元素不是映射**或表名重复即抛。
 
-    元素类型要在进门处就查：手写 ``tables.yaml`` 时很容易写出 ``- foo`` 这种标量，
-    直接交给 :func:`parse_table` 会在 ``key not in mapping`` 上抛 ``TypeError``——
-    与本模块"非法即抛 ``CairnError``"的口径不一致，调用方按类型捕获就漏掉了。
+    元素类型在进门处**先整体查一遍**（见 :func:`_as_mapping`），再逐个解析：
+    一项一张表，手写 ``- foo`` 这类标量要当场报成 ``CairnError``，而不是漏出 ``TypeError``；
+    先查形状再查内容，免得"第一张表另有毛病"把这一条盖过去。
     """
-    for item in raw:
-        if not isinstance(item, Mapping):
-            raise CairnError(f"表声明里混进了非映射的项: {item!r}（一项一张表）")
-    parsed = tuple(parse_table(item) for item in raw)
+    items = [_as_mapping(item, where="表声明") for item in raw]
+    parsed = tuple(parse_table(item) for item in items)
     names = [table.name for table in parsed]
     duplicated = {name for name in names if names.count(name) > 1}
     if duplicated:

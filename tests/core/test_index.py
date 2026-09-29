@@ -118,6 +118,60 @@ def test_parse_rejects_missing_required_item() -> None:
         parse_tables([{"name": "t", "columns": []}])
 
 
+def test_parse_rejects_scalars_in_the_column_and_index_levels() -> None:
+    """列与索引也各有自己的元素：写成标量要报 `CairnError`，不是 `TypeError`。
+
+    表那一级早就挡住了（`parse_tables` 先整体查一遍形状）；列与索引是同一类写法错误，
+    漏掉就会在 ``key not in mapping`` 上抛 `TypeError`，调用方按 `CairnError` 捕获就漏了。
+    """
+    base = {
+        "name": "t",
+        "tier": "tier1",
+        "rebuild_from": "x",
+        "columns": [{"name": "a", "type": "text", "primary_key": True}],
+    }
+    with pytest.raises(CairnError, match="非映射"):
+        parse_tables([{**base, "columns": [5]}])
+    with pytest.raises(CairnError, match="非映射"):
+        parse_tables([{**base, "indexes": [5]}])
+
+
+def test_parse_rejects_a_non_string_index_column() -> None:
+    """索引列写成数字：当场报类型不对，而不是被静默转成名字再报非法列名。"""
+    with pytest.raises(CairnError, match="必须是字符串"):
+        parse_tables(
+            [
+                {
+                    "name": "t",
+                    "tier": "tier1",
+                    "rebuild_from": "x",
+                    "columns": [{"name": "a", "type": "text", "primary_key": True}],
+                    "indexes": [{"columns": [1]}],
+                }
+            ]
+        )
+
+
+def test_parse_rejects_two_indexes_with_the_same_columns() -> None:
+    """同一列组合声明两次 → 索引同名 → 声明的唯一性会静默落空，故解析口就拒。
+
+    索引名由列组合推出，故两条同列组合的声明共用一个名字：`ddl()` 里第二条
+    `CREATE [UNIQUE] INDEX IF NOT EXISTS` 会被 SQLite 跳过，UNIQUE 约束实际缺失。
+    """
+    with pytest.raises(CairnError, match="索引重名"):
+        parse_tables(
+            [
+                {
+                    "name": "t",
+                    "tier": "tier1",
+                    "rebuild_from": "x",
+                    "columns": [{"name": "a", "type": "text", "primary_key": True}],
+                    "indexes": [{"columns": ["a"]}, {"columns": ["a"], "unique": True}],
+                }
+            ]
+        )
+
+
 def test_table_requires_exactly_one_primary_key() -> None:
     with pytest.raises(CairnError, match="恰好一个主键"):
         TableSpec(

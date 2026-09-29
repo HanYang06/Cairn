@@ -179,11 +179,6 @@ class Storage:
         return f"Storage({self.vault.root})"
 
 
-def _by_id(block: Block) -> str:
-    """排序键：对象身份（时间有序，故即创建顺序）。"""
-    return block.id
-
-
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     """库里有没有这张表（`sqlite_master` 是唯一权威）。"""
     row = conn.execute(

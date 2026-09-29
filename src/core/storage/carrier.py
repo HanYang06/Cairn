@@ -64,11 +64,22 @@ def slot_span(offset: int, length: int, slot_bytes: int) -> SlotRange:
     这是唯一的"字节 → 槽"入口：**槽区间由偏移算出，不由写入方指定**。
     ``head`` 必须留下：只给 (起始槽, 槽数) 会丢掉槽内偏移，
     两条同槽记录的区间将无法区分，读写随即错位。
+
+    槽数**必须把 ``head`` 算进去**：起点取了整之后，末字节落在
+    ``(head + length - 1) // 槽长`` 号槽里，故跨度是 ``ceil((head + length) / 槽长)``。
+    只按 ``length`` 取整会少算：``offset=1``、``length=4``、槽长 4 时字节落在 ``[1, 5)``，
+    横跨第 0、1 两槽，而 ``ceil(4 / 4)`` 只报 1 槽。这与
+    :meth:`CarrierLayout.record_bytes` 的下界不变式（"记录必须越出前 ``槽数 - 1`` 个槽"）
+    自相矛盾，按槽记账时会暴露成真实的槽数偏差。
     """
     if offset < 0:
         raise SlotError(f"偏移非法: {offset}")
+    if length < 0:
+        raise SlotError(f"长度非法: {length}")
+    if slot_bytes < MIN_SLOT_BYTES:
+        raise SlotError(f"槽长非法: {slot_bytes}")
     start, head = divmod(offset, slot_bytes)
-    return SlotRange(start, slots_for(length, slot_bytes), head)
+    return SlotRange(start, max(1, -(-(head + length) // slot_bytes)), head)
 
 
 @dataclass(frozen=True, slots=True)

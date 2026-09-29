@@ -51,7 +51,7 @@ from core.types import (
     now_ms,
 )
 
-from .carrier import CARRIER_MAGIC
+from .carrier import CARRIER_HEADER_BYTES, CARRIER_MAGIC
 from .index import INDEX_NAME, Index, RebuildPlan
 from .io import CarrierFile
 from .record import Record
@@ -268,6 +268,32 @@ def _is_carrier(path: Path) -> bool:
         return False
 
 
+def _pack_used_bytes(path: Path) -> int | None:
+    """载体已用字节数（**只 stat，不打开**）；读不到大小即 ``None``。
+
+    挑选活跃载体只需要"这个文件多大"这一项，而打开载体要读文件头——
+    故这里只 stat。头长用**标准文件头长度**折算：文件头是定长布局，
+    `CarrierLayout.decode_header` 一律给出 `CARRIER_HEADER_BYTES` 长的头，
+    故任何开得出来的载体，其已用字节数都等于文件大小减这个常量。
+    """
+    try:
+        return path.stat().st_size - CARRIER_HEADER_BYTES
+    except OSError:
+        return None
+
+
+def _open_carrier(path: Path) -> CarrierFile | None:
+    """打开载体；打不开（坏文件 / 读不到）即 ``None``，不抛。
+
+    只给**写入路径挑选活跃载体**用：坏掉的载体归巡检记成
+    :attr:`FindingKind.CORRUPT_CARRIER`，不该让一个无关的坏文件把写入挡死。
+    """
+    try:
+        return CarrierFile.open(path)
+    except (OSError, RecordFormatError):
+        return None
+
+
 def _refuse_foreign_packs(root: Path) -> None:
     """建新索引时的护栏：目录里已有载体文件，却**一个都不是本格式** → 拒开。
 
@@ -398,12 +424,32 @@ class Bucket:
         为什么"最满"是确定的答案：写入纪律是"写到满才换"，故手上那个必然是最满的。
         封口线被调大之后可能不止一个载体有空间，此时按同一判据仍然只有一个答案，
         不依赖时间戳，也不依赖名字顺序（名字本就是随机的）。
+
+        两处讲究（评审指出的两条都在这）：
+
+        - **只为挑选而 stat，不为挑选而打开**：本方法在每次写入的路径上
+          （`Vault.put` → `Bucket.append` → 这里），而打开载体要读文件头——
+          桶里载体一多，逐个打开就是 O(载体数) 次文件 I/O。判据"最满"与文件大小同源，
+          故先按大小排序，只有**选中的那个**才真的打开。
+        - **坏载体跳过，不挡写入**：损坏 / 空 / 非本格式的 `.pack` 会让
+          `CarrierFile.open` 抛错，而 `put` 是每次建块的必经之路——让一个无关的坏文件
+          把整个桶写死，与巡检"坏一个不影响其余"的口径相反。坏文件该由
+          :meth:`Vault.patrol` 记成 :attr:`FindingKind.CORRUPT_CARRIER`，不该让写入停摆。
         """
         limit = self.pack_max_bytes
-        candidates = [carrier for carrier in self.packs() if carrier.used_bytes < limit]
-        if not candidates:
-            return self.new_pack()
-        return max(candidates, key=lambda carrier: (carrier.used_bytes, carrier.path.name))
+        candidates: list[tuple[int, str, Path]] = []
+        for path in sorted(self.packs_dir.glob(f"*{PACK_SUFFIX}")):
+            used = _pack_used_bytes(path)
+            if used is None or not 0 <= used < limit:
+                continue  # 读不到大小的、以及写满了的，都不参与挑选
+            candidates.append((used, path.name, path))
+        for _used, _name, path in sorted(
+            candidates, key=lambda item: (item[0], item[1]), reverse=True
+        ):
+            carrier = _open_carrier(path)
+            if carrier is not None:
+                return carrier
+        return self.new_pack()
 
     # ---- 记录 ----
     def append(self, record: Record) -> Placement:
@@ -643,8 +689,8 @@ class Vault:
         """巡检的比对：一次顺扫 ＋ 一遍定位行，两头对齐后给出差异。
 
         对齐口径（"这条行指向的字节还在不在"）：
-        行的坐标与身份与该身份的某次出现完全一致 → 一致；坐标不符但身份对得上 → 改坐标；
-        盘上只有该身份的其他版本 → 行声称的内容没了；一次都没出现 → 内容没了。
+        行的坐标与摘要都与该身份的某次出现完全一致 → 一致；摘要对得上而坐标不符 → 改坐标；
+        盘上只有该身份的其他版本（摘要不符）→ 行声称的内容没了；一次都没出现 → 内容没了。
         同一身份在盘上出现多次本身**不是**差异：更新留下的旧副本要等压实回收（§12），
         它不影响"行指向的那一份是否成立"。
         """
@@ -695,8 +741,10 @@ class Vault:
                     )
                 )
                 continue
-            if any(item.place == place for item in found_at):
-                continue  # 坐标与身份都对得上：一致
+            # 先按**摘要**筛，再比坐标：只比坐标会漏掉"索引被改坏"这一种。
+            # 索引行的摘要与盘上该位置记录的摘要不符时，坐标可能照样对得上
+            # （同一身份的另一份副本恰好落在同一坐标，或行被手改），
+            # 此时这条行声称的内容并不在载体里——巡检正是要比出这件事。
             same = [item for item in found_at if _ident_hash(item) == str(row["value_hash"])]
             if not same:
                 found.append(
@@ -706,11 +754,13 @@ class Vault:
                             bucket=str(row["bucket"]),
                             pack=str(row["pack"]),
                             value_uuid=value_uuid,
-                            detail="载体里只有该身份的其他版本",
+                            detail="载体里只有该身份的其他版本（摘要与行声明的不符）",
                         )
                     )
                 )
                 continue
+            if any(item.place == place for item in same):
+                continue  # 摘要与坐标都对得上：一致
             newest = same[-1]
             found.append(
                 _Difference(

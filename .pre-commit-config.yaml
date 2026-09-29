@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-# 企业级-ε 质量门禁（提交前）：SPDX 头 -> 书面语 -> ruff -> mypy。测试与覆盖率门禁在 CI。
+# SPDX 头 -> 书面语 -> ruff -> mypy。测试与覆盖率门禁在 CI。
 default_install_hook_types: [pre-commit]
 repos:
   - repo: local
@@ -13,7 +13,7 @@ repos:
         language: system
         require_serial: true
 
-      # 书面语：所有文档一律非口语化（词典本体在 tools/prose.py）。只查本次提交的文件。
+      # 所有文档非口语化
       - id: prose
         name: prose (书面语)
         entry: uv run python tools/prose.py
