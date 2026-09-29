@@ -63,6 +63,16 @@ if TYPE_CHECKING:
     from .index import RebuildPlan
 
 
+BODY_POINTER_KEY = "\x00cairn.body_addr"
+"""块记录载荷里指向 body 的**保留键**。
+
+为什么不叫朴素的 ``body_addr``：内容记录的载荷就是业务 body 本身，而 body 由领域决定。
+用一个业务可能用到的普通键当判据，一份形如 ``{"body_addr": "<64 位十六进制>"}`` 的正文
+就会被误判成块记录——去重失效，列举还会整体报错。带上不可打印前缀即"业务数据不可能占用"
+的命名空间（CBOR 文本串允许 NUL，解码照常）。
+"""
+
+
 class BlockStore:
     """块面的存储：一块进、一块出（内部是两条记录）。
 
@@ -104,6 +114,7 @@ class BlockStore:
         """
         block.validate()
         body = block.encode_body()
+        # **内容地址**：实际落盘字节的摘要。同字节只存一份，故它是去重与反查的口径。
         digest = ValueHash.of(body)
         if self._content_of(digest) is None:
             self.vault.put(Record(id=Id.new(body), payload=body), bucket=bucket)
@@ -119,7 +130,11 @@ class BlockStore:
         )
         self.vault.put(Record(id=ident, payload=blob), kind=type_name(block.type), bucket=bucket)
 
-        block.checksum = str(digest)
+        # **块签名按块自己的口径**（`compute_checksum()`，`Block.decode` 读回时也用它）。
+        # 它和上面的内容地址**不必相等**：结构化 body 若没覆写 `body_hash()`，
+        # 签名算的是 `content()`（逻辑内容），而落盘字节是 `to_data()` 的编码——两者不同。
+        # 把内容地址塞进 `checksum` 会让"写完的块"与"读回的块"自称不同的签名，`verify()` 随即失败。
+        block.checksum = block.compute_checksum()
         # 落盘时刻以索引行为准（它是"写进去"这件事的真源），故写完再读回来贴一次：
         # 自己在内存里另算一个 now 只会与行里差那么一毫秒，然后两边都自称是"创建时间"。
         row = self.vault.index.record_row(block.id)
@@ -159,22 +174,32 @@ class BlockStore:
         """这个身份在库里有没有定位行。"""
         return self.vault.index.record_row(str(oid)) is not None
 
+    def iter_block_records(self) -> Iterator[tuple[sqlite3.Row, Record]]:
+        """列举块：交出定位行与**块记录**（载荷＝属性，不含正文）。
+
+        **它并不省正文的读**：判"这一行是不是块记录"必须读该行的载荷
+        （判据是载荷里有 `body_addr`，见模块文档），而内容记录的载荷就是正文本身，
+        故本方法仍会把全库正文读进来再丢掉，代价与 :meth:`iter_blocks` 同级。
+        要正文的入口是 :meth:`fetch` / :meth:`get`。
+
+        把这份代价去掉的前提是"块记录的判据落成索引里的一列"——那是设计篇 §12
+        留给作者的字段裁定之一（`body_addr` 要不要提升成索引列），定下来之前，
+        这里不得声称"列举不读正文"。
+        """
+        rows = self.vault.index.conn.execute("SELECT * FROM record ORDER BY value_uuid").fetchall()
+        for row in rows:
+            record = self.vault.get(str(row["value_uuid"]))
+            if _is_block(record):
+                yield row, record
+
     def iter_blocks(self) -> Iterator[Block]:
-        """遍历全部块：**按索引走**，一个身份一次。
+        """遍历全部块（**连正文一起**）：要元数据请走 :meth:`iter_block_records`。
 
         为什么不是顺扫：同一次身份重写会在载体里留下旧副本（更新即留旧副本，等压实回收），
         顺扫会把同一个身份读出来两次；**索引里的那一行才代表"这个对象现在在哪一份"**。
         行丢了的字节不在这儿兜底——那是巡检与重建的活（`Vault.patrol` / `Vault.repair`）。
-
-        代价写明：``attrs`` 不在索引里（它属于载荷），故每条都要读回记录。
-        要不要把属性投影进库是表声明的字段问题（设计篇 §12）。
         """
-        rows = self.vault.index.conn.execute("SELECT * FROM record ORDER BY value_uuid").fetchall()
-        for row in rows:
-            value_uuid = str(row["value_uuid"])
-            record = self.vault.get(value_uuid)
-            if not _is_block(record):
-                continue  # 内容记录不是块
+        for row, record in self.iter_block_records():
             yield self._finish(self._block_of(record, kind=str(row["kind"])), row)
 
     # ---- 内部 ----
@@ -234,23 +259,23 @@ class BlockStore:
 
 
 def _is_block(record: Record) -> bool:
-    """这条记录是不是**块记录**：载荷里带着 body 地址。
+    """这条记录是不是**块记录**：载荷里带着 body 地址（那个**保留键**）。
 
-    这是本层**载荷格式**的判据（内容记录的载荷就是内容本身，不会有这个字段），
+    这是本层**载荷格式**的判据（内容记录的载荷就是内容本身，不会有这个键），
     也是"重建补回的块行照样认得出是块"的原因——它不依赖索引里的任何一列。
     """
     return _body_pointer(record) is not None
 
 
 def _body_pointer(record: Record) -> ValueHash | None:
-    """块记录载荷里的 ``body_addr``；不是块记录即 ``None``。"""
+    """块记录载荷里的 body 地址；不是块记录即 ``None``。"""
     try:
         raw: Any = decode_canonical(record.payload) if record.payload else None
     except Exception:  # noqa: BLE001 — 内容记录的载荷是任意字节，解不出属正常
         return None
     if not isinstance(raw, dict):
         return None
-    return _digest_or_none(raw.get("body_addr"))
+    return _digest_or_none(raw.get(BODY_POINTER_KEY))
 
 
 def _digest_or_none(value: Any) -> ValueHash | None:
@@ -263,13 +288,29 @@ def _digest_or_none(value: Any) -> ValueHash | None:
         return None
 
 
+def block_fields(record: Record) -> dict[str, Any]:
+    """块记录载荷里的字段（``attrs`` / ``config`` / ``author`` / 指针 / 正文长度）。
+
+    **元数据只看这些**：它们都在块记录里，故取一条块的元数据不必碰它的正文。
+    这说的是"拿到块记录之后"，不是"列举不必读载荷"——判别一行是不是块记录仍要读该行载荷，
+    见 :meth:`BlockStore.iter_block_records` 与设计篇 §12。
+    """
+    return _decode_blob(record.payload)
+
+
 def _blob_of(block: Block, digest: ValueHash) -> dict[str, Any]:
-    """块记录的载荷：随块行单独存的东西 ＋ **指向 body 的地址**。"""
+    """块记录的载荷：随块行单独存的东西 ＋ **指向 body 的地址** ＋ 正文长度。
+
+    ``body_size`` 是为**取长度**服务的投影：正文长度本来能由正文算出，但取元数据时不必为它
+    读一次正文（多媒体块很大），故随块记录存一份。它省掉的是"为长度而读正文"，
+    不等于"列举不读载荷"——判别块记录仍要逐行读载荷。它不在表声明里，属块记录载荷格式的一部分。
+    """
     return {
         "attrs": block.attrs,
         "config": block.config,
         "author": block.author,
-        "body_addr": str(digest),
+        "body_size": block.content_size(),
+        BODY_POINTER_KEY: str(digest),
     }
 
 
@@ -284,4 +325,4 @@ def _decode_blob(payload: bytes) -> dict[str, Any]:
     return {str(key): value for key, value in raw.items()}
 
 
-__all__ = ["BlockStore"]
+__all__ = ["BODY_POINTER_KEY", "BlockStore", "block_fields"]

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from core.conf import conf as engine_conf
-from core.storage import Record
+from core.storage import CarrierFile, Record
 from core.storage.vault import (
     DEFAULT_BUCKET,
     PACKS_DIR,
@@ -34,6 +34,7 @@ from core.types import (
     BucketNotFoundError,
     CorruptObjectError,
     Id,
+    IndexSchemaError,
     ObjectNotFoundError,
     SlotRange,
     StorageError,
@@ -162,6 +163,14 @@ def test_bucket_name_with_a_separator_is_refused(tmp_path: Path) -> None:
     with _vault(tmp_path) as vault:
         for bad in ("../escape", "a/b", "..", "", "a\\b"):
             with pytest.raises(StorageError, match="桶名"):
+                vault.bucket(bad)
+
+
+def test_bucket_name_rejects_windows_reserved_devices(tmp_path: Path) -> None:
+    """Windows 保留设备名不能当目录名：那边它们指向设备而不是普通目录（不区分大小写）。"""
+    with _vault(tmp_path) as vault:
+        for bad in ("CON", "nul", "Com1", "LPT9", "aux.txt"):
+            with pytest.raises(StorageError, match="保留设备名"):
                 vault.bucket(bad)
 
 
@@ -346,6 +355,53 @@ def test_active_picks_the_fullest_carrier_with_room(tmp_path: Path) -> None:
         assert vault.get(str(small.id.value_uuid)) == small  # 索引不受影响
 
 
+def test_active_skips_a_carrier_that_cannot_be_opened(tmp_path: Path) -> None:
+    """坏载体不挡写入：选活跃载体时遇到打不开的文件就跳过，不把整个桶写死。
+
+    `put` 是每次建块的必经之路；让一个残留的坏 / 空 / 非本格式的 `.pack`
+    把桶封死，与巡检"坏一个不影响其余"的口径正好相反。坏文件该由巡检报告，
+    不该让写入停摆。
+    """
+    with _vault(tmp_path) as vault:
+        vault.put(_record(b"good"))
+        junk = vault.bucket().packs_dir / "not-a-carrier.pack"
+        junk.write_bytes(b"")  # 空文件：连魔数都没有
+
+        again = _record(b"again")
+        place = vault.put(again)  # 写得不该被坏文件挡住
+
+        assert place.pack != junk.name
+        assert vault.get(str(again.id.value_uuid)) == again
+        assert vault.patrol().counts()["corrupt_carrier"] == 1  # 坏文件仍在，照实报告
+
+
+def test_active_opens_only_the_carrier_it_picks(tmp_path: Path, monkeypatch) -> None:
+    """挑选活跃载体只为取大小，不该把桶里每个载体都打开。
+
+    `active()` 在每次写入的路径上（`put` → `append` → 这里）；逐个体开就是
+    O(载体数) 次文件 I/O。判据"有空间的最满者"与文件大小同源，
+    故先按大小排序，只有选中的那个才真的打开。
+    """
+    with _vault(tmp_path, pack_max_bytes=1) as vault:
+        for payload in (b"a" * 50, b"b", b"c"):
+            vault.put(_record(payload))
+        bucket = Bucket.open(vault.root / DEFAULT_BUCKET, pack_max_bytes=1 << 20)
+        assert len(bucket.packs()) == 3  # 桶里确实有三个载体
+
+        real_open = CarrierFile.open
+        opened: list[str] = []
+
+        def spy(path: Path | str) -> CarrierFile:
+            """计一次打开，并**照旧真的打开**——不然侦测本身就把行为改掉。"""
+            opened.append(str(path))
+            return real_open(path)
+
+        monkeypatch.setattr(CarrierFile, "open", staticmethod(spy))
+        bucket.active()
+
+        assert len(opened) == 1
+
+
 def test_slot_bytes_come_from_the_carrier_not_from_config(tmp_path: Path) -> None:
     """槽长随载体走：读的时候按文件头解释偏移，不与当前配置对账（§5.5）。"""
     with _vault(tmp_path) as vault:
@@ -508,6 +564,29 @@ def test_patrol_prefers_the_copy_the_row_points_at(tmp_path: Path) -> None:
         assert vault.patrol().clean  # 旧副本是压实的活儿，不是索引与真源不一致
 
 
+def test_patrol_reports_a_row_whose_digest_disagrees_with_the_carrier(
+    tmp_path: Path,
+) -> None:
+    """坐标对得上、摘要对不上 → 必须报出来，不能当成一致。
+
+    只比坐标会漏掉这一种：索引行声称的那份内容并没有落在它指的位置上
+    （行被改坏 / 写错），而"把索引库与它声称的真源比一遍"正是巡检的职责。
+    """
+    with _vault(tmp_path) as vault:
+        record = _record(b"payload")
+        vault.put(record)
+        vault.index.conn.execute(
+            "UPDATE record SET value_hash = ? WHERE value_uuid = ?",
+            (str(ValueHash.of(b"something else")), str(record.id.value_uuid)),
+        )
+        vault.index.commit()
+
+        report = vault.patrol()
+
+        assert report.counts() == {"missing_record": 1}
+        assert report.fixable == ()  # 行声称的内容在载体里找不到：重建修不了
+
+
 def test_patrol_reports_a_corrupt_carrier_and_keeps_scanning(tmp_path: Path) -> None:
     """坏点即停是重建的规矩；巡检要接着看完——"还坏在哪儿"正是它要回答的问题。"""
     with _vault(tmp_path, pack_max_bytes=1) as vault:
@@ -525,6 +604,73 @@ def test_patrol_reports_a_corrupt_carrier_and_keeps_scanning(tmp_path: Path) -> 
         assert "missing_row" not in kinds  # 好载体那一条没有差异
         assert vault.get(str(good.id.value_uuid)) == good
         assert vault.repair() == ()  # 坏点修不了
+
+
+def test_patrol_reports_a_carrier_that_is_not_a_carrier_at_all(tmp_path: Path) -> None:
+    """**打开载体**这一步坏掉也要记成发现，不能让巡检抛出去。
+
+    `CarrierFile.open` 会校验文件头魔数：文件是空的、或被别的程序写了垃圾、
+    或根本不是载体——异常在那里就抛了。只包住 `scan()` 的话，一个坏文件就会
+    让整个巡检崩掉，而"还坏在哪儿"正是巡检要回答的问题。
+    """
+    with _vault(tmp_path) as vault:
+        good = _record(b"good")
+        vault.put(good)
+        junk = vault.bucket().packs_dir / "not-a-carrier.pack"
+        junk.write_bytes(b"")  # 空文件：魔数都没有
+
+        report = vault.patrol()
+
+        assert report.counts() == {"corrupt_carrier": 1}
+        assert report.findings[0].pack == "not-a-carrier.pack"
+        assert vault.get(str(good.id.value_uuid)) == good  # 好载体照旧读得出来
+
+
+def test_open_closes_the_connection_when_align_refuses(tmp_path: Path, monkeypatch) -> None:
+    """对齐失败时**必须把连接关掉**：库结构不符是用户真会撞到的路径，
+    反复失败不能一次漏一个 sqlite 连接。"""
+    with _vault(tmp_path) as vault:
+        vault.index.conn.execute('DROP INDEX "idx_record_value_hash"')
+        vault.index.conn.execute('ALTER TABLE "record" DROP COLUMN "value_hash"')  # 补不上的列
+        vault.index.commit()
+        root = vault.root
+
+    closed: list[object] = []
+    real_close = Vault.close
+
+    def spy(self: Vault) -> None:
+        """记录一次关闭，并**照旧真的关**——不然侦测本身就把连接漏掉、测试反而报资源警告。"""
+        closed.append(self)
+        real_close(self)
+
+    monkeypatch.setattr(Vault, "close", spy)
+
+    with pytest.raises(IndexSchemaError):
+        Vault.open(root)  # 破坏性差异没授权 → align 抛
+
+    assert len(closed) == 1
+
+
+def test_repaired_rows_get_a_sane_timestamp(tmp_path: Path) -> None:
+    """补出来的行取不到落盘时刻（记录头里没有时间）→ 落 `now_ms()`，**不是 0**。
+
+    时间列上有索引、也参与排序；写 0 会把这些行堆到纪元去。
+    """
+    with _vault(tmp_path) as vault:
+        record = _record(b"x")
+        vault.put(record, kind="notedata")
+        vault.index.conn.execute(
+            "DELETE FROM record WHERE value_uuid = ?", (str(record.id.value_uuid),)
+        )
+        vault.index.commit()
+
+        assert len(vault.repair()) == 1
+
+        row = vault.index.record_row(str(record.id.value_uuid))
+        assert row is not None
+        assert int(row["created"]) > 0
+        assert int(row["updated"]) > 0
+        assert row["issued"] == record.id.issued  # 签发时刻仍从记录头还原
 
 
 def test_repair_is_idempotent(tmp_path: Path) -> None:

@@ -190,7 +190,13 @@ class ConfEngine:
 
         默认引用名就是同层级的 ``<字段名>.<类型>``（``tables.yaml``），
         故写起来像 ``import``，搬整棵配置树也不会失效。
-        **只收相对引用**：绝对路径绑死本机目录，配置文件是要跟仓走的。
+
+        两条红线：
+
+        - **只收相对引用**：绝对路径绑死本机目录，配置文件是要跟仓走的；
+        - **不许跑出仓根**：``../`` 允许（跨包引用同仓内文件是合理用途），
+          但解析后必须仍落在仓内——``../../<仓外>`` 这种穿越要拦，
+          否则"跟仓走"这句话就不成立，读到的内容也不再是仓的一部分。
         """
         text = value.replace("\\", "/").strip()
         if not text:
@@ -200,7 +206,14 @@ class ConfEngine:
             raise ConfigValueError(
                 f"被引用配置文件必须写相对引用（绝对路径搬不动仓）：{item.key} = {value!r}"
             )
-        return self.config_path(self._folder_of(item)).parent / candidate
+        base = self.config_path(self._folder_of(item)).parent
+        target = (base / candidate).resolve()
+        root = self.root.resolve()
+        if target != root and not target.is_relative_to(root):
+            raise ConfigValueError(
+                f"被引用配置文件跑出仓根了（引用要跟仓走，不能指到仓外）：{item.key} = {value!r}"
+            )
+        return base / candidate
 
     def _referenced(self, item: CfgItem, value: str) -> Any:
         """读被引用文件（**值就是这个文件的内容**）；缺失或读不出即报错，不猜。
@@ -449,10 +462,24 @@ class ConfEngine:
 
         写入前过一遍 :meth:`_clash`：路径上压着别人的文件时同样**拒写**——
         「绝不覆盖别人的文件」不是只有批量写才守；单值写也同样整份重写目标文件。
+
+        **读写口径对称**：文件引用的项走**同一处**校验（:meth:`reference_path` 先试算一遍），
+        而不是另立一条"只判非空"的宽松口径——两处口径分家，就会漏出
+        `set(绝对路径)` 能落盘、`get()` 却抛错的"写得进、读不出"。
+
+        有意的**不对称呼叫**：这里只校验**形式**（相对引用、落在仓内），不查被引用文件
+        是否存在、能否解析。允许先登记引用名、后补文件（那份文件本来就是手写的），
+        存在性留给读取侧报错——`get()` 说得很清楚是"不存在"还是"解析失败"。
         """
         declared = _declared_map().get(key)
         if declared is None:
             raise ConfigKeyError(f"配置项未登记，不能写：{key}")
+        if declared.file_type:
+            if not isinstance(value, str):
+                raise ConfigValueError(
+                    f"文件引用的项要写引用名（非空字符串），得到 {value!r}：{key}"
+                )
+            self.reference_path(declared, value)  # 试算：绝对路径 / 跑出仓根在这里就被拒
         path = self.config_path(self._folder_of(declared))
         self._write_value_file(path, {**self._read_file(path), key: value})
         self._cache.pop(key, None)

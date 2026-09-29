@@ -15,12 +15,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from core.storage import Block, BlockStore, Record
+from core.storage import Block, BlockStore, Body, Record, canonical
 from core.storage.block import decode_canonical
+from core.storage.blocks import BODY_POINTER_KEY
 from core.types import CorruptObjectError, KindMismatchError, ObjectNotFoundError, ValueHash
 
 if TYPE_CHECKING:
@@ -83,7 +84,7 @@ def test_a_block_is_two_records(tmp_path: Path) -> None:
         assert payloads.count(block.encode_body()) == 1  # 内容记录：载荷就是编码后的 body
 
         blob = decode_canonical(_block_record_of(store, block.id).payload)
-        assert blob["body_addr"] == digest  # 指针在块记录的载荷里
+        assert blob[BODY_POINTER_KEY] == digest  # 指针在块记录的载荷里
         assert blob["attrs"] == {"title": "x"}
         # 只有内容记录那一行的 value_hash 等于 body 地址
         assert len(_records_with_hash(store, digest)) == 1
@@ -134,7 +135,7 @@ def test_only_block_records_carry_a_body_pointer(tmp_path: Path) -> None:
         assert block.id not in found
 
         blob = decode_canonical(_block_record_of(store, block.id).payload)
-        assert "body_addr" in blob
+        assert BODY_POINTER_KEY in blob
         assert [item.id for item in store.iter_blocks()] == [block.id]  # 内容记录不算块
 
 
@@ -207,6 +208,62 @@ def test_missing_content_row_is_reported_and_repair_restores_it(tmp_path: Path) 
         assert len(store.vault.repair()) == 1
 
         assert store.fetch(block.id).read() == b"recoverable"
+
+
+def test_a_body_that_looks_like_a_blob_is_not_taken_for_a_block(tmp_path: Path) -> None:
+    """业务 body 长成"像块记录载荷"的样子也**不许**被当成块记录。
+
+    判据用的是**保留键**（带不可打印前缀），业务数据占用不到；否则这种正文会让去重失效、
+    并让 `iter_blocks` / `ids()` 整体报错——一条合法数据打断整份列举。
+    """
+    body = canonical({"body_addr": "ab" * 32})  # 一份"长得像"的正文
+    with _store(tmp_path) as store:
+        block = Block(body=body, type="blob")
+        store.store(block)
+        again = Block(body=body, type="blob")
+        store.store(again)  # 同内容再去重：内容记录没被误判成块
+
+        copies = [
+            record
+            for _place, record in store.vault.records()
+            if record.id.value_hash == _body_addr(block)
+        ]
+        assert len(copies) == 1
+        assert {item.id for item in store.iter_blocks()} == {block.id, again.id}
+
+
+class PanelBody(Body):
+    """**两套口径不同**的 body（像 `CanvasBody`）：`content()` 是逻辑内容、`to_data()` 还带状态。
+
+    它逼出"块签名"与"内容地址"的分工：签名按 `content()`（`body_hash()`），
+    落盘字节是 `to_data()` 的编码——把两者混成一个值，写完的块与读回的块就会自称不同的签名。
+    """
+
+    def __init__(self, value: int = 0) -> None:
+        self.value = value
+        self.hash = ""
+        self.refresh()
+
+    def content(self) -> Any:
+        return {"value": self.value}
+
+    def to_data(self) -> Any:
+        return {"value": self.value, "digest": self.hash}
+
+
+def test_checksum_follows_the_block_contract_not_the_payload(tmp_path: Path) -> None:
+    """块签名按块自己的口径算（`compute_checksum()`），**不是**内容地址。
+
+    结构化 body 若没覆写 `body_hash()`，签名算的是 `content()`、落盘字节是 `to_data()` 的编码，
+    两者不同；把内容地址塞进 `checksum` 会让 `verify()` 直接失败。
+    """
+    with _store(tmp_path) as store:
+        block = Block(body=PanelBody(1), type="blob")
+        store.store(block)
+
+        assert block.checksum == block.compute_checksum()  # 块签名
+        assert block.checksum != _body_addr(block)  # 内容地址是另一回事
+        assert store.fetch(block.id).verify()  # 读回自校验成立
 
 
 def test_repaired_block_rows_are_still_recognised_as_blocks(tmp_path: Path) -> None:

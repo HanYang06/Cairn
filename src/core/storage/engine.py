@@ -24,10 +24,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Self
 
-from core.types import ObjectInfo, type_name
+from core.types import ObjectInfo, ObjectNotFoundError, type_name
 
 from .block import Block
-from .blocks import BlockStore
+from .blocks import BlockStore, block_fields
 from .table import Table, create_table
 
 if TYPE_CHECKING:
@@ -46,6 +46,8 @@ class Storage:
     def __init__(self, blocks: BlockStore) -> None:
         self.id = "storage"
         self.blocks = blocks
+        self._tables: set[str] = set()
+        """本实例已经确认存在的领域表（免得每次取句柄都重跑一遍建表）。"""
 
     # ---- 生命周期 ----
     @classmethod
@@ -95,32 +97,74 @@ class Storage:
         self.vault.index.commit()
 
     def ids(self) -> Iterator[str]:
-        """遍历全部**对象**身份（内容记录不是对象，不在此列）。"""
-        for block in self.blocks.iter_blocks():
-            yield block.id
+        """遍历全部**对象**身份（内容记录不是对象，不在此列）。
+
+        **并不省正文的读**：判别"这一行是不是块记录"必须读该行载荷，而内容记录的载荷
+        就是正文本身，故本方法会把全库正文读进来再丢掉——与
+        :meth:`BlockStore.iter_block_records` 同一代价。要免掉它，得先把"块记录判据
+        落成索引里的一列"（设计篇 §12 的字段裁定）。
+        """
+        for row, _record in self.blocks.iter_block_records():
+            yield str(row["value_uuid"])
 
     def info_of(self, oid: str) -> ObjectInfo:
-        """取对象的中立视图（类型 / 标题 / 标签 / 时间）。"""
-        return _info_of(self.blocks.fetch(str(oid)))
+        """取对象的中立视图（类型 / 标题 / 标签 / 时间）——只读该对象的块记录载荷，不含正文。"""
+        row = self.vault.index.record_row(str(oid))
+        if row is None:
+            raise ObjectNotFoundError(str(oid))
+        return self._info_of_row(row)
 
     def infos(self) -> list[ObjectInfo]:
         """**批量**取中立视图。
 
-        ``attrs`` 不在索引里（它属于载荷），故整表列举必然要读回每条记录——
-        这是"索引只放能被快速筛出来的东西"的直接代价，换来的是索引不必跟着属性走样。
+        ``attrs`` / ``author`` 在块记录载荷里、``kind`` 与时间在定位行里，故**属性**不必碰正文；
+        正文长度随块记录存了一份（`body_size`）也是为这件事。但逐行判别"是不是块记录"要读
+        该行载荷，而内容记录的载荷就是正文本身——故本方法仍会把全库正文读进来再丢掉
+        （见 :meth:`BlockStore.iter_block_records`）。**要正文请走** :meth:`fetch`。
         排序按身份：身份是时间有序的，故这一序就是创建顺序（旧实现的表也是这么排的）。
         """
-        return [_info_of(block) for block in sorted(self.blocks.iter_blocks(), key=_by_id)]
+        return [self._info_of_row(row) for row, _record in self.blocks.iter_block_records()]
+
+    def _info_of_row(self, row: sqlite3.Row) -> ObjectInfo:
+        """定位行 ＋ 块记录载荷 → 中立视图。
+
+        载荷里**没有** `body_size`（本次改动之前写下的块）时退回到读一次块——
+        宁可慢这一条，也不把"长度未知"伪造成 0。
+        """
+        record = self.vault.get(str(row["value_uuid"]))
+        blob = block_fields(record)
+        size = blob.get("body_size")
+        if not isinstance(size, int):
+            return _info_of(self.blocks.fetch(str(row["value_uuid"])))
+        return _info_of_parts(
+            oid=str(row["value_uuid"]),
+            kind=str(row["kind"]),
+            attrs=dict(blob.get("attrs") or {}),
+            author=str(blob.get("author") or ""),
+            size=size,
+            created=int(row["created"]),
+            updated=int(row["updated"]),
+        )
 
     # ---- 逃生口：上层不 import sqlite ----
     def table(self, name: str, **columns: str) -> Table:
         """按需建一张**领域表**并返回句柄：``storage.table("relation", id="TEXT PRIMARY KEY")``。
 
-        建表在这里发生（只此一次），且与新索引库共用连接；表结构由调用方给出、经白名单校验。
+        两条纪律（评审指出的两条都在这）：
+
+        - **建表只在本实例第一次取这张表时发生**，之后取句柄是纯读操作——
+          调用方（如 `feature/shared/relation.py`）每次读写都传 ``columns``，
+          若每次都建表 + 提交，就等于把 DDL 与提交放回了读写路径（§8.4 明令不许）；
+        - **不额外提交**：只有真建了表才提交一次。否则调用方尚未提交的写入会被旁路提交，
+          回滚就救不回来了。
+        列的声明以第一次为准：同一实例里再传一套不同的列不会改结构（改结构是显式动作）。
         """
-        if columns:
-            create_table(self.vault.index.conn, name, columns)
-            self.commit()
+        if columns and name not in self._tables:
+            existed = _table_exists(self.vault.index.conn, name)
+            if not existed:
+                create_table(self.vault.index.conn, name, columns)
+                self.commit()
+            self._tables.add(name)
         return Table(self.vault.index.conn, name)
 
     def query(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> list[sqlite3.Row]:
@@ -128,18 +172,24 @@ class Storage:
         return list(self.vault.index.conn.execute(sql, list(params)).fetchall())
 
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> int:
-        """写语句（应急口，口径同 :meth:`query`）。"""
+        """写语句（应急口，口径同 :meth:`query`）。
+
+        **不隐式提交**——与 :meth:`table` 同一纪律：存储的写入口都由调用方
+        `commit()` 收口；一条语句一个提交点，会让"回滚"在不同调用路径上表现不一。
+        """
         cursor = self.vault.index.conn.execute(sql, list(params))
-        self.commit()
         return int(cursor.rowcount)
 
     def __repr__(self) -> str:
         return f"Storage({self.vault.root})"
 
 
-def _by_id(block: Block) -> str:
-    """排序键：对象身份（时间有序，故即创建顺序）。"""
-    return block.id
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    """库里有没有这张表（`sqlite_master` 是唯一权威）。"""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone()
+    return row is not None
 
 
 def _info_of(block: Block) -> ObjectInfo:
@@ -148,18 +198,39 @@ def _info_of(block: Block) -> ObjectInfo:
     ``author`` 是块的**顶层字段**（不在 ``attrs`` 里），故这里读块字段；
     ``title`` / ``tags`` / ``mime`` 是属性，从 ``attrs`` 取。
     """
-    attrs = block.attrs
-    return ObjectInfo(
+    return _info_of_parts(
         oid=block.id,
-        type=type_name(block.type),
-        mime=attrs.get("mime"),
+        kind=block.type,
+        attrs=block.attrs,
+        author=str(block.author or ""),
         size=block.size,
         created=block.created,
         updated=block.updated,
+    )
+
+
+def _info_of_parts(  # noqa: PLR0913 — 视图字段本就这么多，收成一个对象只是换个壳
+    *,
+    oid: str,
+    kind: Any,
+    attrs: dict[str, Any],
+    author: str,
+    size: int,
+    created: int,
+    updated: int,
+) -> ObjectInfo:
+    """中立视图的装配（单件与列举共用一处，免得两条路径给出不同形状的视图）。"""
+    return ObjectInfo(
+        oid=oid,
+        type=type_name(kind),
+        mime=attrs.get("mime"),
+        size=size,
+        created=created,
+        updated=updated,
         title=attrs.get("title"),
         tags=_tags_of(attrs.get("tags")),
         seq=1,
-        author=str(block.author or ""),
+        author=author,
     )
 
 

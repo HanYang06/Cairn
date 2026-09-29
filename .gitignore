@@ -42,6 +42,9 @@ site/
 !.vscode/spdx.code-snippets
 !.vscode/templates/
 
+# 本地工具
+.workbuddy/
+
 # 本地数据 / 密钥
 .env
 *.local

@@ -7,8 +7,8 @@
 
 - **配置文件**（`config/settings/core/storage/conf.json` 的 ``storage.db.tables``）是**声明本体**：
   人写得出来、改得动、评审时一眼读完，不必读 Python；
-- **本模块**只做三件事：把配置描述解析成 :class:`Table`（**顺带校验，非法即抛**）、
-  编译成建表与建索引语句（:meth:`Table.ddl`）、供索引库做对比与处置；
+- **本模块**只做三件事：把配置描述解析成 :class:`TableSpec`（**顺带校验，非法即抛**）、
+  编译成建表与建索引语句（:meth:`TableSpec.ddl`）、供索引库做对比与处置；
 - **源码内不出现建表 SQL**：方言只出现在编译器一处。
 
 配置里那一项是**文件引用**：它的值是相对引用名（默认 ``tables.yaml``，同层级），
@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -27,7 +28,7 @@ import yaml
 from core.types.errors import CairnError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
 _IDENT_ALLOWED = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
@@ -74,10 +75,13 @@ class Owned(Enum):
     """领域增量：挂载该域时才对齐。"""
 
 
-def _check_ident(value: str, *, what: str) -> str:
+def check_ident(value: str, *, what: str) -> str:
     """标识符校验：小写字母 / 数字 / 下划线，且不以数字开头。
 
     表名与列名会进 SQL（哪怕是从配置编译来的），故在**解析口**就卡死。
+
+    **领域表与内核声明表共用这一处**：两者落在同一个索引库里，规则分家就会漂移成
+    "创建得出、声明校验不过"——`core/storage/table.py` 的 `create_table` 也走这里。
     """
     if not value or value[0].isdigit() or not set(value) <= _IDENT_ALLOWED:
         raise CairnError(f"非法{what}: {value!r}（只允许小写字母 / 数字 / 下划线，且不以数字开头）")
@@ -99,7 +103,7 @@ class Column:
 
     def __post_init__(self) -> None:
         """校验：标识符合法；主键必然非空；默认值只收标量。"""
-        _check_ident(self.name, what="列名")
+        check_ident(self.name, what="列名")
         if self.primary_key and not self.not_null:
             object.__setattr__(self, "not_null", True)  # 主键非空：由声明推出，不必手写
         if self.default is not None and not isinstance(self.default, (str, int, float, bool)):
@@ -118,7 +122,7 @@ class Column:
         if self.unique:
             parts.append("UNIQUE")
         if self.default is not None:
-            parts.append(f"DEFAULT {_literal(self.default)}")
+            parts.append(f"DEFAULT {default_literal(self.default)}")
         return " ".join(parts)
 
     def to_config(self) -> dict[str, Any]:
@@ -148,6 +152,21 @@ class Column:
         }
 
 
+def index_name(table: str, columns: Iterable[str]) -> str:
+    """索引名：``idx_<表>_<列>…``（由表名与列组合推出，不手写，免漂移）。
+
+    **必须带表名**：SQLite 的索引名是**整库唯一**的，只由列组合推出时，两张表声明
+    同一列组合即撞名，后一条 ``CREATE INDEX IF NOT EXISTS`` 按名字判定为"已存在"
+    而**静默跳过**——声明的唯一性随之落空，比对又永远把它报成缺索引
+    （库卡在"对齐后仍有差异"，等于打不开）。
+
+    带表名仍不足以完全免撞：表名与列名同用 ``_`` 分隔，存在连接歧义
+    （表 ``a`` 的列 ``b, c`` 与表 ``a_b`` 的列 ``c`` 同名），故 :func:`parse_tables`
+    另做一次**跨表**唯一性校验，把这种写法在解析口拦下。
+    """
+    return f"idx_{table}_{'_'.join(columns)}"
+
+
 @dataclass(frozen=True, slots=True)
 class Index:
     """一个索引：列组合 + 是否唯一。"""
@@ -161,20 +180,18 @@ class Index:
         if not self.columns:
             raise CairnError("索引至少要有一列")
         for name in self.columns:
-            _check_ident(name, what="索引列名")
+            check_ident(name, what="索引列名")
         if len(set(self.columns)) != len(self.columns):
             raise CairnError(f"索引列重复: {self.columns!r}")
 
-    @property
-    def name(self) -> str:
-        """索引名由列组合推出（不手写，免漂移）。"""
-        return f"idx_{'_'.join(self.columns)}"
-
-    def clause(self) -> str:
-        """编译成建索引语句（``{table}`` 由调用方填表名）。"""
+    def clause(self, table: str) -> str:
+        """编译成建索引语句；表名由调用方给（索引名含表名，故它是编译的输入之一）。"""
         unique = "UNIQUE " if self.unique else ""
         columns = ", ".join(f'"{name}"' for name in self.columns)
-        return f'CREATE {unique}INDEX IF NOT EXISTS "{self.name}" ON "{{table}}" ({columns})'
+        return (
+            f'CREATE {unique}INDEX IF NOT EXISTS "{index_name(table, self.columns)}"'
+            f' ON "{table}" ({columns})'
+        )
 
     def to_config(self) -> dict[str, Any]:
         """写成配置形状。"""
@@ -191,7 +208,7 @@ class Index:
 
 
 @dataclass(frozen=True, slots=True)
-class Table:
+class TableSpec:
     """一张表：名字、列、索引、重建档、归属、说明。"""
 
     name: str
@@ -208,7 +225,7 @@ class Table:
 
         档三**不得**写重建来源、档一 / 档二**必须**写：含糊的重建档等于没有档。
         """
-        _check_ident(self.name, what="表名")
+        check_ident(self.name, what="表名")
         if not self.columns:
             raise CairnError(f"表 {self.name} 至少要有一列")
         names = [column.name for column in self.columns]
@@ -218,6 +235,14 @@ class Table:
         keys = [column.name for column in self.columns if column.primary_key]
         if len(keys) != 1:
             raise CairnError(f"表 {self.name} 必须恰好一个主键，得到 {keys!r}")
+        index_names = [index_name(self.name, index.columns) for index in self.indexes]
+        repeated = {name for name in index_names if index_names.count(name) > 1}
+        if repeated:
+            raise CairnError(
+                f"表 {self.name} 索引重名: {sorted(repeated)}"
+                "（索引名由表名与列组合推出，列组合相同即同名；同一列组合不得声明两次——"
+                "第二条 CREATE INDEX 会被 SQLite 静默跳过，声明的唯一性随之落空）"
+            )
         missing = [name for index in self.indexes for name in index.columns if name not in names]
         if missing:
             raise CairnError(f"表 {self.name} 的索引列不存在: {sorted(set(missing))}")
@@ -235,8 +260,23 @@ class Table:
         """编译成建表语句与建索引语句（第一条是建表）。"""
         columns = ", ".join(column.clause() for column in self.columns)
         statements = [f'CREATE TABLE IF NOT EXISTS "{self.name}" ({columns})']
-        statements.extend(index.clause().format(table=self.name) for index in self.indexes)
+        statements.extend(index.clause(self.name) for index in self.indexes)
         return tuple(statements)
+
+    def add_column_ddl(self, column: Column) -> str | None:
+        """给**已存在的**表补一列：``ALTER TABLE … ADD COLUMN``；补不上则 ``None``。
+
+        为什么需要它：``ddl()`` 的第一条是 ``CREATE TABLE IF NOT EXISTS``——表已存在时
+        它是空操作，**不会**补上后来声明的列。缺这一条，声明里加一列就会让库打不开
+        （对齐后仍有差异）。
+
+        SQLite 的 ``ADD COLUMN`` 有三条限制：**不能是主键、不能带 UNIQUE、
+        NOT NULL 必须给默认值**。撞上限制的列不是"补一下"能解决的，返回 ``None``
+        交给调用方按**重建**处置（要显式授权，见 §8.4）。
+        """
+        if column.primary_key or column.unique or (column.not_null and column.default is None):
+            return None
+        return f'ALTER TABLE "{self.name}" ADD COLUMN {column.clause()}'
 
     def to_config(self) -> dict[str, Any]:
         """写成配置形状（人读的那一份；顺序即书写顺序）。"""
@@ -265,7 +305,10 @@ class Table:
                 column.signature() for column in sorted(self.columns, key=lambda item: item.name)
             ],
             "indexes": [
-                index.signature() for index in sorted(self.indexes, key=lambda item: item.name)
+                index.signature()
+                for index in sorted(
+                    self.indexes, key=lambda item: index_name(self.name, item.columns)
+                )
             ],
         }
 
@@ -285,8 +328,12 @@ def sql_type_name(kind: ColumnType) -> str:
     return _SQL_TYPE_NAMES[kind]
 
 
-def _literal(value: object) -> str:
-    """把默认值编成 SQL 字面量（只收标量，故不必担心注入）。"""
+def default_literal(value: object) -> str:
+    """把默认值编成 SQL 字面量（只收标量，故不必担心注入）。
+
+    公开出来是为了让**比对**用同一处写法：`PRAGMA table_info` 回的默认值是 SQL 文本，
+    若比对另写一套编法，就会出现"声明写 0、库里存 '0'"这种假差异。
+    """
     if isinstance(value, bool):
         return "1" if value else "0"
     if isinstance(value, (int, float)):
@@ -302,6 +349,19 @@ def _require(mapping: Mapping[str, Any], key: str, *, where: str) -> Any:
     if key not in mapping:
         raise CairnError(f"{where} 缺少必填项 {key!r}")
     return mapping[key]
+
+
+def _as_mapping(item: object, *, where: str) -> Mapping[str, Any]:
+    """元素必须是映射，否则立即抛 ``CairnError``。
+
+    手写 ``tables.yaml`` 时很容易写出 ``- foo`` 这类标量；直接把它交给解析函数，
+    会在 ``key not in mapping`` 上抛 ``TypeError``——与本模块"非法即抛 ``CairnError``"
+    的口径不一致，调用方按 ``CairnError`` 捕获就会漏掉这一种。
+    表 / 列 / 索引三级都走这里，写坏了与没写才始终可分。
+    """
+    if not isinstance(item, Mapping):
+        raise CairnError(f"{where} 混进了非映射的项: {item!r}")
+    return item
 
 
 def parse_column(raw: Mapping[str, Any], *, table: str) -> Column:
@@ -325,29 +385,36 @@ def parse_column(raw: Mapping[str, Any], *, table: str) -> Column:
         not_null=bool(raw.get("not_null", False)),
         unique=bool(raw.get("unique", False)),
         default=raw.get("default"),
-        doc=str(raw.get("doc", "")),
+        doc=str(raw.get("doc") or ""),
     )
 
 
 def parse_index(raw: Mapping[str, Any], *, table: str) -> Index:
-    """解析一个索引。"""
+    """解析一个索引；列名必须是字符串（写错类型不在别处才报）。"""
     where = f"表 {table} 的索引"
     columns = _require(raw, "columns", where=where)
     if not isinstance(columns, (list, tuple)):
         raise CairnError(f"{where} 的 columns 必须是列表")
+    for name in columns:
+        if not isinstance(name, str):
+            raise CairnError(
+                f"{where} 的列名必须是字符串，得到 {name!r}"
+                "（静默转成名字，会让配置写错类型这件事报成非法索引列名，"
+                "错误信息与真实问题对不上）"
+            )
     known = {"columns", "unique", "doc"}
     unknown = sorted(set(raw) - known)
     if unknown:
         raise CairnError(f"{where} 有未知项: {unknown}")
     return Index(
-        columns=tuple(str(name) for name in columns),
+        columns=tuple(columns),
         unique=bool(raw.get("unique", False)),
-        doc=str(raw.get("doc", "")),
+        doc=str(raw.get("doc") or ""),
     )
 
 
-def parse_table(raw: Mapping[str, Any]) -> Table:
-    """解析一张表；项名写错即抛（表 / 列 / 索引三级都查未知项）。"""
+def parse_table(raw: Mapping[str, Any]) -> TableSpec:
+    """解析一张表；**表 / 列 / 索引三级都查**未知项，也三级都查元素是不是映射。"""
     where = "表声明"
     name = str(_require(raw, "name", where=where))
     where = f"表 {name}"
@@ -372,25 +439,57 @@ def parse_table(raw: Mapping[str, Any]) -> Table:
     raw_indexes = raw.get("indexes", [])
     if not isinstance(raw_indexes, list):
         raise CairnError(f"{where} 的 indexes 必须是列表")
-    return Table(
+    return TableSpec(
         name=name,
-        columns=tuple(parse_column(item, table=name) for item in raw_columns),
+        columns=tuple(
+            parse_column(_as_mapping(item, where=f"{where} 的列"), table=name)
+            for item in raw_columns
+        ),
         tier=tier,
-        rebuild_from=str(raw.get("rebuild_from", "")),
+        rebuild_from=str(raw.get("rebuild_from") or ""),
         owner=owner,
-        indexes=tuple(parse_index(item, table=name) for item in raw_indexes),
-        doc=str(raw.get("doc", "")),
+        indexes=tuple(
+            parse_index(_as_mapping(item, where=f"{where} 的索引"), table=name)
+            for item in raw_indexes
+        ),
+        doc=str(raw.get("doc") or ""),
     )
 
 
-def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[Table, ...]:
-    """解析整组声明；表名重复即抛。"""
-    parsed = tuple(parse_table(item) for item in raw)
+def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[TableSpec, ...]:
+    """解析整组声明；**元素不是映射**或表名重复即抛。
+
+    元素类型在进门处**先整体查一遍**（见 :func:`_as_mapping`），再逐个解析：
+    一项一张表，手写 ``- foo`` 这类标量要当场报成 ``CairnError``，而不是漏出 ``TypeError``；
+    先查形状再查内容，免得"第一张表另有毛病"把这一条盖过去。
+    """
+    items = [_as_mapping(item, where="表声明") for item in raw]
+    parsed = tuple(parse_table(item) for item in items)
     names = [table.name for table in parsed]
     duplicated = {name for name in names if names.count(name) > 1}
     if duplicated:
         raise CairnError(f"表声明重复: {sorted(duplicated)}")
+    _check_index_names(parsed)
     return parsed
+
+
+def _check_index_names(tables: tuple[TableSpec, ...]) -> None:
+    """**跨表**索引名唯一性（单表内那一条由 :meth:`TableSpec.__post_init__` 管）。
+
+    SQLite 的索引名整库唯一，而仓内所有表共用一个索引库，故两张表撞名时，
+    后建的那条 ``CREATE INDEX IF NOT EXISTS`` 会被静默跳过——库里少一个索引、
+    比对却一直报"缺索引"，库卡在打不开的状态。声明层不能把这件事留给运行期。
+    """
+    owner: dict[str, str] = {}
+    for table in tables:
+        for index in table.indexes:
+            name = index_name(table.name, index.columns)
+            held = owner.setdefault(name, table.name)
+            if held != table.name:
+                raise CairnError(
+                    f"索引名跨表重复: {name}（表 {held} 与表 {table.name}）"
+                    "（SQLite 索引名全库唯一，重名会让后一张表的索引被静默跳过）"
+                )
 
 
 def _read_yaml(path: Path) -> Any:
@@ -403,7 +502,7 @@ def _read_yaml(path: Path) -> Any:
         raise CairnError(f"表声明文件解析失败: {path}（{exc}）") from exc
 
 
-def load_tables(path: Path | str | None = None) -> tuple[Table, ...]:
+def load_tables(path: Path | str | None = None) -> tuple[TableSpec, ...]:
     """读入并校验表声明（**运行时唯一入口**）。
 
     不传路径时走配置引擎的**文件引用**：配置项 ``storage.db.tables`` 的值是相对引用名
@@ -425,22 +524,22 @@ def load_tables(path: Path | str | None = None) -> tuple[Table, ...]:
     return parse_tables(raw)
 
 
-def declared_tables() -> tuple[Table, ...]:
+def declared_tables() -> tuple[TableSpec, ...]:
     """当前生效的表声明（本体在被引用的那份 YAML 里）。"""
     return load_tables()
 
 
-def core_tables() -> tuple[Table, ...]:
+def core_tables() -> tuple[TableSpec, ...]:
     """内核表（归属为 core 的那些），开库时对齐。"""
     return tuple(table for table in declared_tables() if table.owner is Owned.CORE)
 
 
-def domain_tables() -> tuple[Table, ...]:
+def domain_tables() -> tuple[TableSpec, ...]:
     """领域表（挂载该域时才对齐）。"""
     return tuple(table for table in declared_tables() if table.owner is Owned.DOMAIN)
 
 
-def table(name: str) -> Table | None:
+def table(name: str) -> TableSpec | None:
     """按表名取声明；没声明返回 ``None``。"""
     for found in declared_tables():
         if found.name == name:
@@ -454,10 +553,12 @@ __all__ = [
     "Index",
     "Owned",
     "RebuildTier",
-    "Table",
+    "TableSpec",
+    "check_ident",
     "core_tables",
     "declared_tables",
     "domain_tables",
+    "index_name",
     "load_tables",
     "parse_table",
     "parse_tables",

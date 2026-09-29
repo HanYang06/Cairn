@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, ClassVar
 
 from core.signal import Outcome, Signal
@@ -31,6 +32,8 @@ from core.types.kind import ROLE_DOMAIN, TypeInfo, identity_key, register, type_
 _IDENTITIES = ("role_id", "role_name", "role_obj")
 
 _STORAGE_ROLE = "storage"
+
+_logger = logging.getLogger(__name__)
 
 
 class Core:
@@ -108,13 +111,21 @@ class Core:
 
         **换下即释放**：旧挂件若有 ``close`` 就调一次——被覆盖的存储如果没人关，
         它的 sqlite 连接与载体文件句柄不会有第二次释放机会（要等到垃圾回收才报资源警告）。
+
+        **先释放、后摘除**：``close()`` 可能抛（异常文件系统上的 ``conn.close()`` 就是）；
+        若先摘净再关，一抛就留下"这个名字没有任何挂件"的半损坏态——内核还在，
+        ``storage`` 却查不到了。故关失败只记一条告警、继续完成替换：
+        漏一个连接，比让内核失能轻。
         """
         previous = self._internal["role_name"].get(name)
         if previous is not None and previous is not obj:
-            _forget(self._internal, previous)
             close = getattr(previous, "close", None)
             if callable(close):
-                close()
+                try:
+                    close()
+                except Exception:
+                    _logger.warning("换下旧挂件时关闭失败：%s", name, exc_info=True)
+            _forget(self._internal, previous)
         self._internal["role_name"][name] = obj
         self._internal["role_id"][str(getattr(obj, "id", "") or name)] = obj
         self._internal["role_obj"][identity_key("role_obj", obj)] = obj

@@ -158,13 +158,21 @@ class SlotRange:
         """解析 ``起始:槽数:槽内偏移``；省略第三段时槽内偏移取 0。
 
         它与 :meth:`__str__` 互逆，是槽区间的落盘 / 调试形态。
+
+        **只认 ASCII 数字**：``str.isdecimal()`` 对全角数字（``１２``）与阿拉伯-印度数字
+        （``١٢``）同样返回真、``int()`` 也照收，于是落盘形态会莫名其妙地"能解析"。
+        这个格式是我们自己的调试 / 落盘写法，收紧到 ASCII 才不会让脏字节混进来。
         """
         parts = str(value).split(":")
-        if len(parts) not in (2, 3) or not all(part.isdecimal() for part in parts):
+        if len(parts) not in (2, 3) or not all(
+            part.isascii() and part.isdecimal() for part in parts
+        ):
             raise InvalidIdError(f"非法槽区间: {value!r}")
-        start, count = int(parts[0]), int(parts[1])
-        head = int(parts[2]) if len(parts) == 3 else 0
         try:
+            # `int()` 也算进来：超长数字串（Python 3.11+ 的位数上限）会抛 `ValueError`，
+            # 漏在外面就违背了"非法槽区间一律抛 InvalidIdError"这条契约。
+            start, count = int(parts[0]), int(parts[1])
+            head = int(parts[2]) if len(parts) == 3 else 0
             return cls(start, count, head)
         except ValueError as exc:  # 槽数为 0 等情况由数据类校验拦下
             raise InvalidIdError(f"非法槽区间: {value!r}") from exc
@@ -291,11 +299,13 @@ class Id:
         return cls(
             value_uuid=value_uuid,
             value_hash=value_hash,
-            name=str(raw.get("name", "")),
+            # 可选字段**用 ``or ""`` 而不是 ``get(key, "")``**：键在、值是显式 null 时，
+            # `str(None)` 会得到字符串 "None"——一个静默污染的幽灵名字，下游按名匹配就错了。
+            name=str(raw.get("name") or ""),
             issued=issued,
-            issuer=str(raw.get("issuer", "")),
-            in_bucket_name=str(raw.get("in_bucket_name", "")),
-            in_pack_name=str(raw.get("in_pack_name", "")),
+            issuer=str(raw.get("issuer") or ""),
+            in_bucket_name=str(raw.get("in_bucket_name") or ""),
+            in_pack_name=str(raw.get("in_pack_name") or ""),
         )
 
     def __str__(self) -> str:

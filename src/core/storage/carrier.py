@@ -50,7 +50,7 @@ def slots_for(length: int, slot_bytes: int) -> int:
 
 
 def slot_offset(slot: int, slot_bytes: int) -> int:
-    """第 ``slot`` 个槽的字节偏移（相对象限起点，即文件头之后）。"""
+    """第 ``slot`` 个槽的字节偏移（**相对载体起点**，即文件头之后）。"""
     if slot < 0:
         raise SlotError(f"槽号非法: {slot}")
     if slot_bytes < MIN_SLOT_BYTES:
@@ -64,11 +64,26 @@ def slot_span(offset: int, length: int, slot_bytes: int) -> SlotRange:
     这是唯一的"字节 → 槽"入口：**槽区间由偏移算出，不由写入方指定**。
     ``head`` 必须留下：只给 (起始槽, 槽数) 会丢掉槽内偏移，
     两条同槽记录的区间将无法区分，读写随即错位。
+
+    槽数**必须把 ``head`` 算进去**：区间要盖住 ``[offset, offset + length)``，
+    起点取了整之后末字节落在 ``(head + length - 1) // 槽长`` 号槽里，
+    故跨度是 ``ceil((head + length) / 槽长)``。只按 ``length`` 取整会少算：
+    ``offset=1``、``length=4``、槽长 4 时字节落在 ``[1, 5)``，横跨第 0、1 两槽，
+    而 ``ceil(4 / 4)`` 只报 1 槽。
+
+    这与 :func:`slots_for` 是**两套口径，不可混用**：``slots_for`` 算的是"起点落在槽边界"
+    时的槽数（记录头自检用它），本函数算的是**实际占用**（进索引的 ``slot_count``）。
+    记录起点不落槽边界时两者本来就不等，谁都没错——上一轮评审把这两件事混成一个数，
+    故在此写明。
     """
     if offset < 0:
         raise SlotError(f"偏移非法: {offset}")
+    if length < 0:
+        raise SlotError(f"长度非法: {length}")
+    if slot_bytes < MIN_SLOT_BYTES:
+        raise SlotError(f"槽长非法: {slot_bytes}")
     start, head = divmod(offset, slot_bytes)
-    return SlotRange(start, slots_for(length, slot_bytes), head)
+    return SlotRange(start, max(1, -(-(head + length) // slot_bytes)), head)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,10 +123,11 @@ class CarrierLayout:
         return slot_span(relative, length, self.slot_bytes)
 
     def record_bytes(self, slot_count: int) -> int:
-        """占 ``slot_count`` 个槽的记录，最少需要多少字节。
+        """占 ``slot_count`` 个槽的记录，最少需要多少字节（**槽对齐起点**下的下界）。
 
-        下界：记录必须越出前 ``slot_count - 1`` 个槽，故至少
-        ``(slot_count - 1) × 槽长 + 1``。用于校验头里声明的槽数与实际长度是否自洽。
+        下界：起点落在槽边界时，记录必须越出前 ``slot_count - 1`` 个槽，故至少
+        ``(slot_count - 1) × 槽长 + 1``。用于校验头里声明的槽数与长度是否自洽。
+        起点偏在槽内的记录**不适用**这条下界（那时槽数由 :func:`slot_span` 给出）。
         """
         if slot_count < 1:
             raise SlotError(f"槽数非法: {slot_count}")

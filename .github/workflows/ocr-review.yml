@@ -19,8 +19,29 @@ permissions:
   contents: read
   pull-requests: write
 
+# 并发组判据必须与下面 job 的 if 判据一致：concurrency 在 job 级 if **之前**求值，而
+# cancel-in-progress 会取消同组内正在运行的评审。仅以 PR 号作组名时，PR 上任何一条评论
+# （含不触发评审的普通评论）都会进入同一组，于是一句无关评论即可取消正在运行的评审。
+# 故不满足触发条件的事件改用按 run_id 唯一命名的 noop- 组，不可能与真实评审同组。
 concurrency:
-  group: ocr-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  group: >-
+    ${{
+      (
+        github.event_name == 'pull_request_target'
+        || (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && github.event.comment.user.type != 'Bot'
+          && contains(fromJSON('["MEMBER","OWNER","COLLABORATOR"]'), github.event.comment.author_association)
+          && (
+            startsWith(github.event.comment.body, '/open-code-review')
+            || startsWith(github.event.comment.body, '@open-code-review')
+          )
+        )
+      )
+      && format('ocr-{0}', github.event.pull_request.number || github.event.issue.number)
+      || format('noop-{0}', github.run_id)
+    }}
   cancel-in-progress: true
 
 jobs:

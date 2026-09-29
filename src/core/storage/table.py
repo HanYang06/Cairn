@@ -19,31 +19,36 @@ from typing import TYPE_CHECKING, Any
 
 from core.types import CairnError
 
+from .tables import check_ident
+
 if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Mapping
 
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SPEC_RE = re.compile(
     r"^[A-Za-z][A-Za-z0-9_]*"
     r"(?:\s*\([0-9,\s]+\))?"
     r"(?:\s+(?:PRIMARY\s+KEY|NOT\s+NULL|UNIQUE))?"
-    r"(?:\s+DEFAULT\s+('[^']*'|[0-9.+-]+))?$",
+    r"(?:\s+DEFAULT\s+('[^']*'|[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)))?$",
     re.IGNORECASE,
 )
-"""列定义白名单：``类型[(长度)] [PRIMARY KEY|NOT NULL|UNIQUE] [DEFAULT 值]``，其余一律拒绝。"""
+"""列定义白名单：``类型[(长度)] [PRIMARY KEY|NOT NULL|UNIQUE] [DEFAULT 值]``，其余一律拒绝。
+
+DEFAULT 收字符串字面量与**真正的数值形态**：``[0-9.+-]+`` 那种松口径会放行
+``DEFAULT +`` / ``DEFAULT .`` 这类非法 SQL，把错误推到 ``CREATE TABLE`` 才炸。
+"""
 
 
 def create_table(conn: sqlite3.Connection, name: str, columns: Mapping[str, str]) -> None:
     """建一张领域表（已存在即不动）；表名 / 列名 / 列定义不合法即抛 ``CairnError``。
 
-    校验只在这一处：它们都会拼进 SQL，靠"调用方自觉"不如靠这一道白名单。
+    **标识符校验与内核声明表共用一处**（`tables.check_ident`）：同一个索引库里的表名，
+    规则分家就会漂移成"创建得出、声明校验不过"。列定义的白名单只在这里——领域表
+    直接给方言片段，声明表给的是中立类型，两者本就不是一套写法。
     """
-    if not _IDENT_RE.match(name):
-        raise CairnError(f"非法表名: {name}")
-    bad = next((column for column in columns if not _IDENT_RE.match(column)), None)
-    if bad is not None:
-        raise CairnError(f"非法列名: {bad}")
+    check_ident(name, what="表名")
+    for column in columns:
+        check_ident(column, what="列名")
     bad_spec = next((spec for spec in columns.values() if not _SPEC_RE.match(spec.strip())), None)
     if bad_spec is not None:
         raise CairnError(f"非法列定义: {bad_spec!r}")

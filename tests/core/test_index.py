@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -19,11 +20,14 @@ from core.storage.tables import (
     ColumnType,
     Owned,
     RebuildTier,
-    Table,
+    TableSpec,
     core_tables,
     declared_tables,
     load_tables,
     parse_tables,
+)
+from core.storage.tables import (
+    Index as TableIndex,
 )
 from core.types.errors import CairnError, IndexSchemaError
 
@@ -114,9 +118,63 @@ def test_parse_rejects_missing_required_item() -> None:
         parse_tables([{"name": "t", "columns": []}])
 
 
+def test_parse_rejects_scalars_in_the_column_and_index_levels() -> None:
+    """列与索引也各有自己的元素：写成标量要报 `CairnError`，不是 `TypeError`。
+
+    表那一级早就挡住了（`parse_tables` 先整体查一遍形状）；列与索引是同一类写法错误，
+    漏掉就会在 ``key not in mapping`` 上抛 `TypeError`，调用方按 `CairnError` 捕获就漏了。
+    """
+    base = {
+        "name": "t",
+        "tier": "tier1",
+        "rebuild_from": "x",
+        "columns": [{"name": "a", "type": "text", "primary_key": True}],
+    }
+    with pytest.raises(CairnError, match="非映射"):
+        parse_tables([{**base, "columns": [5]}])
+    with pytest.raises(CairnError, match="非映射"):
+        parse_tables([{**base, "indexes": [5]}])
+
+
+def test_parse_rejects_a_non_string_index_column() -> None:
+    """索引列写成数字：当场报类型不对，而不是被静默转成名字再报非法列名。"""
+    with pytest.raises(CairnError, match="必须是字符串"):
+        parse_tables(
+            [
+                {
+                    "name": "t",
+                    "tier": "tier1",
+                    "rebuild_from": "x",
+                    "columns": [{"name": "a", "type": "text", "primary_key": True}],
+                    "indexes": [{"columns": [1]}],
+                }
+            ]
+        )
+
+
+def test_parse_rejects_two_indexes_with_the_same_columns() -> None:
+    """同一列组合声明两次 → 索引同名 → 声明的唯一性会静默落空，故解析口就拒。
+
+    索引名由列组合推出，故两条同列组合的声明共用一个名字：`ddl()` 里第二条
+    `CREATE [UNIQUE] INDEX IF NOT EXISTS` 会被 SQLite 跳过，UNIQUE 约束实际缺失。
+    """
+    with pytest.raises(CairnError, match="索引重名"):
+        parse_tables(
+            [
+                {
+                    "name": "t",
+                    "tier": "tier1",
+                    "rebuild_from": "x",
+                    "columns": [{"name": "a", "type": "text", "primary_key": True}],
+                    "indexes": [{"columns": ["a"]}, {"columns": ["a"], "unique": True}],
+                }
+            ]
+        )
+
+
 def test_table_requires_exactly_one_primary_key() -> None:
     with pytest.raises(CairnError, match="恰好一个主键"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER1,
             rebuild_from="x",
@@ -126,7 +184,7 @@ def test_table_requires_exactly_one_primary_key() -> None:
 
 def test_table_rejects_duplicate_columns() -> None:
     with pytest.raises(CairnError, match="列名重复"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER1,
             rebuild_from="x",
@@ -141,7 +199,7 @@ def test_table_rejects_index_on_unknown_column() -> None:
     from core.storage.tables import Index as TableIndex  # noqa: PLC0415 — 与 sqlite 索引区分
 
     with pytest.raises(CairnError, match="索引列不存在"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER1,
             rebuild_from="x",
@@ -152,7 +210,7 @@ def test_table_rejects_index_on_unknown_column() -> None:
 
 def test_tier3_must_not_declare_rebuild_source() -> None:
     with pytest.raises(CairnError, match="不该写重建来源"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER3,
             rebuild_from="载体",
@@ -162,7 +220,7 @@ def test_tier3_must_not_declare_rebuild_source() -> None:
 
 def test_tier1_must_declare_rebuild_source() -> None:
     with pytest.raises(CairnError, match="重建来源必填"):
-        Table(
+        TableSpec(
             name="t",
             tier=RebuildTier.TIER1,
             columns=(Column("a", ColumnType.TEXT, primary_key=True),),
@@ -188,7 +246,7 @@ def test_ddl_is_compiled_from_declaration() -> None:
     record = next(table for table in declared_tables() if table.name == "record")
     statements = record.ddl()
     assert statements[0].startswith('CREATE TABLE IF NOT EXISTS "record"')
-    assert any('CREATE INDEX IF NOT EXISTS "idx_value_hash"' in sql for sql in statements)
+    assert any('CREATE INDEX IF NOT EXISTS "idx_record_value_hash"' in sql for sql in statements)
     compiled = " ".join(statements)
     assert '"value_uuid" TEXT PRIMARY KEY NOT NULL' in compiled
     assert '"slot_count" INTEGER NOT NULL DEFAULT 1' in compiled
@@ -323,12 +381,295 @@ def test_extra_column_is_reported_but_not_destructive(tmp_path: Path) -> None:
 def test_missing_index_is_fixable(tmp_path: Path) -> None:
     index = _index(tmp_path)
     index.align()
-    index.conn.execute('DROP INDEX "idx_value_hash"')
+    index.conn.execute('DROP INDEX "idx_record_value_hash"')
     differ = [item for item in index.differences() if item.kind == "missing_index"]
     assert differ
     assert differ[0].fixable
     assert index.align() == []
     index.close()
+
+
+def test_align_adds_a_missing_column(tmp_path: Path) -> None:
+    """已存在的表缺一列 → `align()` 必须真把它补上（`CREATE TABLE IF NOT EXISTS` 补不了）。
+
+    漏了这条，"声明里加一列"就会变成"库打不开"：对齐说补了、实际没补，
+    再比一次仍报缺列。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute('ALTER TABLE "record" DROP COLUMN "size"')  # 非索引列，可原地补
+
+    differ = [item for item in index.differences() if item.kind == "missing_column"]
+    assert [item.detail for item in differ] == ["size"]
+    assert differ[0].fixable
+
+    assert index.align() == []  # 补齐之后没有差异
+    assert "size" in index.actual_tables()["record"]
+    index.close()
+
+
+def test_a_column_that_cannot_be_added_requires_rebuild(tmp_path: Path) -> None:
+    """补不上的列（NOT NULL 无默认值 / 主键 / UNIQUE）**按破坏性差异报**，要显式授权。
+
+    否则它会落在"可原位补齐"里，对齐时补不上、却又不许重建——卡死在"仍有差异"。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute('DROP INDEX "idx_record_value_hash"')
+    index.conn.execute('ALTER TABLE "record" DROP COLUMN "value_hash"')  # not_null 且无默认值
+
+    differ = [item for item in index.differences() if item.table == "record"]
+    assert "column_mismatch" in [item.kind for item in differ]
+    destructive = next(item for item in differ if item.kind == "column_mismatch")
+    assert destructive.destructive
+    assert "须重建" in destructive.detail
+
+    with pytest.raises(IndexSchemaError, match="RebuildPlan"):
+        index.align()
+
+    left = index.align(rebuild=RebuildPlan(tables=("record",), reason="测试：补不上的列"))
+    # 旧表改名隔离故只剩一条"多出的表"告警：不删数据、也不拦开库
+    assert [item.kind for item in left] == ["extra_table"]
+    index.close()
+
+
+def test_align_adds_a_column_before_building_its_index(tmp_path: Path) -> None:
+    """ "新增一列 + 给它建索引"要一次对齐成功：**补列必须在建索引之前**。
+
+    `ddl()` 把建表与建索引混在一串里；若整段先跑，`CREATE INDEX … ("新列")` 会先执行，
+    SQLite 报 `no such column`，库随即打不开（这是上一轮整改自己碰出来的坑）。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute('ALTER TABLE "record" DROP COLUMN "size"')
+    index.declarations = tuple(
+        replace(
+            table,
+            indexes=(*table.indexes, TableIndex(columns=("size",), doc="测试：给新列建索引")),
+        )
+        if table.name == "record"  # 只有 record 有 size 这一列
+        else table
+        for table in declared_tables()
+    )
+
+    kinds = [item.kind for item in index.differences()]
+    assert "missing_column" in kinds
+    assert "missing_index" in kinds
+
+    assert index.align() == []  # 先补列、再建索引：一次成功
+    assert "size" in index.actual_tables()["record"]
+    index.close()
+
+
+def test_index_uniqueness_change_is_fixable(tmp_path: Path) -> None:
+    """索引名由表名与列组合推出，故**唯一性变化**是"同名不同定义"——要拆掉重建，不是干等。
+
+    `CREATE INDEX IF NOT EXISTS` 见到同名会跳过，光靠它永远改不过来：
+    差异会卡在"对齐后仍有"，而这差异既不在破坏性分类里、也拿不到重建授权。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.declarations = tuple(
+        replace(
+            table,
+            indexes=tuple(
+                replace(found, unique=True) if found.columns == ("kind",) else found
+                for found in table.indexes
+            ),
+        )
+        for table in declared_tables()
+    )
+
+    differ = [item for item in index.differences() if item.kind == "index_mismatch"]
+    assert [item.subject for item in differ] == ["idx_record_kind"]
+    assert differ[0].fixable
+
+    assert index.align() == []
+    assert (("kind",), True) in index.actual_indexes("record")  # 唯一索引真建上了
+    index.close()
+
+
+def test_index_name_carries_the_table() -> None:
+    """索引名带表名：SQLite 的索引名**整库唯一**，只由列组合推出会跨表撞名。"""
+    record = next(table for table in declared_tables() if table.name == "record")
+    assert any('"idx_record_kind"' in sql for sql in record.ddl())
+
+
+def test_cross_table_index_collision_is_rejected() -> None:
+    """跨表索引名重复在**解析口**就拦下（撞名的第二张表会被 SQLite 静默跳过）。
+
+    表名与列名同用 ``_`` 分隔，故表 ``a`` 的列 ``b, c`` 与表 ``a_b`` 的列 ``c``
+    会推出同一个索引名。单表内的重名校验看不见它，这一条由 `parse_tables` 统一查。
+    """
+
+    def _decl(name: str, columns: list[str]) -> dict[str, object]:
+        extra = [{"name": item, "type": "text"} for item in columns]
+        return {
+            "name": name,
+            "tier": "tier1",
+            "rebuild_from": "测试",
+            "columns": [{"name": "id", "type": "text", "primary_key": True}, *extra],
+            "indexes": [{"columns": columns}],
+        }
+
+    parse_tables([_decl("a", ["b", "c"])])  # 单独一张表：不撞
+    with pytest.raises(CairnError, match="索引名跨表重复"):
+        parse_tables([_decl("a", ["b", "c"]), _decl("a_b", ["c"])])
+
+
+def test_empty_rebuild_from_is_missing_not_a_ghost() -> None:
+    """YAML 里写空的 ``rebuild_from:`` 归为空串，由必填校验正当地拦下。
+
+    原先 ``str(raw.get(...))`` 会把它变成字符串 ``"None"``——一个真值的幽灵来源，
+    于是"档一 / 档二必须写重建来源"这条被静默通过。
+    """
+    raw = {
+        "name": "t",
+        "tier": "tier1",
+        "rebuild_from": None,
+        "columns": [{"name": "id", "type": "text", "primary_key": True}],
+    }
+    with pytest.raises(CairnError, match="重建来源必填"):
+        parse_tables([raw])
+
+
+def test_rebuild_quarantines_the_old_table_instead_of_dropping_it(tmp_path: Path) -> None:
+    """授权重建**不丢数据**：旧表改名成 ``<表>__dropped_<时刻>`` 留在库里。
+
+    ``DROP TABLE`` 会让整张表的行当场消失，而"数据由调用方搬运"在实现里没有落点；
+    档三（真源在库内、只能靠备份）的表更等同不可恢复的丢失。隔离表按
+    "库里有、声明没有"处置，即**只告警不删**。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute(
+        "INSERT INTO bucket(name, role, state, created) VALUES(?, ?, ?, ?)",
+        ("main", "main", "mounted", 1),
+    )
+    index.declarations = tuple(
+        replace(
+            table,
+            columns=tuple(
+                replace(column, default=None) if column.name == "role" else column
+                for column in table.columns
+            ),
+        )
+        if table.name == "bucket"
+        else table
+        for table in declared_tables()
+    )
+
+    assert any(item.table == "bucket" and item.destructive for item in index.differences())
+
+    remaining = index.align(rebuild=RebuildPlan(tables=("bucket",), reason="测试"))
+    assert {item.kind for item in remaining} == {"extra_table"}  # 隔离表只告警
+
+    leftover = [
+        str(row["name"])
+        for row in index.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'bucket__dropped_%'"
+        )
+    ]
+    assert len(leftover) == 1
+    kept = index.conn.execute(
+        f'SELECT COUNT(*) AS n FROM "{leftover[0]}"'  # noqa: S608 — 名字取自 sqlite_master，由本程序生成
+    ).fetchone()
+    assert int(kept["n"]) == 1  # 旧行一行没丢
+    index.close()
+
+
+def test_open_parses_declarations_before_connecting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """声明解析在**建立连接之前**：解析失败时根本没有连接可漏。
+
+    原先声明的读取藏在 `Index` 的 dataclass 默认值里，构造时才执行，于是它抛错
+    （表声明文件缺失 / YAML 非法 / 校验失败）时刚 connect 出来的连接没人关。
+    """
+    made: list[sqlite3.Connection] = []
+    real_connect = sqlite3.connect
+
+    def spy(*args: object, **kwargs: object) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)  # type: ignore[arg-type]
+        made.append(conn)
+        return conn
+
+    def boom() -> tuple[TableSpec, ...]:
+        raise CairnError("表声明读不出来")
+
+    monkeypatch.setattr(sqlite3, "connect", spy)
+    monkeypatch.setattr("core.storage.index.declared_tables", boom)
+
+    with pytest.raises(CairnError, match="表声明读不出来"):
+        Index.open(tmp_path / "catalog.db")
+
+    assert made == []  # 连接从未建立：也就没有连接可漏
+
+
+def test_open_closes_the_connection_when_the_file_is_not_a_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """文件不是数据库时：认表那一步就抛，**抛之前要把连接关掉**（反复失败不能一次漏一个）。"""
+    path = tmp_path / "catalog.db"
+    path.write_bytes(b"not a database at all" * 8)
+
+    made: list[sqlite3.Connection] = []
+    real_connect = sqlite3.connect
+
+    def spy(*args: object, **kwargs: object) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)  # type: ignore[arg-type]
+        made.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", spy)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        Index.open(path)
+
+    assert len(made) == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        made[0].execute("SELECT 1")  # 已关闭：再用就当头报错
+
+
+def test_constraint_drift_is_detected(tmp_path: Path) -> None:
+    """已存在列上的**约束漂移**（非空 / 默认值 / 主键）同样要报出来。
+
+    只比类型会让"声明给某列加了 not_null、或改了默认值"静默放过：
+    开库一路绿灯，而库里的结构与声明已经不一致。
+    """
+    index = _index(tmp_path)
+    index.align()
+    index.conn.execute('ALTER TABLE "bucket" RENAME TO "bucket_old"')
+    index.conn.execute(
+        'CREATE TABLE "bucket" ("name" TEXT PRIMARY KEY NOT NULL, "role" TEXT,'
+        ' "state" TEXT NOT NULL, "created" INTEGER NOT NULL DEFAULT 7)'
+    )
+
+    drift = [
+        item
+        for item in index.differences()
+        if item.table == "bucket" and item.kind == "column_mismatch"
+    ]
+    details = " | ".join(item.detail for item in drift)
+    assert "非空" in details  # role 丢了 NOT NULL
+    assert "默认值" in details  # created 的默认值从 0 变成 7
+    assert all(item.destructive for item in drift)
+
+    with pytest.raises(IndexSchemaError, match="RebuildPlan"):
+        index.align()
+    index.close()
+
+
+def test_load_tables_rejects_a_non_mapping_item(tmp_path: Path) -> None:
+    """声明里混进标量（手写 YAML 很容易写成 `- foo`）要报 `CairnError`，不是 `TypeError`。"""
+    path = tmp_path / "tables.yaml"
+    path.write_text(
+        "- name: ok\n  tier: tier1\n  rebuild_from: 测试\n  columns: []\n- foo\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CairnError, match="非映射"):
+        load_tables(path)
 
 
 def test_column_type_change_needs_rebuild_authorization(tmp_path: Path) -> None:
@@ -366,7 +707,7 @@ def test_rebuild_with_full_authorization_aligns(tmp_path: Path) -> None:
     index.conn.execute('DROP TABLE "bucket"')
     index.conn.execute('CREATE TABLE "bucket" ("name" INTEGER PRIMARY KEY)')
     left = index.align(rebuild=RebuildPlan(tables=("bucket",), reason="列型变更"))
-    assert left == []
+    assert [item.kind for item in left] == ["extra_table"]  # 旧表隔离保留，只告警
     index.close()
 
 

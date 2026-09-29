@@ -15,7 +15,7 @@
 1. **物理坐标是投影，不是事实**：记录内容不带坐标，索引里的 ``(桶, 载体, 槽区间)``
    只是"少读一遍"的映射，丢了可以顺扫重建（§5.2、§8.5 档一）；
 2. **先落字节、后记目录**：索引行指向的位置必然已经存在；反过来只会留下空洞，
-   要到读的时候才发现。中途失败留下的孤儿字节由 :meth:`Vault.rebuild_records` 收编；
+   要到读的时候才发现。中途失败留下的孤儿字节由 :meth:`Vault.repair` 收编；
 3. **命名无语义**：载体名取随机串（§5.1），故"载体序号"这种概念不存在，
    也就不会有人把顺序当含义用；
 4. **配置只在写入的这一刻读**：槽长随载体走（写进文件头，§5.5），
@@ -51,7 +51,7 @@ from core.types import (
     now_ms,
 )
 
-from .carrier import CARRIER_MAGIC
+from .carrier import CARRIER_HEADER_BYTES, CARRIER_MAGIC
 from .index import INDEX_NAME, Index, RebuildPlan
 from .io import CarrierFile
 from .record import Record
@@ -75,6 +75,13 @@ PACK_NAME_BYTES = 8
 """载体名取的随机字节数（8 字节 → 16 位十六进制）。"""
 
 _BAD_NAME_CHARS = frozenset('<>:"/\\|?*')
+
+_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{digit}" for digit in "123456789"}
+    | {f"LPT{digit}" for digit in "123456789"}
+)
+"""Windows 保留设备名：这些名字在那边指向设备而不是普通文件 / 目录。"""
 
 
 class BucketRole(Enum):
@@ -205,9 +212,11 @@ class Placement:
 
 
 def _check_bucket_name(name: str) -> str:
-    """桶名校验：它会成为目录名，故不许带路径分隔符与平台保留字符。
+    """桶名校验：它会成为目录名，故不许带路径分隔符、平台保留字符与保留设备名。
 
     索引里的桶名是**数据**，读路径会拿它拼目录；不挡住 ``../`` 就等于把越界读的口子留着。
+    Windows 的保留设备名（``CON`` / ``NUL`` / ``COM1`` …）同样要挡：它们在那边会映射到
+    设备而不是普通目录，建桶会得到莫名其妙的行为（一律**不区分大小写**、含带扩展名的形态）。
     """
     if not name or name in {".", ".."}:
         raise StorageError(f"桶名非法: {name!r}")
@@ -215,6 +224,9 @@ def _check_bucket_name(name: str) -> str:
         raise StorageError(f"桶名含平台非法字符: {name!r}")
     if name != name.strip() or name.endswith("."):
         raise StorageError(f"桶名不得以空白或点收尾: {name!r}")
+    stem = name.split(".", 1)[0].upper()
+    if stem in _RESERVED_NAMES:
+        raise StorageError(f"桶名是平台保留设备名，不能当目录: {name!r}")
     return name
 
 
@@ -225,6 +237,28 @@ def _pack_path(packs_dir: Path, name: str) -> Path:
     return packs_dir / name
 
 
+def _pack_paths(bucket: Bucket, found: list[_Difference]) -> list[Path]:
+    """桶内全部载体文件（按名排序）；**列目录失败也记成发现，不抛**。
+
+    目录读不出来（权限、被删）与文件坏掉是同一类事：巡检要报告它，而不是死在它上面。
+    """
+    if not bucket.packs_dir.is_dir():
+        return []
+    try:
+        return sorted(bucket.packs_dir.glob(f"*{PACK_SUFFIX}"))
+    except OSError as exc:
+        found.append(
+            _Difference(
+                Finding(
+                    FindingKind.CORRUPT_CARRIER,
+                    bucket=bucket.name,
+                    detail=f"载体目录读不出来：{exc}",
+                )
+            )
+        )
+        return []
+
+
 def _is_carrier(path: Path) -> bool:
     """这个文件是不是**本格式的载体**（只认文件头那 8 字节魔数）。"""
     try:
@@ -232,6 +266,32 @@ def _is_carrier(path: Path) -> bool:
             return handle.read(len(CARRIER_MAGIC)) == CARRIER_MAGIC
     except OSError:
         return False
+
+
+def _pack_used_bytes(path: Path) -> int | None:
+    """载体已用字节数（**只 stat，不打开**）；读不到大小即 ``None``。
+
+    挑选活跃载体只需要"这个文件多大"这一项，而打开载体要读文件头——
+    故这里只 stat。头长用**标准文件头长度**折算：文件头是定长布局，
+    `CarrierLayout.decode_header` 一律给出 `CARRIER_HEADER_BYTES` 长的头，
+    故任何开得出来的载体，其已用字节数都等于文件大小减这个常量。
+    """
+    try:
+        return path.stat().st_size - CARRIER_HEADER_BYTES
+    except OSError:
+        return None
+
+
+def _open_carrier(path: Path) -> CarrierFile | None:
+    """打开载体；打不开（坏文件 / 读不到）即 ``None``，不抛。
+
+    只给**写入路径挑选活跃载体**用：坏掉的载体归巡检记成
+    :attr:`FindingKind.CORRUPT_CARRIER`，不该让一个无关的坏文件把写入挡死。
+    """
+    try:
+        return CarrierFile.open(path)
+    except (OSError, RecordFormatError):
+        return None
 
 
 def _refuse_foreign_packs(root: Path) -> None:
@@ -364,12 +424,32 @@ class Bucket:
         为什么"最满"是确定的答案：写入纪律是"写到满才换"，故手上那个必然是最满的。
         封口线被调大之后可能不止一个载体有空间，此时按同一判据仍然只有一个答案，
         不依赖时间戳，也不依赖名字顺序（名字本就是随机的）。
+
+        两处讲究（评审指出的两条都在这）：
+
+        - **只为挑选而 stat，不为挑选而打开**：本方法在每次写入的路径上
+          （`Vault.put` → `Bucket.append` → 这里），而打开载体要读文件头——
+          桶里载体一多，逐个打开就是 O(载体数) 次文件 I/O。判据"最满"与文件大小同源，
+          故先按大小排序，只有**选中的那个**才真的打开。
+        - **坏载体跳过，不挡写入**：损坏 / 空 / 非本格式的 `.pack` 会让
+          `CarrierFile.open` 抛错，而 `put` 是每次建块的必经之路——让一个无关的坏文件
+          把整个桶写死，与巡检"坏一个不影响其余"的口径相反。坏文件该由
+          :meth:`Vault.patrol` 记成 :attr:`FindingKind.CORRUPT_CARRIER`，不该让写入停摆。
         """
         limit = self.pack_max_bytes
-        candidates = [carrier for carrier in self.packs() if carrier.used_bytes < limit]
-        if not candidates:
-            return self.new_pack()
-        return max(candidates, key=lambda carrier: (carrier.used_bytes, carrier.path.name))
+        candidates: list[tuple[int, str, Path]] = []
+        for path in sorted(self.packs_dir.glob(f"*{PACK_SUFFIX}")):
+            used = _pack_used_bytes(path)
+            if used is None or not 0 <= used < limit:
+                continue  # 读不到大小的、以及写满了的，都不参与挑选
+            candidates.append((used, path.name, path))
+        for _used, _name, path in sorted(
+            candidates, key=lambda item: (item[0], item[1]), reverse=True
+        ):
+            carrier = _open_carrier(path)
+            if carrier is not None:
+                return carrier
+        return self.new_pack()
 
     # ---- 记录 ----
     def append(self, record: Record) -> Placement:
@@ -448,7 +528,13 @@ class Vault:
         if fresh:
             _refuse_foreign_packs(target)
         vault = cls(target, pack_max_bytes=pack_max_bytes)
-        remaining = [item for item in vault.index.align(rebuild=rebuild) if not item.warning]
+        try:
+            remaining = [item for item in vault.index.align(rebuild=rebuild) if not item.warning]
+        except Exception:
+            # 对齐会因"破坏性差异没授权"而抛（库结构不符时用户真会撞到）。
+            # 那条路径同样要**把连接关掉**：反复失败不能一次漏一个 sqlite 连接。
+            vault.close()
+            raise
         if remaining:
             vault.close()
             raise CairnError(f"索引库对齐后仍有差异（不假装成功）：{remaining}")
@@ -575,6 +661,10 @@ class Vault:
         内容没了、桶没了、载体坏了——这些删行就等于把"丢了东西"抹掉，
         只能报告，交由备份与人工（§8.7）。改动坐标时**保留类型与时间**：
         本次是修坐标，不是写数据。
+
+        补出来的**新行**取不到落盘时刻（记录头里没有时间，§3.5），故交给 `_write_row`
+        落 `now_ms()`：时间列上有索引、要参与排序，写 0 会把这些行堆到纪元去。
+        `issued` 是从记录头的 ID 里还原的，不受影响。
         """
         fixed: list[Finding] = []
         for item in self._differences():
@@ -587,8 +677,8 @@ class Vault:
                 self._write_row(
                     item.place,
                     item.ident,
-                    created=int(row["created"]) if row is not None else 0,
-                    updated=int(row["updated"]) if row is not None else 0,
+                    created=int(row["created"]) if row is not None else None,
+                    updated=int(row["updated"]) if row is not None else None,
                 )
             fixed.append(item.finding)
         if fixed:
@@ -599,8 +689,8 @@ class Vault:
         """巡检的比对：一次顺扫 ＋ 一遍定位行，两头对齐后给出差异。
 
         对齐口径（"这条行指向的字节还在不在"）：
-        行的坐标与身份与该身份的某次出现完全一致 → 一致；坐标不符但身份对得上 → 改坐标；
-        盘上只有该身份的其他版本 → 行声称的内容没了；一次都没出现 → 内容没了。
+        行的坐标与摘要都与该身份的某次出现完全一致 → 一致；摘要对得上而坐标不符 → 改坐标；
+        盘上只有该身份的其他版本（摘要不符）→ 行声称的内容没了；一次都没出现 → 内容没了。
         同一身份在盘上出现多次本身**不是**差异：更新留下的旧副本要等压实回收（§12），
         它不影响"行指向的那一份是否成立"。
         """
@@ -651,8 +741,10 @@ class Vault:
                     )
                 )
                 continue
-            if any(item.place == place for item in found_at):
-                continue  # 坐标与身份都对得上：一致
+            # 先按**摘要**筛，再比坐标：只比坐标会漏掉"索引被改坏"这一种。
+            # 索引行的摘要与盘上该位置记录的摘要不符时，坐标可能照样对得上
+            # （同一身份的另一份副本恰好落在同一坐标，或行被手改），
+            # 此时这条行声称的内容并不在载体里——巡检正是要比出这件事。
             same = [item for item in found_at if _ident_hash(item) == str(row["value_hash"])]
             if not same:
                 found.append(
@@ -662,11 +754,13 @@ class Vault:
                             bucket=str(row["bucket"]),
                             pack=str(row["pack"]),
                             value_uuid=value_uuid,
-                            detail="载体里只有该身份的其他版本",
+                            detail="载体里只有该身份的其他版本（摘要与行声明的不符）",
                         )
                     )
                 )
                 continue
+            if any(item.place == place for item in same):
+                continue  # 摘要与坐标都对得上：一致
             newest = same[-1]
             found.append(
                 _Difference(
@@ -692,9 +786,15 @@ class Vault:
 
         与 :meth:`Bucket.records` 的区别只在这一处：重建要停下来（半份结果不能当结果），
         巡检要接着看完——"还坏在哪儿"正是它要回答的问题。
+
+        **打开载体这一步也在保护范围内**：`CarrierFile.open` 会校验文件头的魔数，
+        坏掉的（或空的、或根本不是载体的）文件在那里就抛了——只包住 `scan()` 的话，
+        一个坏文件会让整个巡检抛出去，而不是记成 :attr:`FindingKind.CORRUPT_CARRIER`。
+        故这里逐个文件开、逐个文件扫，坏一个不影响其余的。
         """
-        for carrier in bucket.packs():
+        for path in _pack_paths(bucket, found):
             try:
+                carrier = CarrierFile.open(path)
                 for span, record in carrier.scan():
                     yield (
                         Placement(
@@ -705,13 +805,13 @@ class Vault:
                         ),
                         record,
                     )
-            except (CorruptObjectError, RecordFormatError, SlotError) as exc:
+            except (CorruptObjectError, OSError, RecordFormatError, SlotError) as exc:
                 found.append(
                     _Difference(
                         Finding(
                             FindingKind.CORRUPT_CARRIER,
                             bucket=bucket.name,
-                            pack=carrier.path.name,
+                            pack=path.name,
                             detail=str(exc),
                         )
                     )

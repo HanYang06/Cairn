@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 from core.types import RecordFormatError, ValueHash, now_ms
 from core.types.errors import IndexSchemaError
 
-from .tables import Table, declared_tables, sql_type_name
+from .tables import Column, TableSpec, declared_tables, default_literal, index_name, sql_type_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -41,6 +41,43 @@ _META_KEY = "schema.declared"
 """`meta` 里存的那份声明投影（用来发现"库里记的"与"程序认的"不一致）。"""
 
 
+def _column_drift(column: Column, actual: ColumnState) -> str:
+    """已存在的列与声明的不符之处（空串 = 一致）。
+
+    比四项：类型、主键、非空、默认值。列级 ``UNIQUE`` 不在 ``PRAGMA table_info`` 里，
+    由声明的**索引**那一侧比（`differences` 的索引分支）——那是唯一性的实际载体。
+    默认值比的是 SQL 文本：用 `TableSpec` 编译器**同一处**的字面量写法，
+    免得"声明写 0、库里存 '0'"这种假差异。
+    """
+    if actual.type != sql_type_name(column.type):
+        return f"{column.name}: 实际类型 {actual.type} ≠ 声明 {sql_type_name(column.type)}"
+    if actual.primary_key != column.primary_key:
+        return f"{column.name}: 主键 实际 {actual.primary_key} ≠ 声明 {column.primary_key}"
+    if actual.not_null != column.not_null:
+        return f"{column.name}: 非空 实际 {actual.not_null} ≠ 声明 {column.not_null}"
+    wanted = None if column.default is None else default_literal(column.default)
+    if actual.default != wanted:
+        return f"{column.name}: 默认值 实际 {actual.default} ≠ 声明 {wanted}"
+    return ""
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnState:
+    """库里一列的实际样子：类型 ＋ 约束（比对声明用）。"""
+
+    type: str
+    """方言类型名（大写）。"""
+
+    not_null: bool = False
+    """是否 NOT NULL。"""
+
+    primary_key: bool = False
+    """是否主键。"""
+
+    default: str | None = None
+    """默认值的 **SQL 文本**（``PRAGMA`` 原样给出，如 ``'main'`` / ``0``）；没有即 ``None``。"""
+
+
 @dataclass(frozen=True, slots=True)
 class Difference:
     """一处差异：分类 + 处置所需的最小信息。"""
@@ -48,9 +85,18 @@ class Difference:
     table: str
     kind: str
     """差异种类：``missing_table`` / ``missing_column`` / ``extra_column`` /
-    ``missing_index`` / ``column_mismatch`` / ``extra_table``。"""
+    ``missing_index`` / ``index_mismatch`` / ``column_mismatch`` / ``extra_table``。"""
 
     detail: str = ""
+    """人读的说明（进日志与计划）；**机器判据一律走 :attr:`subject`**，不从这段文本反解。"""
+
+    subject: str = ""
+    """这一处差异针对的对象：**索引名或列名**（机器判据用它）。
+
+    与 `detail` 分开的理由：`detail` 是给人读的话，措辞随时可改；处置动作
+    （``DROP INDEX`` / ``ALTER TABLE … ADD COLUMN``）若从它反解对象名，
+    改一次文案就会动错索引。
+    """
 
     @property
     def fixable(self) -> bool:
@@ -59,6 +105,7 @@ class Difference:
             "missing_table",
             "missing_column",
             "missing_index",
+            "index_mismatch",
             "extra_column",
             "extra_table",
         }
@@ -84,7 +131,8 @@ class RebuildPlan:
     """重建授权：**破坏性动作必须显式给**（不给则拒绝执行）。"""
 
     tables: tuple[str, ...]
-    """要重建的表名；这些表的数据由调用方负责搬运。"""
+    """要重建的表名。旧表**改名隔离**（``<表>__dropped_<时刻>``）而不删：
+    字节留在库里可查可搬，表内容由调用方按声明重建，或从备份恢复。"""
 
     reason: str = ""
     """为什么重建（进日志，便于回溯）。"""
@@ -96,7 +144,7 @@ class Index:
 
     path: Path
     conn: sqlite3.Connection
-    declarations: tuple[Table, ...] = field(default_factory=declared_tables)
+    declarations: tuple[TableSpec, ...] = field(default_factory=declared_tables)
 
     # ---- 生命周期 ----
     @classmethod
@@ -109,17 +157,28 @@ class Index:
         """
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        declarations = declared_tables()  # 先解析声明：它抛错时还没有连接需要关
         conn = sqlite3.connect(str(target))
         conn.row_factory = sqlite3.Row
-        strangers = _stranger_tables(conn)
+        try:
+            strangers = _stranger_tables(conn, declarations)
+        except Exception:
+            conn.close()  # 库坏掉时认表这一步就会抛：抛之前先关，不得漏连接
+            raise
         if strangers:
             conn.close()
             raise IndexSchemaError(
                 f"库里已有的表 {strangers} 一张都不是本程序声明的，不接管：{target}"
                 "（旧格式的库不予读取；换目录或人工处置）"
             )
-        conn.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        return cls(path=target, conn=conn)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+        except Exception:
+            conn.close()
+            raise
+        return cls(path=target, conn=conn, declarations=declarations)
 
     def close(self) -> None:
         """关闭连接。"""
@@ -130,9 +189,9 @@ class Index:
         self.conn.commit()
 
     # ---- 对比 ----
-    def actual_tables(self) -> dict[str, dict[str, str]]:
-        """实际表结构：``{表名: {列名: 类型}}``（不含 ``meta`` 与 sqlite 内部表）。"""
-        found: dict[str, dict[str, str]] = {}
+    def actual_tables(self) -> dict[str, dict[str, ColumnState]]:
+        """实际表结构：``{表名: {列名: 列的实际样子}}``（不含 ``meta`` 与 sqlite 内部表）。"""
+        found: dict[str, dict[str, ColumnState]] = {}
         rows = self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
@@ -143,18 +202,31 @@ class Index:
             found[name] = self._columns_of(name)
         return found
 
-    def _columns_of(self, name: str) -> dict[str, str]:
-        """按 ``PRAGMA table_info`` 取列与类型（**引号内是表名，来自声明，已校验标识符**）。"""
+    def _columns_of(self, name: str) -> dict[str, ColumnState]:
+        """按 ``PRAGMA table_info`` 取列的**类型与约束**（引号内是表名，来自声明，已校验标识符）。
+
+        只比类型是不够的：``not_null`` / ``default`` / 主键的漂移同样是"库里与声明不符"，
+        静默放过就等于库结构悄悄跑偏（声明改了一列的非空或默认值，开库却一路绿灯）。
+        """
         quoted = '"' + name.replace('"', '""') + '"'
         return {
-            str(row["name"]): str(row["type"]).upper()
+            str(row["name"]): ColumnState(
+                type=str(row["type"]).upper(),
+                not_null=bool(row["notnull"]),
+                primary_key=bool(row["pk"]),
+                default=None if row["dflt_value"] is None else str(row["dflt_value"]),
+            )
             for row in self.conn.execute(f"PRAGMA table_info({quoted})")
         }
 
     def actual_indexes(self, table: str) -> set[tuple[tuple[str, ...], bool]]:
         """实际索引：``{(列组合, 是否唯一)}``。"""
+        return set(self.actual_index_defs(table).values())
+
+    def actual_index_defs(self, table: str) -> dict[str, tuple[tuple[str, ...], bool]]:
+        """实际索引：``{索引名: (列组合, 是否唯一)}``（按**名字**索引，比对同名不同定义用）。"""
         quoted = '"' + table.replace('"', '""') + '"'
-        found: set[tuple[tuple[str, ...], bool]] = set()
+        found: dict[str, tuple[tuple[str, ...], bool]] = {}
         for row in self.conn.execute(f"PRAGMA index_list({quoted})"):
             index_name = str(row["name"])
             if index_name.startswith("sqlite_autoindex"):
@@ -163,7 +235,7 @@ class Index:
                 str(item["name"])
                 for item in self.conn.execute(f'PRAGMA index_info("{index_name}")')
             )
-            found.add((columns, bool(row["unique"])))
+            found[index_name] = (columns, bool(row["unique"]))
         return found
 
     def differences(self) -> list[Difference]:
@@ -179,26 +251,49 @@ class Index:
             wanted = {column.name: column for column in table.columns}
             for column in table.columns:
                 if column.name not in columns:
-                    found.append(Difference(name, "missing_column", column.name))
-                elif columns[column.name] != sql_type_name(column.type):
+                    # 缺列分两种：**能原地补**的（ALTER TABLE ADD COLUMN）与**补不上**的
+                    # （主键 / UNIQUE / NOT NULL 无默认值）。后者只能重建，故按破坏性差异报，
+                    # 免得落在"可原位补齐"里、对齐时却补不上而卡在"仍有差异"。
+                    statement = table.add_column_ddl(column)
+                    if statement is None:
+                        found.append(
+                            Difference(
+                                name,
+                                "column_mismatch",
+                                f"{column.name}: 缺列且无法原地补"
+                                "（主键 / UNIQUE / NOT NULL 无默认值），须重建",
+                            )
+                        )
+                    else:
+                        found.append(
+                            Difference(name, "missing_column", column.name, subject=column.name)
+                        )
+                else:
+                    drifted = _column_drift(column, columns[column.name])
+                    if drifted:
+                        found.append(Difference(name, "column_mismatch", drifted))
+            found.extend(
+                Difference(name, "extra_column", extra, subject=extra)
+                for extra in sorted(set(columns) - set(wanted))
+            )
+            defs = self.actual_index_defs(name)
+            for index in table.indexes:
+                label = index_name(name, index.columns)
+                defined = defs.get(label)
+                if defined is None:
+                    found.append(Difference(name, "missing_index", label, subject=label))
+                elif defined != (index.columns, index.unique):
+                    # 同名、不同定义（索引名只由表名与列推出，故**唯一性变化**正好落在这里）。
+                    # 得先 DROP 再建：`CREATE INDEX IF NOT EXISTS` 见到同名会跳过，
+                    # 光靠它永远改不过来，差异就卡在"对齐后仍有"。
                     found.append(
                         Difference(
                             name,
-                            "column_mismatch",
-                            f"{column.name}: 实际 {columns[column.name]}"
-                            f" ≠ 声明 {sql_type_name(column.type)}",
+                            "index_mismatch",
+                            f"{label}: 实际 {defined} ≠ 声明 {(index.columns, index.unique)}",
+                            subject=label,
                         )
                     )
-            found.extend(
-                Difference(name, "extra_column", extra)
-                for extra in sorted(set(columns) - set(wanted))
-            )
-            indexes = self.actual_indexes(name)
-            found.extend(
-                Difference(name, "missing_index", index.name)
-                for index in table.indexes
-                if (index.columns, index.unique) not in indexes
-            )
         found.extend(
             Difference(extra_table, "extra_table", "库里有、声明没有")
             for extra_table in sorted(set(actual) - set(declared))
@@ -221,16 +316,32 @@ class Index:
 
     # ---- 处置 ----
     def align(self, *, rebuild: RebuildPlan | None = None) -> list[Difference]:
-        """对齐声明：原位补齐照做；**破坏性差异无授权即拒绝**。
+        """对齐声明：原位补齐照做（缺表建表、**缺列补列**、缺索引建索引）；破坏性差异无授权即拒绝。
+
+        "缺列补列"由 :meth:`TableSpec.add_column_ddl` 生成 ``ALTER TABLE … ADD COLUMN``：
+        ``ddl()`` 里那句 ``CREATE TABLE IF NOT EXISTS`` 对**已存在的表**是空操作，
+        只靠它补不上列——那会让"声明加一列"变成"库打不开"。
 
         返回处置后仍存在的差异（应为空）；非空即抛错——不静默放过。
         """
         differences = self.differences()
+        destructive = self._authorize(differences, rebuild)
+        for table in self.declarations:
+            self._align_table(table, differences, destructive)
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
+            (_META_KEY, json.dumps(_canonical_declarations(), ensure_ascii=False, sort_keys=True)),
+        )
+        self.conn.commit()
+        return self.differences()
+
+    def _authorize(self, differences: list[Difference], rebuild: RebuildPlan | None) -> set[str]:
+        """破坏性差异的授权检查（**没授权就不动库**）；返回获准重建的表名集合。"""
         destructive = {item.table for item in differences if item.destructive}
         if destructive and rebuild is None:
             raise IndexSchemaError(
-                f"以下表的列型或约束与声明不符，SQLite 无法原地修改，需重建并搬运："
-                f"{sorted(destructive)}（调用方须显式给出 RebuildPlan）"
+                f"以下表的列型或约束与声明不符（或缺列且补不上），SQLite 无法原地修改，"
+                f"需重建并搬运：{sorted(destructive)}（调用方须显式给出 RebuildPlan）"
             )
         allowed = set(rebuild.tables) if rebuild is not None else set()
         unauthorized = destructive - allowed
@@ -240,19 +351,71 @@ class Index:
             )
         if rebuild is not None and rebuild.tables:
             _logger.warning(
-                "按授权重建表（数据由调用方搬运）：%s；原因：%s", rebuild.tables, rebuild.reason
+                "按授权重建表（旧表改名隔离、不删；内容须按声明重建或从备份恢复）：%s；原因：%s",
+                rebuild.tables,
+                rebuild.reason,
             )
-        for table in self.declarations:
-            if table.name in destructive:
-                self.conn.execute(f'DROP TABLE IF EXISTS "{table.name}"')
-            for statement in table.ddl():
+        return destructive
+
+    def _align_table(
+        self, table: TableSpec, differences: list[Difference], destructive: set[str]
+    ) -> None:
+        """处置一张表：按授权重建（整表按声明重来），否则**先建表、再补列、最后建索引**。
+
+        三步的顺序不能反：``ddl()`` 把建表与建索引混在一起返回，若整段先跑，
+        "这次新增一列、并且给它建了索引"就会先执行 ``CREATE INDEX … ("新列")``——
+        那时列还没补上，SQLite 报 ``no such column``，库随即打不开。
+        """
+        statements = table.ddl()
+        if table.name in destructive:
+            self._quarantine(table.name)
+            for statement in statements:
                 self.conn.execute(statement)
-        self.conn.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-            (_META_KEY, json.dumps(_canonical_declarations(), ensure_ascii=False, sort_keys=True)),
-        )
-        self.conn.commit()
-        return self.differences()
+            return  # 重建已按声明建好整张表，缺列随之补齐
+        self.conn.execute(statements[0])  # 建表
+        for column in self._missing_columns(table, differences):
+            alter = table.add_column_ddl(column)
+            if alter is not None:  # 补不上的那些已在 differences() 里按破坏性报出
+                self.conn.execute(alter)
+        for stale in self._stale_indexes(table, differences):
+            self.conn.execute(f'DROP INDEX IF EXISTS "{stale}"')  # 同名不同定义 → 拆掉重建
+        for statement in statements[1:]:  # 建索引（必须在补列之后）
+            self.conn.execute(statement)
+
+    def _quarantine(self, table: str) -> None:
+        """把待重建的表**改名隔离**，而不是 ``DROP``。
+
+        ``DROP TABLE`` 会让整张表的行当场消失，而"数据由调用方搬运"这句承诺在实现里
+        没有落点：调用方拿不到旧行，`Vault.open` 也不代搬；对档三（真源在库内、
+        只能靠备份）的表更是不可恢复的丢失。改名则字节一行不丢：人工可查、可搬、可删。
+
+        隔离表按"库里有、声明没有"处置，即 `extra_table` **只告警不删**（§8.4），
+        与全库口径一致。它名下的索引**先拆掉**：索引名整库唯一，留着会与新建的同名
+        索引相撞，让新表的索引被静默跳过、差异卡在"对齐后仍有"。
+        """
+        for stale in self.actual_index_defs(table):
+            self.conn.execute(f'DROP INDEX IF EXISTS "{stale}"')
+        quoted = '"' + table.replace('"', '""') + '"'
+        self.conn.execute(f'ALTER TABLE {quoted} RENAME TO "{table}__dropped_{now_ms()}"')
+
+    @staticmethod
+    def _stale_indexes(table: TableSpec, differences: list[Difference]) -> list[str]:
+        """同名、定义已变的索引（先拆掉，随后按声明重建）；名字取自差异的结构化字段。"""
+        return [
+            item.subject
+            for item in differences
+            if item.kind == "index_mismatch" and item.table == table.name
+        ]
+
+    @staticmethod
+    def _missing_columns(table: TableSpec, differences: list[Difference]) -> list[Column]:
+        """这张表里"缺、且能原地补"的列（顺序即声明顺序）；名字取自差异的结构化字段。"""
+        missing = {
+            item.subject
+            for item in differences
+            if item.kind == "missing_column" and item.table == table.name
+        }
+        return [column for column in table.columns if column.name in missing]
 
     def verify_declarations(self) -> None:
         """校验库里记的声明投影与程序当前声明一致；不一致即报错。
@@ -353,14 +516,17 @@ class Index:
         return identifier
 
 
-def _stranger_tables(conn: sqlite3.Connection) -> list[str]:
+def _stranger_tables(conn: sqlite3.Connection, declarations: tuple[TableSpec, ...]) -> list[str]:
     """已有的表里，哪些说明"这不是我们的库"。
 
     判据：库中已有表（`meta` 除外），却**一张都不是本程序声明的**——那不是我们的库
     （旧格式的目录同样撞在这一条上：它有自己的 packs / contents / blocks）。
     只建过 `meta` 的库**不拦**：那是刚 `open`、还没对齐的样子。
+
+    声明由调用方传入（而不是在这里现读）：读声明会抛错，而那时连接已经建立，
+    在 `open` 里就得为它单独兜一遍关连接；先解析、后连接则没有这个窗口。
     """
-    declared = {table.name for table in declared_tables()}
+    declared = {table.name for table in declarations}
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
@@ -371,7 +537,7 @@ def _stranger_tables(conn: sqlite3.Connection) -> list[str]:
 
 
 def _canonical_declarations() -> dict[str, object]:
-    """当前声明的规范化投影：按表名归拢的 :meth:`Table.signature`（列与索引有序，摘要稳定）。"""
+    """当前声明的规范化投影：按表名归拢的 :meth:`TableSpec.signature`（列与索引有序，摘要稳定）。"""
     return {table.name: table.signature() for table in declared_tables()}
 
 

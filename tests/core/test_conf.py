@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -254,11 +255,52 @@ def test_edited_reference_is_not_overwritten(engine: ConfEngine) -> None:
 
 @pytest.mark.usefixtures("declared")
 def test_absolute_reference_is_refused(engine: ConfEngine) -> None:
-    """绝对路径绑死本机目录 → 拒收（配置文件要跟仓走，跟仓走的只能是相对引用）。"""
+    """绝对路径绑死本机目录 → 拒收；**写入侧就拒**，手改文件落到读取侧也拒。"""
     engine.sync()
-    engine.set(_REF, str(_ref_file(engine)))
+    absolute = str(_ref_file(engine))
+
+    with pytest.raises(ConfigValueError, match="相对引用"):
+        engine.set(_REF, absolute)
+
+    _write(engine, {_REF: absolute})  # 模拟手改值文件：读取侧同样不放过
     with pytest.raises(ConfigValueError, match="相对引用"):
         engine.get(_REF)
+
+
+@pytest.mark.usefixtures("declared")
+def test_reference_may_not_escape_the_repo(engine: ConfEngine) -> None:
+    """`../` 允许（同仓跨目录引用是合理用途），但**不许跑出仓根**。
+
+    跑出去就不是"跟仓走"了：读到的内容不再属于这个仓，路径也随 checkout 位置漂移。
+    """
+    outside = engine.root.parent / "outside.yaml"
+    outside.write_text("- name: 仓外\n", encoding="utf-8")
+    engine.sync()
+    escape = os.path.relpath(outside, _value_file(engine).parent).replace("\\", "/")
+
+    with pytest.raises(ConfigValueError, match="跑出仓根"):
+        engine.set(_REF, escape)
+
+    _write(engine, {_REF: escape})
+    with pytest.raises(ConfigValueError, match="跑出仓根"):
+        engine.get(_REF)
+
+
+@pytest.mark.usefixtures("declared")
+def test_set_refuses_a_non_reference_value(engine: ConfEngine) -> None:
+    """写入口与读入口同一口径：这一类只能写引用名。
+
+    否则会落成一份"写得进、读不出"的配置——写的时候不拦、读的时候才报，最难查。
+    """
+    engine.sync()
+    _ref_file(engine).write_text("- name: record\n", encoding="utf-8")
+
+    for bad in ([{"name": "record"}], 7, "   "):
+        with pytest.raises(ConfigValueError, match="引用名"):
+            engine.set(_REF, bad)
+
+    engine.set(_REF, "tables.yaml")  # 合法引用名照旧可写
+    assert engine.get(_REF) == [{"name": "record"}]
 
 
 @pytest.mark.usefixtures("declared")
@@ -447,6 +489,17 @@ def test_seal_line_rejects_non_integer_value(tmp_path: Path) -> None:
             _ = vault.bucket("main").pack_max_bytes
     finally:
         engine_conf.set("storage.pack.max_bytes", original)
+
+
+def test_slot_bytes_rejects_non_integer_value(tmp_path: Path) -> None:
+    """槽长同样在配置边界报清楚：值文件可被人改成字符串，别把 `TypeError` 留给建载体那一刻。"""
+    original = engine_conf.get("storage.pack.slot_bytes")
+    try:
+        engine_conf.set("storage.pack.slot_bytes", "65536")
+        with pytest.raises(CairnError, match="slot_bytes 必须是不小于"):
+            CarrierFile.create(tmp_path / "pack")
+    finally:
+        engine_conf.set("storage.pack.slot_bytes", original)
 
 
 def test_kernel_log_level_is_applied() -> None:
