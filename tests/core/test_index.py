@@ -20,9 +20,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _BASE_COLUMNS: list[dict[str, object]] = [
-    {"name": "id", "type": "text", "primary_key": True, "not_null": True},
-    {"name": "tag", "type": "text"},
+    {"name": "id", "from": "prog", "type": "text", "not_null": True},
+    {"name": "tag", "from": "prog", "type": "text"},
 ]
+_BASE_KEY: list[str] = ["id"]
+"""这些夹具表的主键：新声明把主键写在表级（复合主键挂不在列上）。"""
 
 
 def _decl(
@@ -40,6 +42,7 @@ def _decl(
             "doc": doc,
             "columns": _BASE_COLUMNS if columns is None else columns,
             "indexes": [{"columns": ["tag"]}] if indexes is None else indexes,
+            "primary_key": _BASE_KEY,
         }
     )
     return Declaration((spec,))
@@ -155,7 +158,9 @@ def test_missing_column_is_added(tmp_path: Path):
     Index.open(path, _decl(), create=True).close()
     _raw(path, "INSERT INTO thing (id, tag) VALUES ('a', 'x')")
 
-    grown = _decl(columns=[*_BASE_COLUMNS, {"name": "size", "type": "integer", "default": 0}])
+    grown = _decl(
+        columns=[*_BASE_COLUMNS, {"name": "size", "from": "prog", "type": "integer", "default": 0}]
+    )
     with Index.open(path, grown) as index:
         assert DiffKind.MISSING_COLUMN in _kinds(index)
         assert _columns_of(path, "thing") == ["id", "tag", "size"]
@@ -235,7 +240,7 @@ def test_changed_column_type_needs_authorization(tmp_path: Path):
     path = tmp_path / "catalog.db"
     Index.open(path, _decl(), create=True).close()
 
-    changed = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "type": "integer"}])
+    changed = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "from": "prog", "type": "integer"}])
     with pytest.raises(IndexSchemaError, match="须显式授权重建: thing"):
         Index.open(path, changed)
 
@@ -245,7 +250,12 @@ def test_unaddable_column_needs_authorization(tmp_path: Path):
     path = tmp_path / "catalog.db"
     Index.open(path, _decl(), create=True).close()
 
-    grown = _decl(columns=[*_BASE_COLUMNS, {"name": "size", "type": "integer", "not_null": True}])
+    grown = _decl(
+        columns=[
+            *_BASE_COLUMNS,
+            {"name": "size", "from": "prog", "type": "integer", "not_null": True},
+        ]
+    )
     with pytest.raises(IndexSchemaError, match="须显式授权重建"):
         Index.open(path, grown)
 
@@ -255,18 +265,18 @@ def test_unaddable_column_needs_authorization(tmp_path: Path):
     [
         # 非空约束变了
         [
-            {"name": "id", "type": "text", "primary_key": True, "not_null": True},
-            {"name": "tag", "type": "text", "not_null": True},
+            {"name": "id", "from": "prog", "type": "text", "not_null": True},
+            {"name": "tag", "from": "prog", "type": "text", "not_null": True},
         ],
         # 主键换了列
         [
-            {"name": "id", "type": "text"},
-            {"name": "tag", "type": "text", "primary_key": True, "not_null": True},
+            {"name": "id", "from": "prog", "type": "text"},
+            {"name": "tag", "from": "prog", "type": "text", "not_null": True},
         ],
         # 默认值变了
         [
-            {"name": "id", "type": "text", "primary_key": True, "not_null": True},
-            {"name": "tag", "type": "text", "default": "x"},
+            {"name": "id", "from": "prog", "type": "text", "not_null": True},
+            {"name": "tag", "from": "prog", "type": "text", "default": "x"},
         ],
     ],
 )
@@ -285,7 +295,7 @@ def test_column_level_unique_drift_needs_authorization(tmp_path: Path):
     Index.open(path, _decl(), create=True).close()
 
     unique = _decl(
-        columns=[_BASE_COLUMNS[0], {"name": "tag", "type": "text", "unique": True}],
+        columns=[_BASE_COLUMNS[0], {"name": "tag", "from": "prog", "type": "text", "unique": True}],
         indexes=[],
     )
     with pytest.raises(IndexSchemaError, match="须显式授权重建"):
@@ -298,7 +308,7 @@ def test_rebuild_isolates_the_old_table_and_keeps_its_rows(tmp_path: Path):
     Index.open(path, _decl(), create=True).close()
     _raw(path, "INSERT INTO thing (id, tag) VALUES ('a', '1')")
 
-    changed = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "type": "integer"}])
+    changed = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "from": "prog", "type": "integer"}])
     plan = RebuildPlan(tables=("thing",), reason="测试：改列型")
     with Index.open(path, changed, rebuild=plan) as index:
         assert index.alignment.rebuilt == ("thing",)
@@ -330,7 +340,7 @@ def test_rebuild_authorization_must_cover_every_table(tmp_path: Path):
     path = tmp_path / "catalog.db"
     Index.open(path, _decl(), create=True).close()
 
-    changed = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "type": "integer"}])
+    changed = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "from": "prog", "type": "integer"}])
     plan = RebuildPlan(tables=("other",), reason="测试：漏了一张")
 
     with pytest.raises(IndexSchemaError, match="授权未覆盖"):
@@ -350,7 +360,8 @@ def test_declaration_drift_is_reported_and_updated(tmp_path: Path):
             "name": "note",
             "tier": "source",
             "owner": "note",
-            "columns": [{"name": "id", "type": "text", "primary_key": True}],
+            "columns": [{"name": "id", "from": "prog", "type": "text"}],
+            "primary_key": ["id"],
         }
     )
     grown = Declaration((*_decl().tables, extra))
@@ -367,7 +378,9 @@ def test_declaration_drift_is_reported_and_updated(tmp_path: Path):
 def test_dropping_a_unique_column_constraint_is_not_a_container_drift(tmp_path: Path):
     """库内的唯一约束比声明更严：那是库里多出来的隐式索引，只按声明一侧比，不拆也不重建。"""
     path = tmp_path / "catalog.db"
-    strict = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "type": "text", "unique": True}])
+    strict = _decl(
+        columns=[_BASE_COLUMNS[0], {"name": "tag", "from": "prog", "type": "text", "unique": True}]
+    )
     Index.open(path, strict, create=True).close()
 
     with Index.open(path, _decl()) as index:

@@ -314,7 +314,11 @@ def _compare_row(location: Location, occurrences: dict[str, list[_Occurrence]]) 
 
 
 def _as_location(occurrence: _Occurrence) -> Location:
-    """把盘上的一次出现写成"应该补成什么样"的行（类型与落盘时刻未知，给空值）。"""
+    """把盘上的一次出现写成"应该补成什么样"的行（类型与落盘时刻未知，给空值）。
+
+    `name` 也给空：作用域名是引用方写下的，顺扫载体读不到它——重建补行时只能是未知，
+    与 `kind` / `created` 同一种降级（设计篇 §8.5）。
+    """
     return Location(
         value_uuid=occurrence.value_uuid,
         value_hash=occurrence.value_hash,
@@ -322,7 +326,7 @@ def _as_location(occurrence: _Occurrence) -> Location:
         pack=occurrence.pack,
         span=occurrence.span,
         size=occurrence.size,
-        issued=occurrence.issued,
+        birth_time=occurrence.issued,
     )
 
 

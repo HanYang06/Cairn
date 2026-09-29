@@ -10,8 +10,8 @@ from core.storage.format.id import ID
 
 def test_blocks_do_not_share_identity_or_body():
     """两块之间不得共用身份，也不得共用同一份载荷对象。"""
-    first = Block()
-    second = Block()
+    first = Block[None]()
+    second = Block[None]()
 
     assert first.id is not second.id
     assert first.id.value_uuid != second.id.value_uuid

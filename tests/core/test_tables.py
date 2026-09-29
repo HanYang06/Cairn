@@ -25,9 +25,10 @@ def _mapping(**overrides: object) -> dict[str, object]:
         "tier": "derived",
         "rebuild_from": "载体记录头",
         "columns": [
-            {"name": "id", "type": "text", "primary_key": True},
-            {"name": "payload", "type": "blob"},
+            {"name": "id", "from": "prog", "type": "text"},
+            {"name": "payload", "from": "prog", "type": "blob"},
         ],
+        "primary_key": ["id"],
     }
     base.update(overrides)
     return base
@@ -51,7 +52,7 @@ def test_reads_a_full_declaration():
     assert spec.rebuild_from == "载体记录头"
     assert spec.owner == "note"
     assert spec.column_names() == ("id", "payload")
-    assert spec.primary_key().name == "id"
+    assert spec.primary_key == ("id",)
     assert spec.indexes == (IndexSpec(columns=("payload",), unique=True),)
 
 
@@ -97,22 +98,33 @@ def test_columns_are_checked_for_duplicates_and_one_key():
         TableSpec.from_mapping(
             _mapping(
                 columns=[
-                    {"name": "id", "type": "text", "primary_key": True},
-                    {"name": "id", "type": "text"},
+                    {"name": "id", "from": "prog", "type": "text"},
+                    {"name": "id", "from": "prog", "type": "text"},
                 ]
             )
         )
-    with pytest.raises(TableDeclarationError, match="恰需一列主键"):
+    with pytest.raises(TableDeclarationError, match="多个身份列"):
         TableSpec.from_mapping(
-            _mapping(columns=[{"name": "id", "type": "text"}, {"name": "x", "type": "text"}])
+            _mapping(
+                columns=[{"name": "value_uuid"}, {"name": "value_hash"}],
+                primary_key=[],
+            )
         )
-    with pytest.raises(TableDeclarationError, match="恰需一列主键"):
+    with pytest.raises(TableDeclarationError, match="必须有主键"):
         TableSpec.from_mapping(
             _mapping(
                 columns=[
-                    {"name": "a", "type": "text", "primary_key": True},
-                    {"name": "b", "type": "text", "primary_key": True},
-                ]
+                    {"name": "a", "from": "prog", "type": "text"},
+                    {"name": "b", "from": "prog", "type": "text"},
+                ],
+                primary_key=[],
+            )
+        )
+    with pytest.raises(TableDeclarationError, match="主键列不存在"):
+        TableSpec.from_mapping(
+            _mapping(
+                columns=[{"name": "id", "from": "prog", "type": "text"}],
+                primary_key=["nope"],
             )
         )
 
@@ -121,7 +133,7 @@ def test_unknown_column_and_index_keys_are_rejected():
     """列与索引的未知项同样报错（写错了要看得见）。"""
     with pytest.raises(TableDeclarationError, match="未知项"):
         TableSpec.from_mapping(
-            _mapping(columns=[{"name": "id", "type": "text", "primary_key": True, "typo": 1}])
+            _mapping(columns=[{"name": "id", "from": "prog", "type": "text", "typo": 1}])
         )
     with pytest.raises(TableDeclarationError, match="未知项"):
         TableSpec.from_mapping(_mapping(indexes=[{"column": ["id"]}]))
@@ -131,7 +143,7 @@ def test_flags_must_be_booleans():
     """约束开关只收布尔：写成字符串会静默当真，故拒绝。"""
     with pytest.raises(TableDeclarationError, match="布尔"):
         TableSpec.from_mapping(
-            _mapping(columns=[{"name": "id", "type": "text", "primary_key": "yes"}])
+            _mapping(columns=[{"name": "id", "from": "prog", "type": "text", "not_null": "yes"}])
         )
     with pytest.raises(TableDeclarationError, match="布尔"):
         TableSpec.from_mapping(_mapping(indexes=[{"columns": ["payload"], "unique": "yes"}]))
@@ -179,16 +191,23 @@ def test_create_table_ddl_quotes_identifiers_and_orders_constraints():
     spec = TableSpec.from_mapping(
         _mapping(
             columns=[
-                {"name": "id", "type": "text", "primary_key": True, "not_null": True},
-                {"name": "state", "type": "text", "not_null": True, "default": "new"},
+                {"name": "id", "from": "prog", "type": "text", "not_null": True},
+                {
+                    "name": "state",
+                    "from": "prog",
+                    "type": "text",
+                    "not_null": True,
+                    "default": "new",
+                },
             ]
         )
     )
 
     assert spec.create_table_ddl() == (
         'CREATE TABLE IF NOT EXISTS "t" ('
-        '"id" TEXT PRIMARY KEY NOT NULL, '
-        "\"state\" TEXT NOT NULL DEFAULT 'new')"
+        '"id" TEXT NOT NULL, '
+        "\"state\" TEXT NOT NULL DEFAULT 'new', "
+        'PRIMARY KEY ("id"))'
     )
 
 
@@ -227,9 +246,9 @@ def test_add_column_ddl_and_its_limits():
     spec = TableSpec.from_mapping(
         _mapping(
             columns=[
-                {"name": "id", "type": "text", "primary_key": True},
-                {"name": "payload", "type": "blob"},
-                {"name": "u", "type": "text", "unique": True},
+                {"name": "id", "from": "prog", "type": "text"},
+                {"name": "payload", "from": "prog", "type": "blob"},
+                {"name": "u", "from": "prog", "type": "text", "unique": True},
             ]
         )
     )
@@ -263,9 +282,10 @@ def test_signature_ignores_doc_and_writing_order():
             "doc": "乙的说明",
             "indexes": [{"columns": ["payload"]}],
             "columns": [
-                {"name": "payload", "type": "blob", "doc": "载荷"},
-                {"name": "id", "type": "text", "primary_key": True},
+                {"name": "payload", "from": "prog", "type": "blob", "doc": "载荷"},
+                {"name": "id", "from": "prog", "type": "text"},
             ],
+            "primary_key": ["id"],
         }
     )
 
@@ -292,11 +312,12 @@ def test_declaration_rejects_cross_table_index_collision():
             "tier": "derived",
             "rebuild_from": "载体",
             "columns": [
-                {"name": "id", "type": "text", "primary_key": True},
-                {"name": "b", "type": "text"},
-                {"name": "c", "type": "text"},
+                {"name": "id", "from": "prog", "type": "text"},
+                {"name": "b", "from": "prog", "type": "text"},
+                {"name": "c", "from": "prog", "type": "text"},
             ],
             "indexes": [{"columns": ["b", "c"]}],
+            "primary_key": ["id"],
         }
     )
     right = TableSpec.from_mapping(
@@ -305,10 +326,11 @@ def test_declaration_rejects_cross_table_index_collision():
             "tier": "derived",
             "rebuild_from": "载体",
             "columns": [
-                {"name": "id", "type": "text", "primary_key": True},
-                {"name": "c", "type": "text"},
+                {"name": "id", "from": "prog", "type": "text"},
+                {"name": "c", "from": "prog", "type": "text"},
             ],
             "indexes": [{"columns": ["c"]}],
+            "primary_key": ["id"],
         }
     )
 
@@ -347,6 +369,7 @@ def test_kernel_tables_declare_and_compile():
     record = declaration.table("record")
     assert record is not None
     assert record.column_names() == (
+        "name",
         "value_uuid",
         "value_hash",
         "kind",
@@ -355,10 +378,11 @@ def test_kernel_tables_declare_and_compile():
         "slot_first",
         "slot_last",
         "size",
-        "issued",
+        "birth_time",
         "created",
         "updated",
     )
+    assert record.primary_key == ("name", "value_uuid")
     assert record.column("slot_head") is None
     assert record.index_name(record.indexes[0]) == "idx_record_value_hash"
 
@@ -383,13 +407,13 @@ def test_primary_key_may_sit_anywhere_in_the_list():
     spec = TableSpec.from_mapping(
         _mapping(
             columns=[
-                {"name": "payload", "type": "blob"},
-                {"name": "id", "type": "text", "primary_key": True},
+                {"name": "payload", "from": "prog", "type": "blob"},
+                {"name": "id", "from": "prog", "type": "text"},
             ]
         )
     )
 
-    assert spec.primary_key().name == "id"
+    assert spec.primary_key == ("id",)
     assert spec.column("payload") is not None
     assert spec.column("nope") is None
 
@@ -399,14 +423,15 @@ def test_primary_key_may_sit_anywhere_in_the_list():
     [
         ({"owner": 7}, "归属"),
         ({"doc": 7}, "说明"),
-        ({"columns": ["id"]}, "必须是映射"),
-        ({"columns": [{"name": "id", "type": 7, "primary_key": True}]}, "必须是字符串"),
+        ({"columns": [{"name": "value_uuid"}], "primary_key": ["nope"]}, "主键列不存在"),
+        ({"columns": [{"name": "id", "from": "prog", "type": 7}]}, "必须是字符串"),
         (
             {
                 "columns": [
-                    {"name": "id", "type": "text", "primary_key": True},
-                    {"name": "x", "type": "json"},
-                ]
+                    {"name": "id", "from": "prog", "type": "text"},
+                    {"name": "x", "from": "prog", "type": "json"},
+                ],
+                "primary_key": ["id"],
             },
             "未知列类型",
         ),

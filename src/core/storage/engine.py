@@ -46,6 +46,12 @@ if TYPE_CHECKING:
 ENGINE_SOURCE = "core.storage"
 """事件来源标识：存储引擎发出的通知都带它。"""
 
+BODY_SCOPE = "body"
+"""内容记录的作用域名（身份表里的判别列，设计篇 §8）。"""
+
+BLOCK_SCOPE = "block"
+"""块记录的作用域名（身份表里的判别列，设计篇 §8）。"""
+
 
 class Storage:
     """存储引擎：把 body 落成记录，把身份读回 body。
@@ -105,10 +111,10 @@ class Storage:
         target = self._hub(self._default_hub if hub is None else hub, create=True)
         content = ID.of(data)
         if not self._index.rows.locations_by_hash(content.value_hash):
-            self._write_record(target, content, data)
+            self._write_record(target, content, data, name=BODY_SCOPE)
         pointer = encode_block_payload(content.value_hash)
         block = ID.of(pointer)
-        self._write_record(target, block, pointer, kind=kind)
+        self._write_record(target, block, pointer, kind=kind, name=BLOCK_SCOPE)
         self._emit(OBJECT_PUT, block.value_uuid, {"body": content.value_hash, "kind": kind})
         return block
 
@@ -174,8 +180,10 @@ class Storage:
         self._index.rows.register_hub(name)
         return created
 
-    def _write_record(self, target: Hub, record_id: ID, payload: bytes, *, kind: str = "") -> None:
-        """写一条记录，并把它落成一行定位。"""
+    def _write_record(
+        self, target: Hub, record_id: ID, payload: bytes, *, kind: str = "", name: str = ""
+    ) -> None:
+        """写一条记录，并把它落成一行定位（`name` 是作用域名：块记录 / 内容记录）。"""
         raw = encode(record_id, payload)
         placement: Placement = target.append(raw)
         stamp = now_ms()
@@ -187,8 +195,9 @@ class Storage:
                 pack=placement.pack,
                 span=placement.span,
                 size=len(raw),
+                name=name,
                 kind=kind,
-                issued=record_id.birth_time,
+                birth_time=record_id.birth_time,
                 created=stamp,
                 updated=stamp,
             )

@@ -383,7 +383,7 @@ def _compare_columns(spec: TableSpec, found: _ActualTable) -> _Plan:
         if actual_column is None:
             differences.append(_missing_column(spec, column, statements))
             continue
-        drift = _column_drift(column, actual_column)
+        drift = _column_drift(column, actual_column, key=column.name in spec.primary_key)
         if drift is not None:
             differences.append(
                 Difference(DiffKind.CHANGED_COLUMN, spec.name, column.name, drift, destructive=True)
@@ -432,7 +432,7 @@ def _compare_indexes(spec: TableSpec, found: _ActualTable) -> _Plan:
     statements: list[str] = []
     warnings: list[str] = []
 
-    declared_indexes = {spec.index_name(index): index for index in spec.indexes}
+    declared_indexes = {spec.index_name(index): index for index in spec.resolved_indexes()}
     for name, index in declared_indexes.items():
         actual_index = found.indexes.get(name)
         if actual_index is None:
@@ -462,15 +462,19 @@ def _compare_indexes(spec: TableSpec, found: _ActualTable) -> _Plan:
     return differences, statements, warnings
 
 
-def _column_drift(column: Column, found: _ActualColumn) -> str | None:
-    """列级漂移：类型、非空、主键、默认值任一项不同即算容器级不兼容。"""
+def _column_drift(column: Column, found: _ActualColumn, *, key: bool) -> str | None:
+    """列级漂移：类型、非空、主键、默认值任一项不同即算容器级不兼容。
+
+    `key` 由调用方按**表级主键**算出：主键挪到表级之后，列上的 `primary_key` 一律为假，
+    再读它会把每张有主键的表都判成"主键变了"。
+    """
     problems: list[str] = []
     expected_type = sql_type(column.type)
     if found.type.upper() != expected_type.upper():
         problems.append(f"类型 {found.type or '（空）'} → {expected_type}")
     if found.not_null != column.not_null:
         problems.append("非空约束变了")
-    if found.primary_key != column.primary_key:
+    if found.primary_key != key:
         problems.append("主键变了")
     if found.default != column.default_sql():
         problems.append(f"默认值 {found.default!r} → {column.default_sql()!r}")

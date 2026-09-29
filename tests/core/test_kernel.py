@@ -125,7 +125,8 @@ def test_custom_declaration_is_forwarded(tmp_path: Path):
             "name": "note",
             "tier": "source",
             "owner": "note",
-            "columns": [{"name": "id", "type": "text", "primary_key": True}],
+            "columns": [{"name": "id", "from": "prog", "type": "text"}],
+            "primary_key": ["id"],
         }
     )
     declaration = Declaration((*KERNEL_TABLES, note))

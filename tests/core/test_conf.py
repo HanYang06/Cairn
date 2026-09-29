@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from core.conf import Config
-from core.conf.types import check_type, spec_of
+from core.conf.types import JsonValue, check_type, spec_of
 from core.exc import (
     ConfigDuplicateError,
     ConfigFileError,
@@ -455,6 +455,6 @@ def test_reduce_does_not_shadow_a_real_declaration(conf: Config):
         (int | None, 3),
     ],
 )
-def test_spec_and_check_round_trip(type_arg: object, value: object):
+def test_spec_and_check_round_trip(type_arg: object, value: JsonValue):
     """`spec_of` 收下的写法，`check_type` 都判得过。"""
     assert check_type(value, spec_of(type_arg)) == value

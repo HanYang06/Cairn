@@ -84,7 +84,7 @@ def test_rebuild_keeps_unknown_fields_empty(tmp_path: Path):
     assert stored.kind == ""
     assert stored.created == 0
     assert stored.updated == 0
-    assert stored.issued == 0
+    assert stored.birth_time == 0
     assert stored.value_hash == ID.of(b"only").value_hash
     assert stored.size == len(raw)
 

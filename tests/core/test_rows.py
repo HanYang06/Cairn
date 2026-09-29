@@ -35,7 +35,7 @@ def _location(value_uuid: str, *, value_hash: str = "h1", pack: str = "p1") -> L
         span=SlotRange(first=3, last=5),
         size=512,
         kind="notedata",
-        issued=11,
+        birth_time=11,
         created=22,
         updated=33,
     )
@@ -67,7 +67,7 @@ def test_put_location_rewrites_position_but_keeps_first_write(rows: Rows):
         span=SlotRange(first=8, last=9),
         size=1024,
         kind="notedata",
-        issued=99,
+        birth_time=99,
         created=999,
         updated=1000,
     )
@@ -80,7 +80,7 @@ def test_put_location_rewrites_position_but_keeps_first_write(rows: Rows):
     assert stored.value_hash == "h2"
     assert stored.updated == 1000
     assert stored.created == first.created
-    assert stored.issued == first.issued
+    assert stored.birth_time == first.birth_time
     assert rows.count_locations() == 1
 
 

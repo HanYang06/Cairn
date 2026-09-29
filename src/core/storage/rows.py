@@ -53,7 +53,8 @@ DEFAULT_HUB_STATE = "active"
 """默认登记状态：在用。"""
 
 _LOCATION_COLUMNS = (
-    "value_uuid, value_hash, kind, hub, pack, slot_first, slot_last, size, issued, created, updated"
+    "name, value_uuid, value_hash, kind, hub, pack, "
+    "slot_first, slot_last, size, birth_time, created, updated"
 )
 _HUB_COLUMNS = "name, role, state, created"
 _EDGE_COLUMNS = "id, src, dst, kind, domain, created"
@@ -62,8 +63,8 @@ _EDGE_COLUMNS = "id, src, dst, kind, domain, created"
 # 调用点只传常量，故没有"现场拼 SQL"的地方（也就没有注入面）。
 _INSERT_LOCATION = f"""
 INSERT INTO {quote_identifier(RECORD_TABLE)} ({_LOCATION_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(value_uuid) DO UPDATE SET
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(name, value_uuid) DO UPDATE SET
     value_hash = excluded.value_hash,
     kind = excluded.kind,
     hub = excluded.hub,
@@ -73,27 +74,37 @@ ON CONFLICT(value_uuid) DO UPDATE SET
     size = excluded.size,
     updated = excluded.updated
 """
-"""同身份重写：位置与摘要跟着更新，`issued` 与 `created` 保持第一次写下的值。"""
+"""同身份重写：位置与摘要跟着更新，`birth_time` 与 `created` 保持第一次写下的值。"""
 
 _SELECT_LOCATION = (
-    f"SELECT {_LOCATION_COLUMNS} FROM {quote_identifier(RECORD_TABLE)} WHERE value_uuid = ?"
+    f"SELECT {_LOCATION_COLUMNS} FROM {quote_identifier(RECORD_TABLE)} "
+    "WHERE value_uuid = ? ORDER BY name"
 )
 _SELECT_BY_HASH = (
     f"SELECT {_LOCATION_COLUMNS} FROM {quote_identifier(RECORD_TABLE)} "
-    "WHERE value_hash = ? ORDER BY issued, value_uuid"
+    "WHERE value_hash = ? ORDER BY birth_time, value_uuid"
 )
 _COUNT_LOCATIONS = f"SELECT COUNT(*) AS n FROM {quote_identifier(RECORD_TABLE)}"
 _SELECT_ALL_LOCATIONS = (
     f"SELECT {_LOCATION_COLUMNS} FROM {quote_identifier(RECORD_TABLE)} "
     "ORDER BY hub, pack, slot_first, value_uuid"
 )
-_DELETE_LOCATION = f"DELETE FROM {quote_identifier(RECORD_TABLE)} WHERE value_uuid = ?"
+_DELETE_LOCATION = f"DELETE FROM {quote_identifier(RECORD_TABLE)} WHERE name = ? AND value_uuid = ?"
+_DELETE_LOCATION_ANY_NAME = f"DELETE FROM {quote_identifier(RECORD_TABLE)} WHERE value_uuid = ?"
+"""不带作用域名的摘除：一个凭证只该有一个身份，故通常也就一行。"""
 _MOVE_LOCATION = (
+    f"UPDATE {quote_identifier(RECORD_TABLE)} "
+    "SET hub = ?, pack = ?, slot_first = ?, slot_last = ?, size = ?, updated = ? "
+    "WHERE name = ? AND value_uuid = ?"
+)
+"""只改坐标：身份、类型标号与三个时刻都不动。"""
+
+_MOVE_LOCATION_ANY_NAME = (
     f"UPDATE {quote_identifier(RECORD_TABLE)} "
     "SET hub = ?, pack = ?, slot_first = ?, slot_last = ?, size = ?, updated = ? "
     "WHERE value_uuid = ?"
 )
-"""只改坐标：身份、类型标号与三个时刻都不动。"""
+"""不带作用域名的挪行：巡检只知道凭证（作用域名读不出来），照旧把这一行挪对。"""
 
 _INSERT_HUB = (
     f"INSERT INTO {quote_identifier(HUB_TABLE)} ({_HUB_COLUMNS}) VALUES (?, ?, ?, ?) "
@@ -125,14 +136,15 @@ class Location:
     """一条定位行：身份＋位置。
 
     Attributes:
-        value_uuid: 分配形态凭证（主键）。
+        name: 作用域名（引用方写下的名字，如 `block` / `body`）；与 `value_uuid` 合成主键。
+        value_uuid: 分配形态凭证（主键的一半）。
         value_hash: 摘要形态凭证（非唯一索引：同内容可有多行）。
         hub: 所属 hub。
         pack: 载体文件名。
         span: 载体内的格区间。
         size: 记录字节数。
         kind: 类型标号；由程序给出，重建补行时只能是空串（未知）。
-        issued: ID 签发时刻（unix 毫秒）；记录头不带它，重建补行时为 0。
+        birth_time: ID 签发时刻（unix 纳秒）；记录头不带它，重建补行时为 0。
         created: 落盘时刻（unix 毫秒）；重建补行时为 0（未知）。
         updated: 最近一次改写时刻（unix 毫秒）。
     """
@@ -143,8 +155,9 @@ class Location:
     pack: str
     span: SlotRange
     size: int
+    name: str = ""
     kind: str = ""
-    issued: int = 0
+    birth_time: int = 0
     created: int = 0
     updated: int = 0
 
@@ -220,10 +233,11 @@ class Rows:
     # ---- 定位行 ----
 
     def put_location(self, location: Location) -> None:
-        """写入或改写一条定位行（同一 `value_uuid` 即同一身份）。"""
+        """写入或改写一条定位行（同一 `(name, value_uuid)` 即同一身份）。"""
         self._connection.execute(
             _INSERT_LOCATION,
             (
+                location.name,
                 location.value_uuid,
                 location.value_hash,
                 location.kind,
@@ -232,7 +246,7 @@ class Rows:
                 location.span.first,
                 location.span.last,
                 location.size,
-                location.issued,
+                location.birth_time,
                 location.created,
                 location.updated,
             ),
@@ -240,7 +254,11 @@ class Rows:
         self._connection.commit()
 
     def location(self, value_uuid: str) -> Location | None:
-        """按身份取一条定位行；没有即 ``None``。"""
+        """按身份取一条定位行；没有即 ``None``。
+
+        只按凭证查、**不带作用域名**：凭证是签发时分配的，一个值只对应一个身份。
+        同一个值真的出现在两个作用域下时，取按名字排序的第一行（诊断口径，够用）。
+        """
         row = self._connection.execute(_SELECT_LOCATION, (value_uuid,)).fetchone()
         return None if row is None else _location(row)
 
@@ -249,9 +267,16 @@ class Rows:
         rows = self._connection.execute(_SELECT_BY_HASH, (value_hash,)).fetchall()
         return tuple(_location(row) for row in rows)
 
-    def drop_location(self, value_uuid: str) -> bool:
-        """摘掉一条定位行；返回是否确实摘掉了一行。"""
-        cursor = self._connection.execute(_DELETE_LOCATION, (value_uuid,))
+    def drop_location(self, value_uuid: str, *, name: str = "") -> bool:
+        """摘掉一条定位行；返回是否确实摘掉了一行。
+
+        `name` 给定即按作用域名精确摘；不给则摘该凭证名下的**全部**行
+        （一个凭证只该有一个身份，故通常就是一行）。
+        """
+        if name:
+            cursor = self._connection.execute(_DELETE_LOCATION, (name, value_uuid))
+        else:
+            cursor = self._connection.execute(_DELETE_LOCATION_ANY_NAME, (value_uuid,))
         self._connection.commit()
         return cursor.rowcount > 0
 
@@ -260,20 +285,26 @@ class Rows:
 
         处置"坐标不符"用它：把行挪到载体里的实际位置，而不是整行重写——整行重写会把
         类型标号冲掉，而类型是程序给的信息，重扫补不回来（§3.5、§8.7）。身份、类型标号
-        与 `issued` / `created` 一律不动，只刷新 `updated`。
+        与 `birth_time` / `created` 一律不动，只刷新 `updated`。
+
+        `location.name` 为空时按凭证挪（巡检从载体上读不出作用域名，见 §8.5）。
         """
-        cursor = self._connection.execute(
-            _MOVE_LOCATION,
-            (
-                location.hub,
-                location.pack,
-                location.span.first,
-                location.span.last,
-                location.size,
-                now_ms() if updated is None else updated,
-                location.value_uuid,
-            ),
+        coordinates = (
+            location.hub,
+            location.pack,
+            location.span.first,
+            location.span.last,
+            location.size,
+            now_ms() if updated is None else updated,
         )
+        if location.name:
+            cursor = self._connection.execute(
+                _MOVE_LOCATION, (*coordinates, location.name, location.value_uuid)
+            )
+        else:
+            cursor = self._connection.execute(
+                _MOVE_LOCATION_ANY_NAME, (*coordinates, location.value_uuid)
+            )
         self._connection.commit()
         return cursor.rowcount > 0
 
@@ -382,7 +413,7 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
                     pack=pack,
                     span=span,
                     size=len(raw),
-                    issued=record.id.birth_time,
+                    birth_time=record.id.birth_time,
                 )
             )
             added.append(record.id.value_uuid)
@@ -403,8 +434,9 @@ def _location(row: sqlite3.Row) -> Location:
         pack=str(row["pack"]),
         span=SlotRange(first=int(row["slot_first"]), last=int(row["slot_last"])),
         size=int(row["size"]),
+        name=str(row["name"] or ""),
         kind=str(row["kind"] or ""),
-        issued=int(row["issued"] or 0),
+        birth_time=int(row["birth_time"] or 0),
         created=int(row["created"] or 0),
         updated=int(row["updated"] or 0),
     )
