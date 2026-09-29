@@ -51,8 +51,10 @@
 ## 3. 存储引擎
 
 `Storage`（`core/storage/engine.py`）把块落成**两条记录**：内容记录（载荷即 body，身份按内容签发，
-故同内容只存一份）与块记录（载荷是指向 body 的指针，身份是块自己的）。
+故同内容只存一份）与块记录（载荷是指向 body 的**两套凭证**的指针，身份是块自己的）。
 读回是"两条一拼"：块身份 → 读块记录 → 取指针 → 按地址读内容记录。
+两条记录各进**各自的表**（`body` / `block`），行层读写见 `storage/rows.py`；
+表的形状由类型登记现算（`storage/registry.py` / `tablegen.py`），
 细节（格模型、记录头、索引库、巡检）全在 [`storage-design.md`](./storage-design.md)。
 
 ## 4. 异常与日志

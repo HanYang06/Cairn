@@ -88,20 +88,19 @@
 ## 存储重设计（2026-09-28 立项；**已收口**，只余未来项）
 
 > ⚠️ 2026-09-29：本条所述实现已随 `refactor/clean-local-code` 整条删除，仅存档；当前主线见「内核重建」。
-
-> 2026-09-30 补记（**当前口径**）：声明层已按"ID 面 + 三类表"重做（见 `changes.md` 同日两条、
-> 设计篇 §8.1.1–§8.1.4）：列的来源分五种、绑定列的列名即 ID 字段名、`record` 主键
-> 改成 `(name, value_uuid)`、绑定列默认建索引；**声明本体已搬进 `config/tables.yaml`**，
-> 代码只读 / 校验 / 编译（`kernel_tables()` 惰性读，导入存储不再要求文件在那儿）；
-> 绑定列改成**字面式 `id(名字).字段`**。
-> **未做（作者 2026-09-30 裁定的下一步，本轮停在此处）**：`record` 该拆成 `block` / `body`
-> **两张表**（名字是表的坐标、不是行里的判别列），并补上"引擎建表 / 补列 /
-> 反写 `config/tables.yaml`"那一环——**当前声明文件是手写的**，自动诞生那一环完全没有。
-> 形状与开发顺序见 `decisions.md`「存储的表形状」。
-> **仍留的**：`META_TABLE_SPEC` 在代码里（不属声明集，是开库脚手架）。
-
-> 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，已落地，v1.3）。
-> 方向见 `decisions.md`「存储重设计」。分支 `feat/storage-redesign`（已并回 `main`）。
+> 下面这一摞是**存档**：它记的是旧实现（`types/id.py` / `storage/blocks.py` / `Vault` 那一代），
+> 随那次重建整条删除，仅作设计史保留。
+>
+> **当前那一版**（2026-09-30，**不是**下面这些条目）：声明层已按"ID 面 + 一名一表"重做
+> （见 `changes.md` 同日三条、设计篇 §8.1.1–§8.1.4、§8.2.1）：列的来源五种、绑定列的列名即
+> ID 字段名、`record` 单表与 `id(scope).name` 判别列**已退役**，拆成 `block` / `body` 两张身份表；
+> **声明本体在 `config/tables.yaml`，但它由代码写出来**（类型登记现算 → 写文件 → 建库），
+> 人在文件上接着改、下一轮只补不删。反查机制与写作纪律见 `decisions.md`「存储的表形状」。
+> **仍留的**：`META_TABLE_SPEC` 在代码里（不属声明集，是开库脚手架）；
+> `hub` / `edge` 不由类型诞生（主语不是 ID），照旧写在 `tablegen.KERNEL_EXTRA_TABLES`。
+>
+> 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，已落地并随片 11 回写）。
+> 方向见 `decisions.md`「存储重设计」与「存储的表形状」。分支 `feat/storage-redesign`（已并回 `main`）。
 > 旧层（旧 `Bucket` / `Catalog` / `Oid` / `Cid`）与旧篇 `storage.md` **已删除**。
 
 - [x] **片 0 · 设计篇**：`storage-design.md`（12 节）＋ `mkdocs.yml` 登记 ＋ 逐轮裁定

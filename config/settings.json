@@ -3,6 +3,5 @@
   "core.log.level": "WARNING",
   "storage.block.max_bytes": 1048576,
   "storage.pack.max_bytes": 2147483648,
-  "storage.pack.slot_bytes": 512,
-  "storage.db.tables": "tables.yaml"
+  "storage.pack.slot_bytes": 512
 }

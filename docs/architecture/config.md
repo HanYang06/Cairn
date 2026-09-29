@@ -124,11 +124,16 @@ conf("ui.zoom", 1.0, type=float)
 `file="yaml"` 让这一项的值放进独立文件，默认**同层级的 `<字段名>.<类型>`**：
 
 ```python
-conf("storage.db.tables", "", type=str, file="yaml")  # 值文件里那一行是 "tables.yaml"
+conf("some.key", "", type=str, file="yaml")  # 值文件里那一行是 "some.yaml"
 ```
 
 引用名由声明处算出来（不取默认值），且**不许跑出配置根**；被引用的文件必须已经在那儿——
 声明期就报错，不等读的时候才发现。值文件里那一行是**事实而非装饰**：改成别的相对引用即换文件。
+
+**能力在，内核当前没有用它的键**：表声明（`config/tables.yaml`）曾经走这条引用
+（`storage.db.tables`），2026-09-30 起改成**由代码写出来的固定文件**——它由代码写、又被代码读，
+不是"可以调的一个参数"（见[存储设计](storage-design.md) §8.2.1）。文件名是
+`registry.TABLES_FILENAME` 这个常量。
 
 ## 8. 投影：两份产物，跑一遍就生成
 
@@ -164,5 +169,5 @@ config/schema/settings.json   ← 词表（给 IDE 悬停与分发看的 JSON Sc
   值后这一笔的"改过"记录就丢了。现有需求不要求记住来路；
 - **值投影仍是单文件**（十万行以内不分）：真要分，得先有量级，再谈坐标；
 - **手写口 / 多来源合并**（个人覆写、部署覆盖）未做；
-- `config/tables.yaml` 是表声明的**本体**（结构描述不放标量配置里），等存储那轮再接回：
-  接法是 §7 的文件引用（值文件里一行 `"storage.db.tables": "tables.yaml"`）。
+- `config/tables.yaml` 是表声明的**本体所在的那份文件**，但**不走配置键**：它由类型登记现算、
+  由代码写出来（见[存储设计](storage-design.md) §8.2.1），故不在标量配置里占一个键。

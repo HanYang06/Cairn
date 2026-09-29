@@ -16,15 +16,14 @@
 - **取值** = `conf("键")`；**声明** = `conf("键", 默认值, type=…, doc=…)`——同一个调用形，
   差别只在给不给参数。写入方向是单向的：改值改 `config/settings.json`，除非显式 `force=True`。
 
-## 全部配置项（5 条）
+## 全部配置项（4 条）
 
 | 键 | 类型 | 默认值 | 说明 | 声明处 |
 |---|---|---|---|---|
 | `core.log.level` | `string` | `WARNING` | 内核日志级别：导入内核时设到 core.* 这族记录器 | `src/core/conf/params.py:16` |
-| `storage.block.max_bytes` | `integer` | `1048576` | 单个块的字节上限，超过即分片（预留，尚未接线） | `src/core/storage/conf.py:43` |
-| `storage.db.tables` | `string` | `tables.yaml` | 索引库表声明所在文件（结构本体在那） | `src/core/storage/conf.py:44` |
-| `storage.pack.max_bytes` | `integer` | `2147483648` | 单个载体的字节上限，写满即封口（只管封口线，不定槽长） | `src/core/storage/conf.py:37` |
-| `storage.pack.slot_bytes` | `integer` | `512` | 槽长：载体内的定长分配与定位单位，写进文件头 | `src/core/storage/conf.py:36` |
+| `storage.block.max_bytes` | `integer` | `1048576` | 单个块的字节上限，超过即分片（预留，尚未接线） | `src/core/storage/conf.py:39` |
+| `storage.pack.max_bytes` | `integer` | `2147483648` | 单个载体的字节上限，写满即封口（只管封口线，不定槽长） | `src/core/storage/conf.py:33` |
+| `storage.pack.slot_bytes` | `integer` | `512` | 槽长：载体内的定长分配与定位单位，写进文件头 | `src/core/storage/conf.py:32` |
 
 ## 另见
 

@@ -92,7 +92,7 @@ graph TD
 | 索引库 | Index | `<root>/catalog.db`：hub 登记、身份到位置、关系边；**可重建的投影** |
 | 身份 | `ID` | 两套凭证：`value_uuid`（`uuid4`，比较有效）与 `value_hash`（`sha256`，去重有效）。**身份 ≠ 内容** |
 | 地址 | address | 由 body 内容算出的确定性摘要（`sha256` 十六进制）；即摘要形态 |
-| checksum | — | 记录头里的载荷摘要（与身份摘要同源）；块记录载荷里的 `body_addr` 指向它 |
+| checksum | — | 记录头里的载荷摘要（与身份摘要同源）；块记录载荷里的指针（`body_ref`）指向它 |
 | type | — | 块类型（短名），如 `notedata`：由**程序**给出，落索引库的 `kind` 列，不落盘 |
 | body | — | 块的主体内容，进**内容记录**（同内容只存一份） |
 | attrs | — | 块的描述字段（标题 / 标签 / 签名）：**当前未落地**，随领域层重建再长 |
@@ -102,7 +102,8 @@ graph TD
 | 区间样式 | range style | 行内 `[start, end)` 的样式覆盖层 |
 | 分片 / 索引块 | part / index | 大内容切成的块 + 聚合成一个可引用 id 的索引块（**预留**，尚未接进块面） |
 
-> 术语以代码为准：块 = `core/storage/block.py` 的 `Block`；桶 = `core/storage/vault.py` 的 `Bucket`。
+> 术语以代码为准：块 = `core/storage/format/block.py` 的 `Block`，内容 = 同处的 `Body`，
+> hub = `core/storage/hub.py` 的 `Hub`。
 
 ---
 
@@ -280,25 +281,28 @@ Block:
 ### 6.3 内容记录与分片
 
 - **内容记录**：载荷就是编码后的 body，身份按内容签发（`value_hash` 即 body 地址），
-  故同 body 只存一份；块记录靠载荷里的 `body_addr` 指向它。
+  故同 body 只存一份；块记录靠载荷里的指针（两套凭证）指向它。
 - 大内容：**分片预留**（切成 `part` 块 + 一个 `index` 索引块，返回索引块 id），
   尚未接进块面，见设计篇 §5.6 与 §12。
 
 ### 6.4 索引库（catalog.db，可重建的投影）
 
 ```sql
-bucket(name PK, role, state, created)                       -- 桶登记（真源是桶目录）
-record(value_uuid PK, value_hash, kind, bucket, pack,
-       slot_start, slot_head, slot_count, size, issued, created, updated)
-edge(id PK, src, dst, kind, domain, created)                -- 关系边
-meta(key PK, value)                                         -- 声明投影（开库时比对）
+hub(name PK, role, state, created)                          -- hub 登记（真源是 hub 目录）
+block(value_uuid PK, value_hash, birth_time, name,
+      body_value_uuid, body_value_hash, kind,
+      hub, pack, slot_first, slot_last, size, created, updated)
+body(value_uuid PK, value_hash, birth_time, name,
+     hub, pack, slot_first, slot_last, size, created, updated)
+edge(id PK, src_value_uuid, dst_value_uuid, kind, domain, created)   -- 关系边
+meta(name PK, value)                                        -- 声明投影（开库时比对）
 -- 领域业务表（如 relation）由领域经 Storage.table() 建，落同一个库
 ```
 
-- **表结构由声明给出**（`config/settings/core/storage/tables.yaml`），源码内不出现建表语句；
-  开库时对比 → 分类 → 处置，破坏性变更默认拒绝（设计篇 §8.4）。
-- **索引库是投影、不是真源**：真源是载体里的记录；索引丢了可顺扫重建（`Vault.patrol` / `Vault.repair`）。
-- 领域业务表走 `core.storage.table(...)`；上层不 import sqlite。
+- **表结构由声明给出**（本体在 `config/tables.yaml`，由类型登记现算写出），
+  源码内不出现建表语句；开库时对比 → 分类 → 处置，破坏性变更默认拒绝（设计篇 §8.4、§8.2.1）。
+- **索引库是投影、不是真源**：真源是载体里的记录；索引丢了可顺扫重建（`patrol` / `repair`）。
+- 领域类型一登记，它那张表就诞生（`core/storage/registry.py`）；上层不 import sqlite。
 
 ### 6.5 版本（**存储不承载**）
 
@@ -378,8 +382,8 @@ Storage ── BlockStore ── Vault ── Bucket(packs/) + Index(catalog.db)
 4. 多设备 / 多作者的合并（CRDT vs 版本链合并）。
 5. 载体压实（收回删除与更新造成的空洞）。
 6. 事务（一次写入同时落字节与目录行）。
-7. 存储侧的那些字段问题：`body_addr` 要不要提升成索引列、属性要不要投影进库
-   （设计篇 §12；影响的是"列举要不要读载荷"）。
+7. 存储侧那些字段问题：属性（标题 / 标签）要不要投影进库；"删掉类型要不要删表"
+   （设计篇 §12；影响的是"列举要不要读载荷"与"表能不能自己消失"）。
 
 ---
 
