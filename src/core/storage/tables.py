@@ -152,6 +152,21 @@ class Column:
         }
 
 
+def index_name(table: str, columns: Iterable[str]) -> str:
+    """索引名：``idx_<表>_<列>…``（由表名与列组合推出，不手写，免漂移）。
+
+    **必须带表名**：SQLite 的索引名是**整库唯一**的，只由列组合推出时，两张表声明
+    同一列组合即撞名，后一条 ``CREATE INDEX IF NOT EXISTS`` 按名字判定为"已存在"
+    而**静默跳过**——声明的唯一性随之落空，比对又永远把它报成缺索引
+    （库卡在"对齐后仍有差异"，等于打不开）。
+
+    带表名仍不足以完全免撞：表名与列名同用 ``_`` 分隔，存在连接歧义
+    （表 ``a`` 的列 ``b, c`` 与表 ``a_b`` 的列 ``c`` 同名），故 :func:`parse_tables`
+    另做一次**跨表**唯一性校验，把这种写法在解析口拦下。
+    """
+    return f"idx_{table}_{'_'.join(columns)}"
+
+
 @dataclass(frozen=True, slots=True)
 class Index:
     """一个索引：列组合 + 是否唯一。"""
@@ -169,16 +184,14 @@ class Index:
         if len(set(self.columns)) != len(self.columns):
             raise CairnError(f"索引列重复: {self.columns!r}")
 
-    @property
-    def name(self) -> str:
-        """索引名由列组合推出（不手写，免漂移）。"""
-        return f"idx_{'_'.join(self.columns)}"
-
-    def clause(self) -> str:
-        """编译成建索引语句（``{table}`` 由调用方填表名）。"""
+    def clause(self, table: str) -> str:
+        """编译成建索引语句；表名由调用方给（索引名含表名，故它是编译的输入之一）。"""
         unique = "UNIQUE " if self.unique else ""
         columns = ", ".join(f'"{name}"' for name in self.columns)
-        return f'CREATE {unique}INDEX IF NOT EXISTS "{self.name}" ON "{{table}}" ({columns})'
+        return (
+            f'CREATE {unique}INDEX IF NOT EXISTS "{index_name(table, self.columns)}"'
+            f' ON "{table}" ({columns})'
+        )
 
     def to_config(self) -> dict[str, Any]:
         """写成配置形状。"""
@@ -222,12 +235,12 @@ class TableSpec:
         keys = [column.name for column in self.columns if column.primary_key]
         if len(keys) != 1:
             raise CairnError(f"表 {self.name} 必须恰好一个主键，得到 {keys!r}")
-        index_names = [index.name for index in self.indexes]
+        index_names = [index_name(self.name, index.columns) for index in self.indexes]
         repeated = {name for name in index_names if index_names.count(name) > 1}
         if repeated:
             raise CairnError(
                 f"表 {self.name} 索引重名: {sorted(repeated)}"
-                "（索引名由列组合推出，列组合相同即同名；同一列组合不得声明两次——"
+                "（索引名由表名与列组合推出，列组合相同即同名；同一列组合不得声明两次——"
                 "第二条 CREATE INDEX 会被 SQLite 静默跳过，声明的唯一性随之落空）"
             )
         missing = [name for index in self.indexes for name in index.columns if name not in names]
@@ -247,7 +260,7 @@ class TableSpec:
         """编译成建表语句与建索引语句（第一条是建表）。"""
         columns = ", ".join(column.clause() for column in self.columns)
         statements = [f'CREATE TABLE IF NOT EXISTS "{self.name}" ({columns})']
-        statements.extend(index.clause().format(table=self.name) for index in self.indexes)
+        statements.extend(index.clause(self.name) for index in self.indexes)
         return tuple(statements)
 
     def add_column_ddl(self, column: Column) -> str | None:
@@ -292,7 +305,10 @@ class TableSpec:
                 column.signature() for column in sorted(self.columns, key=lambda item: item.name)
             ],
             "indexes": [
-                index.signature() for index in sorted(self.indexes, key=lambda item: item.name)
+                index.signature()
+                for index in sorted(
+                    self.indexes, key=lambda item: index_name(self.name, item.columns)
+                )
             ],
         }
 
@@ -369,7 +385,7 @@ def parse_column(raw: Mapping[str, Any], *, table: str) -> Column:
         not_null=bool(raw.get("not_null", False)),
         unique=bool(raw.get("unique", False)),
         default=raw.get("default"),
-        doc=str(raw.get("doc", "")),
+        doc=str(raw.get("doc") or ""),
     )
 
 
@@ -393,7 +409,7 @@ def parse_index(raw: Mapping[str, Any], *, table: str) -> Index:
     return Index(
         columns=tuple(columns),
         unique=bool(raw.get("unique", False)),
-        doc=str(raw.get("doc", "")),
+        doc=str(raw.get("doc") or ""),
     )
 
 
@@ -430,13 +446,13 @@ def parse_table(raw: Mapping[str, Any]) -> TableSpec:
             for item in raw_columns
         ),
         tier=tier,
-        rebuild_from=str(raw.get("rebuild_from", "")),
+        rebuild_from=str(raw.get("rebuild_from") or ""),
         owner=owner,
         indexes=tuple(
             parse_index(_as_mapping(item, where=f"{where} 的索引"), table=name)
             for item in raw_indexes
         ),
-        doc=str(raw.get("doc", "")),
+        doc=str(raw.get("doc") or ""),
     )
 
 
@@ -453,7 +469,27 @@ def parse_tables(raw: Iterable[Mapping[str, Any]]) -> tuple[TableSpec, ...]:
     duplicated = {name for name in names if names.count(name) > 1}
     if duplicated:
         raise CairnError(f"表声明重复: {sorted(duplicated)}")
+    _check_index_names(parsed)
     return parsed
+
+
+def _check_index_names(tables: tuple[TableSpec, ...]) -> None:
+    """**跨表**索引名唯一性（单表内那一条由 :meth:`TableSpec.__post_init__` 管）。
+
+    SQLite 的索引名整库唯一，而仓内所有表共用一个索引库，故两张表撞名时，
+    后建的那条 ``CREATE INDEX IF NOT EXISTS`` 会被静默跳过——库里少一个索引、
+    比对却一直报"缺索引"，库卡在打不开的状态。声明层不能把这件事留给运行期。
+    """
+    owner: dict[str, str] = {}
+    for table in tables:
+        for index in table.indexes:
+            name = index_name(table.name, index.columns)
+            held = owner.setdefault(name, table.name)
+            if held != table.name:
+                raise CairnError(
+                    f"索引名跨表重复: {name}（表 {held} 与表 {table.name}）"
+                    "（SQLite 索引名全库唯一，重名会让后一张表的索引被静默跳过）"
+                )
 
 
 def _read_yaml(path: Path) -> Any:
@@ -522,6 +558,7 @@ __all__ = [
     "core_tables",
     "declared_tables",
     "domain_tables",
+    "index_name",
     "load_tables",
     "parse_table",
     "parse_tables",

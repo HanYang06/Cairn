@@ -89,10 +89,19 @@ def test_slot_span_counts_the_head_offset(offset: int, length: int, expected: in
 
     起点向下取整之后，末字节落在 ``(head + length - 1) // 槽长`` 号槽里：
     ``offset=1, length=4, 槽长 4`` 的字节落在 ``[1, 5)``，横跨第 0、1 两槽。
-    只报 1 槽会与 :meth:`CarrierLayout.record_bytes` 的下界不变式
-    （"记录必须越出前 ``槽数 - 1`` 个槽"）矛盾，按槽记账时就是槽数偏差。
+    这与 :func:`slots_for` 是两套口径：后者算的是"起点落在槽边界"的槽数
+    （记录头自检用它），只按长度取整在起点偏移时就会少算。
     """
     assert slot_span(offset, length, 4).count == expected
+
+
+def test_slot_aligned_and_actual_counts_differ_by_design() -> None:
+    """同一段字节两套槽数：**槽对齐**（记录头自检）与实际占用（索引行的 ``slot_count``）。
+
+    ``offset=1, length=4, 槽长 4``：起点落在槽边界时只要 1 槽，实际起点偏了 1 字节故要 2 槽。
+    两者不是"谁算错了"——上一轮评审把这两件事当成一个数，故用这条用例把区别钉住。
+    """
+    assert (slots_for(4, 4), slot_span(1, 4, 4).count) == (1, 2)
 
 
 @pytest.mark.parametrize(("offset", "length"), [(-1, 1), (0, -1)])
@@ -220,7 +229,7 @@ def test_record_header_reports_derived_values() -> None:
     record = _record(b"hello")
     header = record.header(SLOT)
     assert header.total_len == record.total_len
-    assert header.slot_count == slots_for(record.total_len, SLOT)
+    assert header.aligned_slots == slots_for(record.total_len, SLOT)
     assert header.checksum == ValueHash.of(b"hello")
     assert header.id == record.id
 
@@ -253,18 +262,18 @@ def test_record_create_rejects_slot_mismatch() -> None:
             total_len=record.total_len,
             checksum=record.checksum,
             id=record.id,
-            slot_count=1,  # 实际需要 5 槽
+            aligned_slots=1,  # 实际需要 5 槽
         ).verify(CarrierLayout(slot_bytes=SLOT))
 
 
 def test_record_header_rejects_tiny_total_len() -> None:
     with pytest.raises(RecordFormatError):
-        RecordHeader(total_len=1, checksum=ValueHash.of(b""), id=Id.new(b""), slot_count=1)
+        RecordHeader(total_len=1, checksum=ValueHash.of(b""), id=Id.new(b""), aligned_slots=1)
 
 
 def test_record_header_rejects_zero_slots() -> None:
     with pytest.raises(SlotError):
-        RecordHeader(total_len=1024, checksum=ValueHash.of(b""), id=Id.new(b""), slot_count=0)
+        RecordHeader(total_len=1024, checksum=ValueHash.of(b""), id=Id.new(b""), aligned_slots=0)
 
 
 def test_decode_rejects_short_buffer() -> None:

@@ -175,10 +175,16 @@ class BlockStore:
         return self.vault.index.record_row(str(oid)) is not None
 
     def iter_block_records(self) -> Iterator[tuple[sqlite3.Row, Record]]:
-        """**轻量列举**：只读出定位行与块记录（载荷＝属性），**不读正文**。
+        """列举块：交出定位行与**块记录**（载荷＝属性，不含正文）。
 
-        列举身份与元数据用不着正文，而正文可能很大（多媒体块）：走 :meth:`iter_blocks`
-        会把全库正文读进内存再丢掉。要正文的入口是 :meth:`fetch` / :meth:`get`。
+        **它并不省正文的读**：判"这一行是不是块记录"必须读该行的载荷
+        （判据是载荷里有 `body_addr`，见模块文档），而内容记录的载荷就是正文本身，
+        故本方法仍会把全库正文读进来再丢掉，代价与 :meth:`iter_blocks` 同级。
+        要正文的入口是 :meth:`fetch` / :meth:`get`。
+
+        把这份代价去掉的前提是"块记录的判据落成索引里的一列"——那是设计篇 §12
+        留给作者的字段裁定之一（`body_addr` 要不要提升成索引列），定下来之前，
+        这里不得声称"列举不读正文"。
         """
         rows = self.vault.index.conn.execute("SELECT * FROM record ORDER BY value_uuid").fetchall()
         for row in rows:

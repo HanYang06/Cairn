@@ -630,7 +630,7 @@ def test_open_closes_the_connection_when_align_refuses(tmp_path: Path, monkeypat
     """对齐失败时**必须把连接关掉**：库结构不符是用户真会撞到的路径，
     反复失败不能一次漏一个 sqlite 连接。"""
     with _vault(tmp_path) as vault:
-        vault.index.conn.execute('DROP INDEX "idx_value_hash"')
+        vault.index.conn.execute('DROP INDEX "idx_record_value_hash"')
         vault.index.conn.execute('ALTER TABLE "record" DROP COLUMN "value_hash"')  # 补不上的列
         vault.index.commit()
         root = vault.root

@@ -65,12 +65,16 @@ def slot_span(offset: int, length: int, slot_bytes: int) -> SlotRange:
     ``head`` 必须留下：只给 (起始槽, 槽数) 会丢掉槽内偏移，
     两条同槽记录的区间将无法区分，读写随即错位。
 
-    槽数**必须把 ``head`` 算进去**：起点取了整之后，末字节落在
-    ``(head + length - 1) // 槽长`` 号槽里，故跨度是 ``ceil((head + length) / 槽长)``。
-    只按 ``length`` 取整会少算：``offset=1``、``length=4``、槽长 4 时字节落在 ``[1, 5)``，
-    横跨第 0、1 两槽，而 ``ceil(4 / 4)`` 只报 1 槽。这与
-    :meth:`CarrierLayout.record_bytes` 的下界不变式（"记录必须越出前 ``槽数 - 1`` 个槽"）
-    自相矛盾，按槽记账时会暴露成真实的槽数偏差。
+    槽数**必须把 ``head`` 算进去**：区间要盖住 ``[offset, offset + length)``，
+    起点取了整之后末字节落在 ``(head + length - 1) // 槽长`` 号槽里，
+    故跨度是 ``ceil((head + length) / 槽长)``。只按 ``length`` 取整会少算：
+    ``offset=1``、``length=4``、槽长 4 时字节落在 ``[1, 5)``，横跨第 0、1 两槽，
+    而 ``ceil(4 / 4)`` 只报 1 槽。
+
+    这与 :func:`slots_for` 是**两套口径，不可混用**：``slots_for`` 算的是"起点落在槽边界"
+    时的槽数（记录头自检用它），本函数算的是**实际占用**（进索引的 ``slot_count``）。
+    记录起点不落槽边界时两者本来就不等，谁都没错——上一轮评审把这两件事混成一个数，
+    故在此写明。
     """
     if offset < 0:
         raise SlotError(f"偏移非法: {offset}")
@@ -119,10 +123,11 @@ class CarrierLayout:
         return slot_span(relative, length, self.slot_bytes)
 
     def record_bytes(self, slot_count: int) -> int:
-        """占 ``slot_count`` 个槽的记录，最少需要多少字节。
+        """占 ``slot_count`` 个槽的记录，最少需要多少字节（**槽对齐起点**下的下界）。
 
-        下界：记录必须越出前 ``slot_count - 1`` 个槽，故至少
-        ``(slot_count - 1) × 槽长 + 1``。用于校验头里声明的槽数与实际长度是否自洽。
+        下界：起点落在槽边界时，记录必须越出前 ``slot_count - 1`` 个槽，故至少
+        ``(slot_count - 1) × 槽长 + 1``。用于校验头里声明的槽数与长度是否自洽。
+        起点偏在槽内的记录**不适用**这条下界（那时槽数由 :func:`slot_span` 给出）。
         """
         if slot_count < 1:
             raise SlotError(f"槽数非法: {slot_count}")

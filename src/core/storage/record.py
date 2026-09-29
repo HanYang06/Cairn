@@ -59,36 +59,45 @@ def encode_id_segment(record_id: Id) -> bytes:
 class RecordHeader:
     """记录头四项：总长、校验和、ID（两套凭证）、槽数。
 
-    ``total_len`` 与 ``slot_count`` 都是**由实际内容派生的冗余**（定位靠算，不靠读），
-    存一份是为了自校验：声明与实际不符即报错，而不是信任其中一边。
+    **落盘的只有长度与摘要**（外加 ID 段与载荷，见 :meth:`Record.encode`）；
+    身份与槽数是从字节派生的，不进文件，用来做自校验。
+
+    ``aligned_slots`` 是**槽对齐约定**下的槽数：假定记录起点落在槽边界，
+    装下 ``total_len`` 需要几个槽。它**不是**记录在载体里的实际占用——起点偏在槽内时，
+    实际跨槽数由 :meth:`Record.span` 给出，也就是索引行的 ``slot_count`` 列。两者可以不等
+    （槽长 4、``offset=1``、``total_len=4``：本字段 1，实际 2）。
+
+    名字刻意不叫 ``slot_count``：同一个名字在两处指两个数，正是上一轮评审指出的坑。
     """
 
     total_len: int
     checksum: ValueHash
     id: Id
-    slot_count: int
+    aligned_slots: int
 
     def __post_init__(self) -> None:
         """校验：总长至少能装下头与一字节载荷、槽数至少为 1。"""
         if self.total_len < _HEADER_BYTES + 1:
             raise RecordFormatError(f"记录总长过小: {self.total_len}")
-        if self.slot_count < 1:
-            raise SlotError(f"记录槽数非法: {self.slot_count}")
+        if self.aligned_slots < 1:
+            raise SlotError(f"记录槽数非法: {self.aligned_slots}")
 
     def verify(self, layout: CarrierLayout) -> None:
-        """与载体布局对账：声明的槽数必须与实际长度自洽。
+        """与载体布局对账：**槽对齐约定**下声明的槽数与长度必须自洽。
 
         两个方向都核：长度不得超出声明槽数所容，也不得小到占不满声明槽数。
+        这套判据是给**手工构造**的记录头把关（槽数由 :func:`slots_for` 推出时它恒真）；
+        实际占用装不装得下在**读**那一侧核——`CarrierFile.read` 拿得到记录落在槽内的位置。
         """
-        if self.total_len > layout.slot_bytes * self.slot_count:
+        if self.total_len > layout.slot_bytes * self.aligned_slots:
             raise SlotError(
-                f"记录超出声明槽数: {self.total_len} 字节 > {self.slot_count} 槽"
+                f"记录超出声明槽数: {self.total_len} 字节 > {self.aligned_slots} 槽"
                 f"（槽长 {layout.slot_bytes}）"
             )
-        if self.total_len < layout.record_bytes(self.slot_count):
+        if self.total_len < layout.record_bytes(self.aligned_slots):
             raise SlotError(
                 f"记录不足以占用声明槽数: {self.total_len} 字节 < "
-                f"{layout.record_bytes(self.slot_count)}"
+                f"{layout.record_bytes(self.aligned_slots)}"
             )
 
 
@@ -119,13 +128,17 @@ class Record:
         return head + encode_id_segment(self.id) + self.payload
 
     def header(self, slot_bytes: int) -> RecordHeader:
-        """算出头四项（总长与槽数都从实际字节推出，不由调用方给）。"""
+        """算出头四项（总长与槽数都从实际字节推出，不由调用方给）。
+
+        槽数是**槽对齐约定**下的值，不是实际占用；要看实际占用得给出记录在载体里的偏移，
+        见 :meth:`span`。
+        """
         total_len = self.total_len
         return RecordHeader(
             total_len=total_len,
             checksum=self.checksum,
             id=self.id,
-            slot_count=slots_for(total_len, slot_bytes),
+            aligned_slots=slots_for(total_len, slot_bytes),
         )
 
     def span(self, layout: CarrierLayout, *, offset: int = 0) -> SlotRange:
@@ -134,9 +147,10 @@ class Record:
 
     @classmethod
     def create(cls, record_id: Id, payload: bytes, slot_bytes: int) -> Record:
-        """造一条记录，并**立刻自检**"声明槽数 = 实际跨槽数"。
+        """造一条记录，并按**槽对齐约定**自检一次槽算术。
 
-        把槽算术的错误挡在落盘之前，而不是等下次扫描才发现对不上。
+        把"长度与槽数对不上"挡在落盘之前；实际占用的核对在读那一侧
+        （`CarrierFile.read` 拿得到记录落在槽内的位置，见 :meth:`header`）。
         """
         record = cls(id=record_id, payload=bytes(payload))
         record.header(slot_bytes).verify(CarrierLayout(slot_bytes=slot_bytes))
@@ -181,12 +195,11 @@ class Record:
             )
         record = cls(id=record_id, payload=payload)
         if layout is not None:
-            slot_count = slots_for(declared_len, layout.slot_bytes)
             RecordHeader(
                 total_len=declared_len,
                 checksum=checksum,
                 id=record_id,
-                slot_count=slot_count,
+                aligned_slots=slots_for(declared_len, layout.slot_bytes),
             ).verify(layout)
         return record
 

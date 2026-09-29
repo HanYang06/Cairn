@@ -12,7 +12,7 @@
 #   rebuild_from 重建来源；tier3 必须留空（写不出来源的表就是不可重建表）
 #   owner        core = 开库即对齐；domain = 挂载该域时才对齐
 #   columns      列；**顺序即建表顺序**；每表恰好一个 primary_key
-#   indexes      索引；名字由列组合推出，不手写
+#   indexes      索引；名字由表名与列组合推出，不手写
 #
 # 类型只用这五个中立词：text / integer / real / blob / boolean（方言由编译器映射）。
 

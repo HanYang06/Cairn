@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 from core.types import RecordFormatError, ValueHash, now_ms
 from core.types.errors import IndexSchemaError
 
-from .tables import Column, TableSpec, declared_tables, default_literal, sql_type_name
+from .tables import Column, TableSpec, declared_tables, default_literal, index_name, sql_type_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -88,6 +88,15 @@ class Difference:
     ``missing_index`` / ``index_mismatch`` / ``column_mismatch`` / ``extra_table``。"""
 
     detail: str = ""
+    """人读的说明（进日志与计划）；**机器判据一律走 :attr:`subject`**，不从这段文本反解。"""
+
+    subject: str = ""
+    """这一处差异针对的对象：**索引名或列名**（机器判据用它）。
+
+    与 `detail` 分开的理由：`detail` 是给人读的话，措辞随时可改；处置动作
+    （``DROP INDEX`` / ``ALTER TABLE … ADD COLUMN``）若从它反解对象名，
+    改一次文案就会动错索引。
+    """
 
     @property
     def fixable(self) -> bool:
@@ -122,7 +131,8 @@ class RebuildPlan:
     """重建授权：**破坏性动作必须显式给**（不给则拒绝执行）。"""
 
     tables: tuple[str, ...]
-    """要重建的表名；这些表的数据由调用方负责搬运。"""
+    """要重建的表名。旧表**改名隔离**（``<表>__dropped_<时刻>``）而不删：
+    字节留在库里可查可搬，表内容由调用方按声明重建，或从备份恢复。"""
 
     reason: str = ""
     """为什么重建（进日志，便于回溯）。"""
@@ -147,10 +157,11 @@ class Index:
         """
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        declarations = declared_tables()  # 先解析声明：它抛错时还没有连接需要关
         conn = sqlite3.connect(str(target))
         conn.row_factory = sqlite3.Row
         try:
-            strangers = _stranger_tables(conn)
+            strangers = _stranger_tables(conn, declarations)
         except Exception:
             conn.close()  # 库坏掉时认表这一步就会抛：抛之前先关，不得漏连接
             raise
@@ -167,7 +178,7 @@ class Index:
         except Exception:
             conn.close()
             raise
-        return cls(path=target, conn=conn)
+        return cls(path=target, conn=conn, declarations=declarations)
 
     def close(self) -> None:
         """关闭连接。"""
@@ -254,29 +265,33 @@ class Index:
                             )
                         )
                     else:
-                        found.append(Difference(name, "missing_column", column.name))
+                        found.append(
+                            Difference(name, "missing_column", column.name, subject=column.name)
+                        )
                 else:
                     drifted = _column_drift(column, columns[column.name])
                     if drifted:
                         found.append(Difference(name, "column_mismatch", drifted))
             found.extend(
-                Difference(name, "extra_column", extra)
+                Difference(name, "extra_column", extra, subject=extra)
                 for extra in sorted(set(columns) - set(wanted))
             )
             defs = self.actual_index_defs(name)
             for index in table.indexes:
-                defined = defs.get(index.name)
+                label = index_name(name, index.columns)
+                defined = defs.get(label)
                 if defined is None:
-                    found.append(Difference(name, "missing_index", index.name))
+                    found.append(Difference(name, "missing_index", label, subject=label))
                 elif defined != (index.columns, index.unique):
-                    # 同名、不同定义（索引名只由列推出，故**唯一性变化**正好落在这里）。
+                    # 同名、不同定义（索引名只由表名与列推出，故**唯一性变化**正好落在这里）。
                     # 得先 DROP 再建：`CREATE INDEX IF NOT EXISTS` 见到同名会跳过，
                     # 光靠它永远改不过来，差异就卡在"对齐后仍有"。
                     found.append(
                         Difference(
                             name,
                             "index_mismatch",
-                            f"{index.name}: 实际 {defined} ≠ 声明 {(index.columns, index.unique)}",
+                            f"{label}: 实际 {defined} ≠ 声明 {(index.columns, index.unique)}",
+                            subject=label,
                         )
                     )
         found.extend(
@@ -336,7 +351,9 @@ class Index:
             )
         if rebuild is not None and rebuild.tables:
             _logger.warning(
-                "按授权重建表（数据由调用方搬运）：%s；原因：%s", rebuild.tables, rebuild.reason
+                "按授权重建表（旧表改名隔离、不删；内容须按声明重建或从备份恢复）：%s；原因：%s",
+                rebuild.tables,
+                rebuild.reason,
             )
         return destructive
 
@@ -351,7 +368,7 @@ class Index:
         """
         statements = table.ddl()
         if table.name in destructive:
-            self.conn.execute(f'DROP TABLE IF EXISTS "{table.name}"')
+            self._quarantine(table.name)
             for statement in statements:
                 self.conn.execute(statement)
             return  # 重建已按声明建好整张表，缺列随之补齐
@@ -360,25 +377,41 @@ class Index:
             alter = table.add_column_ddl(column)
             if alter is not None:  # 补不上的那些已在 differences() 里按破坏性报出
                 self.conn.execute(alter)
-        for index_name in self._stale_indexes(table, differences):
-            self.conn.execute(f'DROP INDEX IF EXISTS "{index_name}"')  # 同名不同定义 → 拆掉重建
+        for stale in self._stale_indexes(table, differences):
+            self.conn.execute(f'DROP INDEX IF EXISTS "{stale}"')  # 同名不同定义 → 拆掉重建
         for statement in statements[1:]:  # 建索引（必须在补列之后）
             self.conn.execute(statement)
 
+    def _quarantine(self, table: str) -> None:
+        """把待重建的表**改名隔离**，而不是 ``DROP``。
+
+        ``DROP TABLE`` 会让整张表的行当场消失，而"数据由调用方搬运"这句承诺在实现里
+        没有落点：调用方拿不到旧行，`Vault.open` 也不代搬；对档三（真源在库内、
+        只能靠备份）的表更是不可恢复的丢失。改名则字节一行不丢：人工可查、可搬、可删。
+
+        隔离表按"库里有、声明没有"处置，即 `extra_table` **只告警不删**（§8.4），
+        与全库口径一致。它名下的索引**先拆掉**：索引名整库唯一，留着会与新建的同名
+        索引相撞，让新表的索引被静默跳过、差异卡在"对齐后仍有"。
+        """
+        for stale in self.actual_index_defs(table):
+            self.conn.execute(f'DROP INDEX IF EXISTS "{stale}"')
+        quoted = '"' + table.replace('"', '""') + '"'
+        self.conn.execute(f'ALTER TABLE {quoted} RENAME TO "{table}__dropped_{now_ms()}"')
+
     @staticmethod
     def _stale_indexes(table: TableSpec, differences: list[Difference]) -> list[str]:
-        """同名、定义已变的索引（先拆掉，随后按声明重建）。"""
+        """同名、定义已变的索引（先拆掉，随后按声明重建）；名字取自差异的结构化字段。"""
         return [
-            item.detail.split(":", 1)[0]
+            item.subject
             for item in differences
             if item.kind == "index_mismatch" and item.table == table.name
         ]
 
     @staticmethod
     def _missing_columns(table: TableSpec, differences: list[Difference]) -> list[Column]:
-        """这张表里"缺、且能原地补"的列（顺序即声明顺序）。"""
+        """这张表里"缺、且能原地补"的列（顺序即声明顺序）；名字取自差异的结构化字段。"""
         missing = {
-            item.detail
+            item.subject
             for item in differences
             if item.kind == "missing_column" and item.table == table.name
         }
@@ -483,14 +516,17 @@ class Index:
         return identifier
 
 
-def _stranger_tables(conn: sqlite3.Connection) -> list[str]:
+def _stranger_tables(conn: sqlite3.Connection, declarations: tuple[TableSpec, ...]) -> list[str]:
     """已有的表里，哪些说明"这不是我们的库"。
 
     判据：库中已有表（`meta` 除外），却**一张都不是本程序声明的**——那不是我们的库
     （旧格式的目录同样撞在这一条上：它有自己的 packs / contents / blocks）。
     只建过 `meta` 的库**不拦**：那是刚 `open`、还没对齐的样子。
+
+    声明由调用方传入（而不是在这里现读）：读声明会抛错，而那时连接已经建立，
+    在 `open` 里就得为它单独兜一遍关连接；先解析、后连接则没有这个窗口。
     """
-    declared = {table.name for table in declared_tables()}
+    declared = {table.name for table in declarations}
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
