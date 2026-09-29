@@ -3,6 +3,10 @@
 
 """把配置声明展开成两个投影：``config/<包树>/…`` 与 ``schema/<包树>/…``。
 
+**当前不可运行**：它 import 的 `core.conf` / `core.storage.conf` 在 2026-09-29 的内核重建里
+被整条删除，配置引擎正由作者在新结构下重做（`src/core/conf/`）。文件留着当参考，
+配置引擎落地后按新接口修回；`pyproject.toml` 的 mypy 覆盖里为它开了豁免，修回时请一并摘掉。
+
 跑法（提交新声明后跑一次，和 `tools/spdx.py` 一样是工程工具）::
 
     uv run python tools/gen_conf.py            # 展开 / 补齐

@@ -19,12 +19,12 @@ ID 是身份证，不是"一个字段加一串内容"：它同时回答两个问
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from core.clock import now_ns
 from core.exc import InvalidIdError
 
 if TYPE_CHECKING:
@@ -48,11 +48,6 @@ def digest(data: bytes) -> str:
     与内容寻址共用同一口径：同内容同值，内容变则值变。换算法同样只动此处。
     """
     return sha256(data).hexdigest()
-
-
-def now_ns() -> int:
-    """当前时间（unix 纳秒）。"""
-    return time.time_ns()
 
 
 @dataclass(slots=True)
