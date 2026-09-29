@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
     "argon2-cffi>=25.1.0",
     "blake3>=1.0.9",
+    "blinker>=1.9.0",
     "cbor2>=6.1.4",
     "cryptography>=50.0.1",
     "fastcdc>=1.7.0",
