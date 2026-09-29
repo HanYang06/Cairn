@@ -24,15 +24,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path  # noqa: TC003 — `tables_path()` 在运行期真的用 Path 拼路径
 from typing import TYPE_CHECKING, cast
 
 import yaml
 
 from core.exc import TableDeclarationError
 
+from .registry import BINDABLE_FIELDS, POINTER_FIELDS, TABLES_FILENAME
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from pathlib import Path
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -83,13 +85,8 @@ class ColumnSource(Enum):
 
 
 #: 能从载荷指针里取到的字段：指针只承载两套凭证（设计篇 §3.2.1）
-POINTER_FIELDS: frozenset[str] = frozenset({"value_uuid", "value_hash"})
-
-#: 能绑成列的 ID 字段 = 落盘子集（设计篇 §3.5）与身份字段的交集
-BINDABLE_FIELDS: frozenset[str] = frozenset({"value_uuid", "value_hash", "birth_time", "name"})
-
-#: 能依赖默认为空的绑定字段：其余绑定列必须非空，免得同一身份多出一行空值
-_BINDABLE_NULLABLE: frozenset[str] = frozenset({"value_hash", "birth_time", "name"})
+#: 能绑成列的 ID 字段与「能依赖默认为空」的判据都在登记层（`registry.py`）；
+#: 它们对全部表一视同仁——**不再有身份表那种特例**（名字是表的坐标，不是行里的判别列）。
 
 #: 绑定列的类型由 `ID` 的字段推出（设计篇 §3.2），声明里不写
 _COLUMN_TYPE_OF_ID: dict[str, ColumnType] = {
@@ -99,13 +96,11 @@ _COLUMN_TYPE_OF_ID: dict[str, ColumnType] = {
     "birth_time": ColumnType.INTEGER,
 }
 
-#: 身份表的固定列名：判别列 `name` 与主键另一半 `value_uuid`
-IDENTITY_TABLE = "record"
-IDENTITY_SCOPE_COLUMN = "name"
-IDENTITY_KEY_COLUMN = "value_uuid"
+#: 绑定到别处的指针时，只能带两套凭证中那两种列名里的字段
+_POINTER_FIELDS = POINTER_FIELDS
 
-#: 作用域名那列的限定词：`id(scope).name`——它不是指向某处的指针，而是"由引用方写下的名字"
-SCOPE_QUALIFIER = "scope"
+#: 允许留空的绑定字段：摘要未绑定内容时为空串，签发时刻重扫读不回来
+_MAY_BE_EMPTY: frozenset[str] = frozenset({"value_hash", "birth_time", "name"})
 
 _SQL_TYPES: dict[ColumnType, str] = {
     ColumnType.TEXT: "TEXT",
@@ -167,11 +162,9 @@ class Column:
         """库里的列名。
 
         带限定词的列加前缀（`id(body).value_hash` → `body_value_hash`），免得同一张表里
-        两个 ID 的同名字段撞名；不带限定词的（以及身份表那个判别列）就是裸字段名。
+        两个 ID 的同名字段撞名；不带限定词的（本行主语那些字段）就是裸字段名。
         """
-        if not self.qualifier or (
-            self.name == IDENTITY_SCOPE_COLUMN and self.qualifier == SCOPE_QUALIFIER
-        ):
+        if not self.qualifier:
             return self.name
         return f"{self.qualifier}_{self.name}"
 
@@ -321,26 +314,14 @@ class TableSpec:
         object.__setattr__(self, "primary_key", primary_key)
         self._check_binding()
 
-    def _default_key(self) -> tuple[str, ...]:
-        """没写主键时的推断：唯一的身份列即主键；再不行就单列表的那一列。
-
-        两张身份列的表（关系表那种）必须明写复合主键——那时候"取哪一列"没有确定答案。
-        """
-        own = [column.name for column in self.columns if column.identity and not column.qualifier]
-        if len(own) == 1:
-            return (own[0],)
-        if len(own) > 1:
-            raise TableDeclarationError(
-                f"表 {self.name} 有多个身份列（{own}）：主键必须显式写明哪几列"
-            )
-        if len(self.columns) == 1:
-            return (self.columns[0].name,)
-        return ()
-
     @property
     def identity_columns(self) -> tuple[Column, ...]:
-        """本行的身份列：绑定到本行主语那个 ID 的字段（不带限定词）。"""
-        return tuple(column for column in self.columns if column.identity and not column.qualifier)
+        """本行的身份列：绑定到本行主语那个 ID 的字段（不带限定词）。
+
+        **一张表一个身份列**：名字是表的坐标（谁用了 ID，表就叫什么），故主键总能在
+        没写 `primary_key` 时由它推出来——不再有"多身份列必须明写"的情形。
+        """
+        return tuple(column for column in self.columns if column.source is ColumnSource.IDENTITY)
 
     def scopes(self) -> tuple[str, ...]:
         """这张表引用到的**作用域名**（限定词），按出现顺序去重。
@@ -381,49 +362,35 @@ class TableSpec:
         return tuple(column for column in columns if column is not None)
 
     def _check_binding(self) -> None:
-        """核对每一列的来源，再核身份表那几条特有规矩。"""
+        """核对每一列的来源；列与列的规矩都在 :meth:`_check_column` 里。"""
         for column in self.columns:
             self._check_column(column)
-        if self.name != IDENTITY_TABLE:
-            return
-        if self.primary_key != (IDENTITY_SCOPE_COLUMN, IDENTITY_KEY_COLUMN):
-            raise TableDeclarationError(
-                f"身份表 {IDENTITY_TABLE} 的主键必须是 "
-                f"({IDENTITY_SCOPE_COLUMN}, {IDENTITY_KEY_COLUMN})，现在是 {self.primary_key}"
-            )
-        scope = self.column(IDENTITY_SCOPE_COLUMN)
-        if scope is None or not (scope.identity and scope.qualifier):
-            raise TableDeclarationError(
-                f"身份表 {IDENTITY_TABLE} 的 {IDENTITY_SCOPE_COLUMN} 列必须是**带限定词**的绑定列："
-                "作用域名由引用方写下（见设计篇 §8）"
-            )
 
     def _check_column(self, column: Column) -> None:
-        """核对一列的来源：绑定列的字段必须在落盘子集里，限定词只用两套凭证。
+        """核对一列的来源：绑定的字段必须在落盘子集里，指针只带两套凭证。
 
-        例外只有一个：身份表的 `name` 判别列——它是"作用域名由引用方写下"的落点，
-        不是指向某处的指针，故不受"限定词只用两套凭证"那条约束（见设计篇 §8）。
+        没有"身份表特例"：名字是表的坐标（谁用的 ID，表就叫什么），行里不再有判别列，
+        故这两条对全部表一视同仁。
         """
         if not column.identity:
-            return
-        if column.source is not ColumnSource.IDENTITY:
-            # 引用列（关系表的端点）值就是另一个 ID，只要类型与非空对得上即可。
             return
         if column.name not in BINDABLE_FIELDS:
             raise TableDeclarationError(
                 f"列 {self.name}.{column.reference} 绑不到 ID 的字段 {column.name}："
                 f"可绑的是 {sorted(BINDABLE_FIELDS)}（落盘子集，见设计篇 §3.5）"
             )
-        if not column.not_null and column.name not in _BINDABLE_NULLABLE:
-            raise TableDeclarationError(
-                f"绑定列 {self.name}.{column.reference} 必须非空：否则同一个身份会多出一行空值"
-            )
-        if self.name == IDENTITY_TABLE and column.name == IDENTITY_SCOPE_COLUMN:
-            return
-        if column.qualifier and column.name not in POINTER_FIELDS:
+        if column.source is ColumnSource.REFERENCE and column.name not in _POINTER_FIELDS:
             raise TableDeclarationError(
                 f"列 {self.name}.{column.reference} 取不到：载荷里的指针只带两套凭证 "
-                f"{sorted(POINTER_FIELDS)}"
+                f"{sorted(_POINTER_FIELDS)}"
+            )
+        if (
+            column.source is ColumnSource.IDENTITY
+            and column.name == "value_uuid"
+            and (not column.not_null)
+        ):
+            raise TableDeclarationError(
+                f"绑定列 {self.name}.{column.reference} 必须非空：主键缺了值就没有身份"
             )
         expected = _COLUMN_TYPE_OF_ID[column.name]
         if column.type is not expected:
@@ -529,6 +496,11 @@ class Declaration:
     def tables(self) -> tuple[TableSpec, ...]:
         """声明集里的表。"""
         return self._tables
+
+    def extra_tables(self) -> tuple[TableSpec, ...]:
+        """按内核默认声明筛一遍，只留**多出来的**那些（声明文件与库都以默认那几张为底）。"""
+        default = {table.name for table in kernel_tables()}
+        return tuple(table for table in self._tables if table.name not in default)
 
     def table(self, name: str) -> TableSpec | None:
         """按名取表声明；不存在返回 ``None``。"""
@@ -647,7 +619,7 @@ def _columns(raw: object) -> tuple[Column, ...]:
     for entry in raw:
         if isinstance(entry, str):
             qualifier, field = parse_id_ref(entry)
-            columns.append(_bound_column(qualifier, field))
+            columns.append(_bound_column(qualifier, field, _source_of(qualifier)))
             continue
         if not isinstance(entry, dict):
             raise TableDeclarationError(f"列声明必须是映射或 `id(名字).字段` 字符串: {entry!r}")
@@ -659,25 +631,73 @@ def _columns(raw: object) -> tuple[Column, ...]:
     return tuple(columns)
 
 
-def _bound_column(qualifier: str, field: str) -> Column:
+def column_of(  # noqa: PLR0913 — 一列的全部字段就是这些；参数散开比收成结构体更直白
+    field: str,
+    source: ColumnSource,
+    *,
+    qualifier: str = "",
+    type: ColumnType | None = None,
+    not_null: bool | None = None,
+    doc: str = "",
+) -> Column:
+    """按 ID 的字段造一列（**绑定列的程序式入口**）。
+
+    它是解析口那条路的兄弟：YAML 里的 `id(名字).字段` 走 :func:`parse_id_ref` 与
+    :func:`_bound_column`，登记表算出来的列走这里。两处共用同一套判据——
+    类型随 `ID` 的字段走、能否留空由字段决定，故这里可以不传 `type` 与 `not_null`。
+
+    Args:
+        field: `ID` 的字段名（`value_uuid` / `value_hash` / `birth_time` / `name`）。
+        source: 值从哪儿来；只有 ``IDENTITY``（本行主语）与 ``REFERENCE``（指向别处）是绑定列。
+        qualifier: 引用别处时那个名字（表名），落成列名前缀。
+        type: 显式类型；不给即按 `ID` 的字段推。
+        not_null: 是否非空；不给即按字段的规矩（`value_uuid` 必填，其余可空）。
+        doc: 说明文本。
+
+    Raises:
+        TableDeclarationError: 字段名不可绑，或限定词与来源对不上。
+    """
+    if source is ColumnSource.REFERENCE and not qualifier:
+        raise TableDeclarationError(f"列 {field} 声明为引用，却没有说指向哪儿（缺限定词）")
+    if source is ColumnSource.IDENTITY and qualifier:
+        raise TableDeclarationError(f"列 {field} 是本行主语的字段，不该带限定词 {qualifier!r}")
+    effective = _COLUMN_TYPE_OF_ID.get(field) if type is None else type
+    if effective is None:
+        raise TableDeclarationError(f"ID 没有字段 {field!r}：类型推不出来，必须显式给")
+    if not_null is None:
+        not_null = field == "value_uuid" or field not in _MAY_BE_EMPTY
+    return Column(
+        name=field,
+        type=effective,
+        not_null=not_null,
+        doc=doc,
+        qualifier=qualifier,
+        source=source,
+        identity=source in {ColumnSource.IDENTITY, ColumnSource.REFERENCE},
+    )
+
+
+def reference_column(table: str, field: str) -> Column:
+    """造一条指向别处的指针列（`id(表名).字段`）。"""
+    _identifier(table, "ID 名字")
+    return column_of(field, ColumnSource.REFERENCE, qualifier=table)
+
+
+def _source_of(qualifier: str) -> ColumnSource:
+    """由限定词定来源：不写名字＝本行主语的字段，写了名字＝指向别处。"""
+    return ColumnSource.IDENTITY if not qualifier else ColumnSource.REFERENCE
+
+
+def _bound_column(qualifier: str, field: str, source: ColumnSource) -> Column:
     """造一条绑定列：字段必须是 `ID` 的字段，类型与说明都随 `ID` 走。"""
     if field not in BINDABLE_FIELDS:
         raise TableDeclarationError(
             f"ID 的字段 {field!r} 绑不了：可绑的是 {sorted(BINDABLE_FIELDS)}"
             "（落盘子集，设计篇 §3.5）"
         )
-    if qualifier and qualifier != SCOPE_QUALIFIER and field not in POINTER_FIELDS:
-        raise TableDeclarationError(
-            f"`id({qualifier}).{field}` 取不到：载荷里的指针只带两套凭证 {sorted(POINTER_FIELDS)}"
-        )
-    return Column(
-        name=field,
-        type=_COLUMN_TYPE_OF_ID[field],
-        not_null=field not in _BINDABLE_NULLABLE,
-        qualifier=qualifier,
-        source=ColumnSource.IDENTITY,
-        identity=True,
-    )
+    if source is ColumnSource.REFERENCE:
+        _identifier(qualifier, "ID 名字")
+    return column_of(field, source, qualifier=qualifier)
 
 
 def _plain_column(item: Mapping[str, object]) -> Column:
@@ -827,24 +847,17 @@ def _literal(value: DefaultValue, column_type: ColumnType) -> str:
             raise TableDeclarationError(f"默认值 {value!r} 与列类型 {column_type.value} 不符")
 
 
-#: 表声明的本体所在文件（相对配置根 `config/`）；由 `core/storage/conf.py` 的
-#: `storage.db.tables` 指向它。**改表即改这份 YAML**，Python 只负责读、校验、编译。
-TABLES_FILENAME = "tables.yaml"
-
-_TABLES: tuple[TableSpec, ...] | None = None
-"""惰性缓存：读一次就记住（导入存储不该要求表声明文件已经在那儿）。"""
-
-
 def tables_path() -> Path:
-    """表声明文件的实际路径：从配置面拿配置根，再拼上文件名。
+    """表声明文件的实际路径：配置根 ＋ 声明文件的文件名。
 
-    配置根有自己的规矩（`CAIRN_CONFIG` 旋钮 / 仓根下的 `config/`），故这里不自己猜路径——
-    "配置在哪"这个问题只由配置面回答。这一句导入故意放在函数里：**导入存储不该要求配置文件
-    已经在那儿**，只有真要读表声明时才问。
+    文件名是 `registry.py` 的常量（`TABLES_FILENAME`），**不再是一个配置项**：这份文件
+    由代码写出来、又被代码读回去，它不是"可以调的一个参数"——换名字只会让人到处找不到它。
+    配置根有自己的规矩（`CAIRN_CONFIG` 旋钮 / 仓根下的 `config/`），故路径也不在这里猜。
+    这一句导入故意放在函数里：**导入存储不该要求配置文件已经在那儿**。
     """
     from core.conf import conf
 
-    return conf.settings_path().parent / TABLES_FILENAME
+    return conf.config_root() / TABLES_FILENAME
 
 
 def load_tables(path: Path | None = None) -> tuple[TableSpec, ...]:
@@ -875,21 +888,21 @@ def load_tables(path: Path | None = None) -> tuple[TableSpec, ...]:
 
 
 def kernel_tables() -> tuple[TableSpec, ...]:
-    """内核三表：`record` / `hub` / `edge`（本体在 `config/tables.yaml`，设计篇 §8.2、§8.6）。
+    """内核的**全部**表声明：类型派生的（`block` / `body`）＋ 不由类型诞生的（`hub` / `edge`）。
 
-    **惰性读、读一次就记住**：导入 `core.storage` 不该要求表声明文件已经在那儿——
-    引擎的装配（`index.py`）与工具在真正要用时才向这里要；文件不在就当场报错。
+    **不再读文件**：文件是这条路的投影，不是它的入口。谁用了 ID，谁就在登记表里
+    （`Body` → `body`、`Block` → `block`），故这里问登记表即可——于是"表会自己诞生"
+    这句话在代码上成立：加了类型，下一轮开库就多一张表（文件与库都由 `tablegen.sync`
+    与开库对齐补齐）。
 
-    - `record` 是**身份表**：只放 ID 的面与存储层观测到的坐标；主键 `(name, value_uuid)`；
-    - `hub` 是**登记表**：主语是载体目录、不是 ID，故一列绑定都写不出来；
-    - `edge` 是**关系表**：两端各一列引用，另有身份摘要与标签。
+    领域层重建后，它的类型会登记进同一份登记表，这张清单自然变长，本函数不必改。
 
-    绑定列与引用列的索引由 `TableSpec.resolved_indexes()` 兜底补上，故文件里只写"额外的"那些。
+    Raises:
+        TableDeclarationError: 有引用指向没登记的表（断链），或列的形状推不出来。
     """
-    global _TABLES  # noqa: PLW0603 — 只在这里写一次，缓存换来"导入不依赖文件"
-    if _TABLES is None:
-        _TABLES = load_tables()
-    return _TABLES
+    from .tablegen import kernel_declarations
+
+    return kernel_declarations()
 
 
 META_TABLE_SPEC = TableSpec(
@@ -914,12 +927,8 @@ META_TABLE_SPEC = TableSpec(
 
 __all__ = [
     "BINDABLE_FIELDS",
-    "IDENTITY_KEY_COLUMN",
-    "IDENTITY_SCOPE_COLUMN",
-    "IDENTITY_TABLE",
     "META_TABLE_SPEC",
     "POINTER_FIELDS",
-    "TABLES_FILENAME",
     "Column",
     "ColumnSource",
     "ColumnType",
@@ -927,9 +936,11 @@ __all__ = [
     "IndexSpec",
     "TableSpec",
     "Tier",
+    "column_of",
     "kernel_tables",
     "load_tables",
     "quote_identifier",
+    "reference_column",
     "sql_type",
     "tables_path",
 ]

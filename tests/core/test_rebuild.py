@@ -11,11 +11,12 @@ import pytest
 from core.exc import RecordFormatError
 from core.storage.carrier import HEADER_BYTES as CARRIER_HEADER_BYTES
 from core.storage.carrier import Carrier
+from core.storage.format.block import BodyRef, encode_block_payload
 from core.storage.format.id import ID
 from core.storage.format.record import decode, encode
 from core.storage.hub import Hub
 from core.storage.index import Index
-from core.storage.rows import Location, rebuild
+from core.storage.rows import BodyRow, rebuild
 from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
@@ -26,8 +27,14 @@ _HUGE = 1 << 40
 
 
 def _record(payload: bytes) -> bytes:
-    """造一条真实记录。"""
+    """造一条内容记录（载荷不是指针，故它进 `body` 表）。"""
     return encode(ID.of(payload), payload)
+
+
+def _block_record(ref: BodyRef) -> bytes:
+    """造一条块记录（载荷是指针，故它进 `block` 表）。"""
+    pointer = encode_block_payload(ref)
+    return encode(ID.of(pointer), pointer)
 
 
 def _uuid(raw: bytes) -> str:
@@ -60,14 +67,38 @@ def test_rebuild_registers_hub_and_adds_missing_rows(tmp_path: Path):
 
         assert report.registered_hubs == ("main",)
         assert report.scanned == 2
-        assert report.added_rows == (_uuid(first_raw), _uuid(second_raw))
+        assert report.added_bodies == (_uuid(first_raw), _uuid(second_raw))
+        assert report.added_blocks == ()
         assert report.changed is True
 
-        stored = index.rows.location(_uuid(second_raw))
+        stored = index.rows.body(_uuid(second_raw))
 
     assert stored is not None
     assert (stored.hub, stored.pack) == ("main", second.pack)
     assert stored.span == second.span
+
+
+def test_rebuild_routes_records_by_payload(tmp_path: Path):
+    """进哪张表**由载荷判断**：带指针的进 `block`，其余进 `body`（类型为空也认得出）。"""
+    hub = _hub(tmp_path)
+    ref = BodyRef(value_uuid="bu", value_hash="bh")
+    content_raw = _record(b"content")
+    block_raw = _block_record(ref)
+    hub.append(content_raw)
+    hub.append(block_raw)
+
+    with _index(tmp_path) as index:
+        report = rebuild(index.rows, [hub], now=1)
+
+        assert report.added_bodies == (_uuid(content_raw),)
+        assert report.added_blocks == (_uuid(block_raw),)
+        assert index.rows.count_blocks() == 1
+        assert index.rows.count_bodies() == 1
+        stored = index.rows.block(_uuid(block_raw))
+
+    assert stored is not None
+    assert (stored.body_value_uuid, stored.body_value_hash) == ("bu", "bh")
+    assert stored.kind == ""
 
 
 def test_rebuild_keeps_unknown_fields_empty(tmp_path: Path):
@@ -78,10 +109,9 @@ def test_rebuild_keeps_unknown_fields_empty(tmp_path: Path):
 
     with _index(tmp_path) as index:
         rebuild(index.rows, [hub], now=5)
-        stored = index.rows.location(_uuid(raw))
+        stored = index.rows.body(_uuid(raw))
 
     assert stored is not None
-    assert stored.kind == ""
     assert stored.created == 0
     assert stored.updated == 0
     assert stored.birth_time == 0
@@ -97,8 +127,8 @@ def test_rebuild_does_not_touch_existing_rows(tmp_path: Path):
     value_uuid = _uuid(raw)
 
     with _index(tmp_path) as index:
-        index.rows.put_location(
-            Location(
+        index.rows.put_body(
+            BodyRow(
                 value_uuid=value_uuid,
                 value_hash="stale",
                 hub="main",
@@ -109,9 +139,10 @@ def test_rebuild_does_not_touch_existing_rows(tmp_path: Path):
             )
         )
         report = rebuild(index.rows, [hub], now=9)
-        stored = index.rows.location(value_uuid)
+        stored = index.rows.body(value_uuid)
 
-    assert report.added_rows == ()
+    assert report.added_bodies == ()
+    assert report.added_blocks == ()
     assert report.scanned == 1
     assert stored is not None
     assert (stored.pack, stored.value_hash, stored.created) == ("elsewhere", "stale", 7)
@@ -141,7 +172,7 @@ def test_rebuild_registers_an_empty_hub(tmp_path: Path):
         stored = index.rows.hub("spare")
 
     assert report.registered_hubs == ("spare",)
-    assert report.added_rows == ()
+    assert report.added_bodies == ()
     assert stored is not None
     assert stored.created == 3
 

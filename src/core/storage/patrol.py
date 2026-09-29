@@ -14,6 +14,9 @@
 
 两条边界：**同一身份在盘上出现多次不算差异**（更新留下的旧副本等压实回收，只要行指向的那一份
 存在即可）；**处置是"补"而不是"修"**——不可修复的发现一律不碰，删行等于把"丢了东西"这件事抹掉。
+
+**补哪张表由载荷定**（§3.2.1）：带指针的记录进 `block`，其余进 `body`；故重扫出来的行
+落在正确的表里，不靠类型标号猜（类型本条记录里根本没有）。
 """
 
 from __future__ import annotations
@@ -25,15 +28,17 @@ from typing import TYPE_CHECKING
 from core.clock import now_ms
 from core.exc import HubShapeError, RecordFormatError, SlotError
 
+from .format.block import BodyRef, body_ref_of
 from .format.record import decode
 from .hub import Hub, PackPolicy, find_hubs
-from .rows import Location
+from .rows import BlockRow, BodyRow
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from .carrier import SlotRange
     from .index import Index
+    from .rows import Rows
 
 
 class FindKind(Enum):
@@ -71,14 +76,16 @@ class Find:
         hub: 涉及的 hub。
         subject: 涉及的对象（身份或载体名）。
         detail: 人读的说明。
-        location: 行级发现带上"应该写成什么样"——处置据此补行或改坐标，不去 `detail` 里反解。
+        block: 行级发现带上"应该写成什么样"的块行——处置据此补行或改坐标，不去 `detail` 反解。
+        body: 同上，内容行。
     """
 
     kind: FindKind
     hub: str
     subject: str
     detail: str
-    location: Location | None = None
+    block: BlockRow | None = None
+    body: BodyRow | None = None
 
     @property
     def repairable(self) -> bool:
@@ -131,7 +138,7 @@ class RepairReport:
 
 @dataclass(frozen=True, slots=True)
 class _Occurrence:
-    """盘上一次出现：哪个身份、在哪儿、摘要是什么。"""
+    """盘上一次出现：哪个身份、在哪儿、摘要是什么、它是不是块记录。"""
 
     value_uuid: str
     hub: str
@@ -140,6 +147,7 @@ class _Occurrence:
     value_hash: str
     size: int
     issued: int
+    pointer: BodyRef | None
 
 
 def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) -> PatrolReport:
@@ -158,15 +166,17 @@ def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) 
     registered = {item.name for item in rows.hubs()}
     finds, occurrences, records_scanned = _scan_disk(on_disk, registered)
 
-    locations = rows.locations()
+    blocks = rows.blocks()
+    bodies = rows.bodies()
     missing = {name for name in registered if name not in on_disk}
-    missing |= {item.hub for item in locations if item.hub not in on_disk}
+    missing.update(row.hub for row in blocks if row.hub not in on_disk)
+    missing.update(row.hub for row in bodies if row.hub not in on_disk)
     finds.extend(
         Find(FindKind.MISSING_HUB, name, name, "登记或行指向的 hub 目录不在")
         for name in sorted(missing)
     )
-    finds.extend(_row_finds(locations, missing, occurrences))
-    finds.extend(_missing_row_finds(locations, occurrences))
+    finds.extend(_row_finds(blocks, bodies, missing, occurrences))
+    finds.extend(_missing_row_finds(blocks, bodies, occurrences))
 
     ordered = tuple(sorted(finds, key=lambda item: (item.kind.value, item.hub, item.subject)))
     return PatrolReport(
@@ -198,38 +208,47 @@ def _scan_disk(
 
 
 def _row_finds(
-    locations: tuple[Location, ...],
+    blocks: tuple[BlockRow, ...],
+    bodies: tuple[BodyRow, ...],
     missing: set[str],
     occurrences: dict[str, list[_Occurrence]],
 ) -> list[Find]:
     """库 → 盘：逐行比位置与摘要。"""
     finds: list[Find] = []
-    for location in locations:
-        if location.hub in missing:
-            continue
-        find = _compare_row(location, occurrences)
+    for block in blocks:
+        find = _compare(block, missing, occurrences)
+        if find is not None:
+            finds.append(find)
+    for body in bodies:
+        find = _compare(body, missing, occurrences)
         if find is not None:
             finds.append(find)
     return finds
 
 
 def _missing_row_finds(
-    locations: tuple[Location, ...], occurrences: dict[str, list[_Occurrence]]
-) -> list[Find]:
-    """盘上有、库里没有的身份：补行的那一列。"""
-    known = {item.value_uuid for item in locations}
-    return [
-        Find(
-            FindKind.MISSING_ROW,
-            occurrence.hub,
-            value_uuid,
-            "盘上有记录、库里没有行",
-            location=_as_location(occurrence),
+    blocks: tuple[BlockRow, ...],
+    bodies: tuple[BodyRow, ...],
+    occurrences: dict[str, list[_Occurrence]],
+) -> tuple[Find, ...]:
+    """盘上有、库里没有的身份：补行的那一列（进哪张表由载荷定）。"""
+    known = {row.value_uuid for row in blocks} | {row.value_uuid for row in bodies}
+    finds: list[Find] = []
+    for value_uuid in sorted(occurrences):
+        if value_uuid in known:
+            continue
+        occurrence = occurrences[value_uuid][0]
+        finds.append(
+            Find(
+                FindKind.MISSING_ROW,
+                occurrence.hub,
+                value_uuid,
+                "盘上有记录、库里没有行",
+                block=_as_block(occurrence),
+                body=_as_body(occurrence),
+            )
         )
-        for value_uuid in sorted(occurrences)
-        if value_uuid not in known
-        for occurrence in [occurrences[value_uuid][0]]
-    ]
+    return tuple(finds)
 
 
 def repair(index: Index, report: PatrolReport, *, now: int | None = None) -> RepairReport:
@@ -249,16 +268,32 @@ def repair(index: Index, report: PatrolReport, *, now: int | None = None) -> Rep
     for find in report.finds:
         if find.kind is FindKind.UNREGISTERED_HUB:
             rows.register_hub(find.hub, created=stamp)
-        elif find.kind is FindKind.MISSING_ROW and find.location is not None:
-            rows.put_location(find.location)
-        elif find.kind is FindKind.MISPLACED and find.location is not None:
-            rows.move_location(find.location, updated=stamp)
+        elif find.kind is FindKind.MISSING_ROW:
+            _add_row(rows, find)
+        elif find.kind is FindKind.MISPLACED:
+            _move_row(rows, find, stamp)
         else:
             skipped.append(find)
             continue
         applied.append(find)
 
     return RepairReport(applied=tuple(applied), skipped=tuple(skipped))
+
+
+def _add_row(rows: Rows, find: Find) -> None:
+    """按发现补一行：块行与内容行各进各的表（发现里带哪种就补哪种）。"""
+    if find.block is not None:
+        rows.put_block(find.block)
+    elif find.body is not None:
+        rows.put_body(find.body)
+
+
+def _move_row(rows: Rows, find: Find, stamp: int) -> None:
+    """按发现挪一行：只改坐标。"""
+    if find.block is not None:
+        rows.move_block(find.block, updated=stamp)
+    elif find.body is not None:
+        rows.move_body(find.body, updated=stamp)
 
 
 def _scan(hub: Hub, pack: str, occurrences: dict[str, list[_Occurrence]]) -> int:
@@ -279,47 +314,69 @@ def _scan(hub: Hub, pack: str, occurrences: dict[str, list[_Occurrence]]) -> int
                     value_hash=record.id.value_hash,
                     size=len(raw),
                     issued=record.id.birth_time,
+                    pointer=body_ref_of(record.payload),
                 )
             )
             count += 1
     return count
 
 
-def _compare_row(location: Location, occurrences: dict[str, list[_Occurrence]]) -> Find | None:
+def _compare(
+    row: BlockRow | BodyRow,
+    missing: set[str],
+    occurrences: dict[str, list[_Occurrence]],
+) -> Find | None:
     """比一行：位置与摘要**两项都对**才算一致。"""
-    found = occurrences.get(location.value_uuid, [])
+    if row.hub in missing:
+        return None
+    found = occurrences.get(row.value_uuid, [])
     same_place = [
         item
         for item in found
-        if item.hub == location.hub and item.pack == location.pack and item.span == location.span
+        if item.hub == row.hub and item.pack == row.pack and item.span == row.span
     ]
-    if any(item.value_hash == location.value_hash for item in same_place):
+    if any(item.value_hash == row.value_hash for item in same_place):
         return None
 
-    same_content = [item for item in found if item.value_hash == location.value_hash]
+    same_content = [item for item in found if item.value_hash == row.value_hash]
     if same_content:
-        return Find(
-            FindKind.MISPLACED,
-            location.hub,
-            location.value_uuid,
-            "行在、摘要对得上，但坐标与实际位置不符",
-            location=_as_location(same_content[0]),
+        return _found(
+            FindKind.MISPLACED, row, "行在、摘要对得上，但坐标与实际位置不符", same_content[0]
         )
-    return Find(
-        FindKind.MISSING_RECORD,
-        location.hub,
-        location.value_uuid,
-        "行在、盘上读不出这一份内容",
+    return _found(FindKind.MISSING_RECORD, row, "行在、盘上读不出这一份内容", None)
+
+
+def _found(kind: FindKind, row: BlockRow | BodyRow, detail: str, where: _Occurrence | None) -> Find:
+    """按行的种类造一处发现：块行给 `block`、内容行给 `body`（处置据此知道补哪张表）。"""
+    if isinstance(row, BlockRow):
+        return Find(
+            kind, row.hub, row.value_uuid, detail, block=_as_block(where) if where else None
+        )
+    return Find(kind, row.hub, row.value_uuid, detail, body=_as_body(where) if where else None)
+
+
+def _as_block(occurrence: _Occurrence | None) -> BlockRow | None:
+    """把盘上的一次出现写成"应该补成什么样"的块行；不是块记录即 ``None``。"""
+    if occurrence is None or occurrence.pointer is None:
+        return None
+    return BlockRow(
+        value_uuid=occurrence.value_uuid,
+        value_hash=occurrence.value_hash,
+        body_value_uuid=occurrence.pointer.value_uuid,
+        body_value_hash=occurrence.pointer.value_hash,
+        hub=occurrence.hub,
+        pack=occurrence.pack,
+        span=occurrence.span,
+        size=occurrence.size,
+        birth_time=occurrence.issued,
     )
 
 
-def _as_location(occurrence: _Occurrence) -> Location:
-    """把盘上的一次出现写成"应该补成什么样"的行（类型与落盘时刻未知，给空值）。
-
-    `name` 也给空：作用域名是引用方写下的，顺扫载体读不到它——重建补行时只能是未知，
-    与 `kind` / `created` 同一种降级（设计篇 §8.5）。
-    """
-    return Location(
+def _as_body(occurrence: _Occurrence | None) -> BodyRow | None:
+    """把盘上的一次出现写成"应该补成什么样"的内容行；是块记录即 ``None``。"""
+    if occurrence is None or occurrence.pointer is not None:
+        return None
+    return BodyRow(
         value_uuid=occurrence.value_uuid,
         value_hash=occurrence.value_hash,
         hub=occurrence.hub,

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -16,7 +17,6 @@ from core.storage.format.record import decode, encode
 from core.storage.hub import Hub, find_hubs
 from core.storage.index import Index
 from core.storage.patrol import FindKind, patrol, repair
-from core.storage.rows import Location
 from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
@@ -111,16 +111,7 @@ def test_misplaced_is_repaired_by_moving_coordinates(vault: Storage):
     block = vault.store(b"moved", kind="notedata")
     row = vault.locate(block.value_uuid)
     assert row is not None
-    vault.index.rows.move_location(
-        Location(
-            value_uuid=row.value_uuid,
-            value_hash=row.value_hash,
-            hub=row.hub,
-            pack=row.pack,
-            span=SlotRange(first=9999, last=9999),
-            size=row.size,
-        )
-    )
+    vault.index.rows.move_block(replace(row, span=SlotRange(first=9999, last=9999)))
 
     report = patrol(vault.index, vault.root)
     assert [item.kind for item in report.finds] == [FindKind.MISPLACED]
@@ -132,6 +123,23 @@ def test_misplaced_is_repaired_by_moving_coordinates(vault: Storage):
     assert restored.span == row.span
     assert restored.kind == "notedata"
     assert restored.created == row.created
+    assert patrol(vault.index, vault.root).clean
+
+
+def test_misplaced_body_row_is_repaired_too(vault: Storage):
+    """内容行的坐标不符同样只改坐标：两张表各有一条可修复路。"""
+    vault.store(b"body move", kind="notedata")
+    body = vault.index.rows.bodies_by_hash(ID.of(b"body move").value_hash)[0]
+    vault.index.rows.move_body(replace(body, span=SlotRange(first=9999, last=9999)))
+
+    report = patrol(vault.index, vault.root)
+    assert {item.kind for item in report.finds} == {FindKind.MISPLACED}
+
+    repair(vault.index, report, now=3)
+
+    restored = vault.index.rows.body(body.value_uuid)
+    assert restored is not None
+    assert restored.span == body.span
     assert patrol(vault.index, vault.root).clean
 
 
@@ -149,7 +157,7 @@ def test_missing_record_is_reported_and_never_touched(vault: Storage):
 
     assert {item.kind for item in report.finds} == {FindKind.MISSING_RECORD}
     assert report.repairable == ()
-    assert len(report.broken) == 2
+    assert len(report.broken) == 2, "块行与内容行各报一处"
 
     result = repair(vault.index, report)
 
@@ -197,17 +205,16 @@ def test_registration_rows_and_carriers_agree_after_repair(vault: Storage):
 
     repair(vault.index, patrol(vault.index, vault.root), now=9)
 
-    located = vault.locate(record.id.value_uuid)
+    located = vault.index.rows.body(record.id.value_uuid)
     assert located is not None
     assert located.hub == "side"
     assert located.span == placement.span
     assert located.value_hash == record.id.value_hash
-    assert located.kind == ""
     assert patrol(vault.index, vault.root).clean
 
 
 def test_placement_is_reported_for_the_row_to_carry(vault: Storage):
-    """补行时带的是**位置**：巡检给的 `location` 直接就是那一行该写的样子。"""
+    """补行时带的是**那一行该写的样子**：内容记录进 `body`，块记录进 `block`。"""
     hub = Hub.create(vault.root / "far", slot_bytes=_SLOT)
     raw = encode(ID.of(b"payload"), b"payload")
     placement = hub.append(raw)
@@ -215,12 +222,13 @@ def test_placement_is_reported_for_the_row_to_carry(vault: Storage):
     find = patrol(vault.index, vault.root).finds[0]
 
     assert find.kind is FindKind.MISSING_ROW
-    assert find.location is not None
-    assert find.location.value_uuid == decode(raw).id.value_uuid
-    assert find.location.pack == placement.pack
-    assert find.location.span == placement.span
-    assert find.location.hub == "far"
-    assert find.location.size == len(raw)
+    assert find.block is None, "这条载荷不是指针，故它不该被补成块行"
+    assert find.body is not None
+    assert find.body.value_uuid == decode(raw).id.value_uuid
+    assert find.body.pack == placement.pack
+    assert find.body.span == placement.span
+    assert find.body.hub == "far"
+    assert find.body.size == len(raw)
 
 
 def test_rows_pointing_at_a_missing_hub_are_not_called_lost_content(vault: Storage):

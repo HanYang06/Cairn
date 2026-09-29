@@ -33,11 +33,11 @@ _HUGE = 1 << 40
 
 
 def test_create_builds_a_vault(tmp_path: Path):
-    """建库：库根、索引库与内核三表一次到位。"""
+    """建库：库根、索引库与内核表一次到位。"""
     with Kernel.create(tmp_path / "vault") as kernel:
         assert kernel.catalog_path.exists()
         assert kernel.catalog_path.name == CATALOG_FILENAME
-        assert kernel.index.tables() == ("edge", "hub", "meta", "record")
+        assert kernel.index.tables() == ("block", "body", "edge", "hub", "meta")
         assert kernel.policy == PackPolicy()
 
 

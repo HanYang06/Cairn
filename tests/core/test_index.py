@@ -92,9 +92,9 @@ def test_create_builds_every_declared_table(tmp_path: Path):
     declaration = Declaration(kernel_tables())
     with Index.open(path, declaration, create=True) as index:
         assert index.declaration is declaration
-        assert index.tables() == ("edge", "hub", "meta", "record")
+        assert index.tables() == ("block", "body", "edge", "hub", "meta")
         kinds = _kinds(index)
-        assert kinds.count(DiffKind.MISSING_TABLE) == 4
+        assert kinds.count(DiffKind.MISSING_TABLE) == 5
         assert any(entry.startswith("登记声明") for entry in index.alignment.applied)
 
 

@@ -18,7 +18,6 @@ from core.storage.tables import (
     Tier,
     kernel_tables,
     load_tables,
-    tables_path,
 )
 
 if TYPE_CHECKING:
@@ -363,23 +362,25 @@ def test_declaration_ddl_and_signature_are_ordered_by_table_name():
     assert declaration.signature().splitlines()[0].startswith("table=alpha")
 
 
-# ---- 内核三表 ----
+# ---- 内核那几张表 ----
 
 
 def test_kernel_tables_declare_and_compile():
-    """内核三表可登记、可编译；位置列按两数格模型给。"""
+    """内核表由类型登记现算：`block` / `body` 派生，`hub` / `edge` 另写。"""
     declaration = Declaration(kernel_tables())
 
-    assert {table.name for table in declaration.tables} == {"record", "hub", "edge"}
+    assert {table.name for table in declaration.tables} == {"block", "body", "hub", "edge"}
     assert all(statement.startswith("CREATE ") for statement in declaration.ddl())
 
-    record = declaration.table("record")
-    assert record is not None
-    assert record.column_names() == (
-        "name",
+    block = declaration.table("block")
+    assert block is not None
+    assert block.column_names() == (
         "value_uuid",
         "value_hash",
         "birth_time",
+        "name",
+        "body_value_uuid",
+        "body_value_hash",
         "kind",
         "hub",
         "pack",
@@ -389,9 +390,26 @@ def test_kernel_tables_declare_and_compile():
         "created",
         "updated",
     )
-    assert record.primary_key == ("name", "value_uuid")
-    assert record.column("slot_head") is None
-    assert record.index_name(record.indexes[0]) == "idx_record_value_hash"
+    assert block.primary_key == ("value_uuid",)
+    assert block.column("slot_head") is None
+    assert block.index_name(IndexSpec(columns=("value_hash",))) == "idx_block_value_hash"
+
+    body = declaration.table("body")
+    assert body is not None
+    assert body.column_names() == (
+        "value_uuid",
+        "value_hash",
+        "birth_time",
+        "name",
+        "hub",
+        "pack",
+        "slot_first",
+        "slot_last",
+        "size",
+        "created",
+        "updated",
+    )
+    assert body.column("kind") is None, "内容记录没有类型标号"
 
 
 def test_kernel_tables_are_all_rebuildable_or_explicitly_source():
@@ -404,12 +422,12 @@ def test_kernel_tables_are_all_rebuildable_or_explicitly_source():
 # ---- 表声明文件的读取 ----
 
 
-def test_shipped_tables_file_loads():
+def test_shipped_tables_file_loads(shipped_tables_path: Path):
     """入库的 `config/tables.yaml` 可读，且逐张过解析口。"""
-    tables = load_tables()
+    tables = load_tables(shipped_tables_path)
 
-    assert [table.name for table in tables] == ["record", "hub", "edge"]
-    assert tables_path().name == "tables.yaml"
+    assert {table.name for table in tables} == {"block", "body", "hub", "edge"}
+    assert shipped_tables_path.name == "tables.yaml"
 
 
 def test_loader_reports_a_missing_file(tmp_path: Path):
@@ -418,28 +436,16 @@ def test_loader_reports_a_missing_file(tmp_path: Path):
         load_tables(tmp_path / "nope.yaml")
 
 
-def test_kernel_tables_read_the_path_the_config_points_at(
+def test_kernel_tables_come_from_the_registry_not_from_a_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """`kernel_tables()` 读的就是 `tables_path()` 指的那份文件；文件不在即当场报错。
+    """`kernel_tables()` 问的是**登记表**，不是文件：文件不在也照样算得出来。
 
-    **导入存储本身不要求文件在那儿**（惰性），但真要读表声明时不许含糊——
-    空声明比没有声明更坏，它会把库里已有的表判成"多出来的"。
+    这是"表会自己诞生"在代码上的落点——文件是投影，投影丢了大不了重生成一遍。
     """
-    target = tmp_path / "tables.yaml"
-    target.write_text(
-        "- name: t\n  tier: derived\n  rebuild_from: 载体\n  columns: [id().value_uuid]\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("core.storage.tables.tables_path", lambda: target)
-    monkeypatch.setattr("core.storage.tables._TABLES", None)
-
-    assert [table.name for table in kernel_tables()] == ["t"]
-
     monkeypatch.setattr("core.storage.tables.tables_path", lambda: tmp_path / "nope.yaml")
-    monkeypatch.setattr("core.storage.tables._TABLES", None)
-    with pytest.raises(TableDeclarationError, match="不在"):
-        kernel_tables()
+
+    assert [table.name for table in kernel_tables()] == ["block", "body", "hub", "edge"]
 
 
 def test_loader_reports_broken_yaml(tmp_path: Path):

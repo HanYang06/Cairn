@@ -33,7 +33,8 @@ from core.storage.hub import PackPolicy
 from core.storage.index import Index, RebuildPlan
 from core.storage.patrol import patrol as _patrol
 from core.storage.patrol import repair as _repair
-from core.storage.tables import Declaration, kernel_tables
+from core.storage.tablegen import sync as _sync_tables
+from core.storage.tables import Declaration, kernel_tables, tables_path
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
     from core.event.events import Event
     from core.storage.format.id import ID
     from core.storage.patrol import PatrolReport, RepairReport
-    from core.storage.rows import Location
+    from core.storage.rows import BlockRow
 
 CATALOG_FILENAME = "catalog.db"
 """索引库文件名：路径约定只在这里出现一次。"""
@@ -49,8 +50,12 @@ CATALOG_FILENAME = "catalog.db"
 LOGGER_NAME = "cairn.kernel"
 """内核日志记录器名：统一日志的入口。"""
 
-KERNEL_DECLARATION = Declaration(kernel_tables())
-"""内核默认声明集：三张内核表登记成一份声明。"""
+SUPERSEDED_TABLES: tuple[str, ...] = ("record",)
+"""更换形状时淘汰的旧表：`record` 单表在 2026-09-30 拆成 `block` / `body` 两张。
+
+写在代码里、名字点明，是为了让"淘汰哪张表"这一动作可见——它不是猜出来的，
+而是在这里被人写下的。声明文件里没有这张表时它是空操作。
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,15 +76,35 @@ def _policy_from_config() -> PackPolicy:
     )
 
 
+def kernel_declaration(extra: Declaration | None = None) -> Declaration:
+    """内核默认声明集：**先让声明文件对上代码，再拿它去开库**。
+
+    这一步是"表会自己诞生"的落点（设计篇 §8.2）：类型登记 → 现算表形状 → 写进
+    `config/tables.yaml`（文件不在就整份生成、少表少列就补上、人写的内容一个字不动）
+    → 声明文件再被读进库里。于是**手工拆表这件事在流程上没有位置**：类型在，表就在。
+
+    这一步每次装配都跑：它是幂等的，且文件与代码分叉时它能自己收敛回来。
+    调用方另外给的声明（领域表）不属于内核那几张，不进声明文件——它们由领域自己走同一条路。
+
+    Args:
+        extra: 调用方另外要声明进来的表；不给即只有内核默认那几张。
+    """
+    _sync_tables(tables_path(), replace=SUPERSEDED_TABLES)
+    base = kernel_tables()
+    if extra is None:
+        return Declaration(base)
+    return Declaration((*base, *extra.extra_tables()))
+
+
 def _setup(
     declaration: Declaration | None,
     policy: PackPolicy | None,
     rebuild: RebuildPlan | None,
     logger: logging.Logger | None,
 ) -> _Setup:
-    """把可选参数填成默认：声明集缺省用内核默认，策略与日志器缺省都向自己的声明要。"""
+    """把可选参数填成默认：声明集缺省由登记表现算，策略与日志器缺省都向自己的声明要。"""
     return _Setup(
-        declaration=KERNEL_DECLARATION if declaration is None else declaration,
+        declaration=kernel_declaration(declaration),
         policy=_policy_from_config() if policy is None else policy,
         rebuild=rebuild,
         logger=logging.getLogger(LOGGER_NAME) if logger is None else logger,
@@ -229,8 +254,8 @@ class Kernel:
         """摘掉一个块：只摘块行，内容面等压实回收。"""
         return self._storage.drop(value_uuid)
 
-    def locate(self, value_uuid: str) -> Location | None:
-        """取一个身份的定位行（诊断用）。"""
+    def locate(self, value_uuid: str) -> BlockRow | None:
+        """取一个身份的块行（诊断用）。"""
         return self._storage.locate(value_uuid)
 
     def patrol(self) -> PatrolReport:

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from core.conf import conf
 from core.storage.hub import DEFAULT_MAX_BYTES, DEFAULT_SLOT_BYTES
-from core.storage.tables import TABLES_FILENAME
 
 SLOT_BYTES = "storage.pack.slot_bytes"
 """键名常量：取用点写常量而不是各处抄字符串，改名只改这一处。"""
@@ -29,9 +28,6 @@ PACK_MAX_BYTES = "storage.pack.max_bytes"
 BLOCK_MAX_BYTES = "storage.block.max_bytes"
 """键名常量：块的分片粒度（**预留**：分片尚未接进块面）。"""
 
-TABLES_FILE = "storage.db.tables"
-"""键名常量：表声明的本体所在文件（相对配置根）。"""
-
 # 声明处的默认值直接引用实现里的那两个常量：一份事实、两处引用，比在这里抄一个数字好。
 conf(SLOT_BYTES, DEFAULT_SLOT_BYTES, type=int, doc="槽长：载体内的定长分配与定位单位，写进文件头")
 conf(
@@ -41,6 +37,5 @@ conf(
     doc="单个载体的字节上限，写满即封口（只管封口线，不定槽长）",
 )
 conf(BLOCK_MAX_BYTES, 1024**2, type=int, doc="单个块的字节上限，超过即分片（预留，尚未接线）")
-conf(TABLES_FILE, TABLES_FILENAME, type=str, doc="索引库表声明所在文件（结构本体在那）")
 
-__all__ = ["BLOCK_MAX_BYTES", "PACK_MAX_BYTES", "SLOT_BYTES", "TABLES_FILE"]
+__all__ = ["BLOCK_MAX_BYTES", "PACK_MAX_BYTES", "SLOT_BYTES"]
