@@ -25,7 +25,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
+from core.conf import conf
 from core.event.bus import Bus
+from core.storage.conf import PACK_MAX_BYTES, SLOT_BYTES
 from core.storage.engine import Storage
 from core.storage.hub import PackPolicy
 from core.storage.index import Index, RebuildPlan
@@ -61,16 +63,24 @@ class _Setup:
     logger: logging.Logger
 
 
+def _policy_from_config() -> PackPolicy:
+    """默认的载体策略：向配置面要值（默认值只写在 `core/storage/conf.py`，这里不抄第二份）。"""
+    return PackPolicy(
+        slot_bytes=int(conf(SLOT_BYTES)),
+        max_bytes=int(conf(PACK_MAX_BYTES)),
+    )
+
+
 def _setup(
     declaration: Declaration | None,
     policy: PackPolicy | None,
     rebuild: RebuildPlan | None,
     logger: logging.Logger | None,
 ) -> _Setup:
-    """把可选参数填成默认：声明集缺省用内核默认，日志器缺省用 `cairn.kernel`。"""
+    """把可选参数填成默认：声明集缺省用内核默认，策略与日志器缺省都向自己的声明要。"""
     return _Setup(
         declaration=KERNEL_DECLARATION if declaration is None else declaration,
-        policy=PackPolicy() if policy is None else policy,
+        policy=_policy_from_config() if policy is None else policy,
         rebuild=rebuild,
         logger=logging.getLogger(LOGGER_NAME) if logger is None else logger,
     )

@@ -109,8 +109,12 @@ convention = "google"
 # 表名/列名来自声明层（tables.py）并经 quote_identifier 加引号，值全部参数化（无注入面）。
 "src/core/storage/rows.py" = ["S608"]
 "src/core/storage/index.py" = ["S608"]
-# 测试与工具脚本：断言、注解、docstring、魔法数、打印等不按产品代码要求
-"tests/**" = ["ANN", "D", "S101", "S105", "S603", "PLR2004", "SLF001", "INP001"]
+# `conf` 的调用形是**对的形状本身就是契约**：声明与取值共用一个签名，`path` 之后全是可选副参数
+# （类型 / 说明 / 文件引用 / 强写）。拆成小对象会把"一种调用形"这个卖点拆掉。
+"src/core/conf/registry.py" = ["PLR0913"]
+# 测试与工具脚本：断言、注解、docstring、魔法数、打印等不按产品代码要求。
+# `FBT003` 也放行：配置面就是 `conf(键, 值)` 这种位置调用，测试里写布尔字面量是"取值"而非开关。
+"tests/**" = ["ANN", "D", "S101", "S105", "S603", "PLR2004", "SLF001", "INP001", "FBT003"]
 "tools/**" = ["ANN", "D", "S101", "S603", "C901", "PLR2004", "T201", "INP001", "ERA001"]
 
 [tool.mypy]
