@@ -99,23 +99,28 @@ class Storage:
     def ids(self) -> Iterator[str]:
         """遍历全部**对象**身份（内容记录不是对象，不在此列）。
 
-        只读定位行与块记录，**不读正文**：列身份不该把全库正文拉进内存。
+        **并不省正文的读**：判别"这一行是不是块记录"必须读该行载荷，而内容记录的载荷
+        就是正文本身，故本方法会把全库正文读进来再丢掉——与
+        :meth:`BlockStore.iter_block_records` 同一代价。要免掉它，得先把"块记录判据
+        落成索引里的一列"（设计篇 §12 的字段裁定）。
         """
         for row, _record in self.blocks.iter_block_records():
             yield str(row["value_uuid"])
 
     def info_of(self, oid: str) -> ObjectInfo:
-        """取对象的中立视图（类型 / 标题 / 标签 / 时间）——只读块记录，不读正文。"""
+        """取对象的中立视图（类型 / 标题 / 标签 / 时间）——只读该对象的块记录载荷，不含正文。"""
         row = self.vault.index.record_row(str(oid))
         if row is None:
             raise ObjectNotFoundError(str(oid))
         return self._info_of_row(row)
 
     def infos(self) -> list[ObjectInfo]:
-        """**批量**取中立视图（同样不读正文）。
+        """**批量**取中立视图。
 
-        ``attrs`` / ``author`` 在块记录载荷里、``kind`` 与时间在定位行里，故列举不必碰正文；
-        正文长度随块记录存了一份（`body_size`）也是为这件事。**要正文请走** :meth:`fetch`。
+        ``attrs`` / ``author`` 在块记录载荷里、``kind`` 与时间在定位行里，故**属性**不必碰正文；
+        正文长度随块记录存了一份（`body_size`）也是为这件事。但逐行判别"是不是块记录"要读
+        该行载荷，而内容记录的载荷就是正文本身——故本方法仍会把全库正文读进来再丢掉
+        （见 :meth:`BlockStore.iter_block_records`）。**要正文请走** :meth:`fetch`。
         排序按身份：身份是时间有序的，故这一序就是创建顺序（旧实现的表也是这么排的）。
         """
         return [self._info_of_row(row) for row, _record in self.blocks.iter_block_records()]

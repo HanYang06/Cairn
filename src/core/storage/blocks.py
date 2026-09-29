@@ -291,7 +291,9 @@ def _digest_or_none(value: Any) -> ValueHash | None:
 def block_fields(record: Record) -> dict[str, Any]:
     """块记录载荷里的字段（``attrs`` / ``config`` / ``author`` / 指针 / 正文长度）。
 
-    **列举只看这些**：它们都在块记录里，故列一遍 id 与元数据不必把正文读进内存。
+    **元数据只看这些**：它们都在块记录里，故取一条块的元数据不必碰它的正文。
+    这说的是"拿到块记录之后"，不是"列举不必读载荷"——判别一行是不是块记录仍要读该行载荷，
+    见 :meth:`BlockStore.iter_block_records` 与设计篇 §12。
     """
     return _decode_blob(record.payload)
 
@@ -299,8 +301,9 @@ def block_fields(record: Record) -> dict[str, Any]:
 def _blob_of(block: Block, digest: ValueHash) -> dict[str, Any]:
     """块记录的载荷：随块行单独存的东西 ＋ **指向 body 的地址** ＋ 正文长度。
 
-    ``body_size`` 是为**列举**服务的投影：正文长度本来能由正文算出，但列举时不想读正文
-    （多媒体块很大），故随块记录存一份。它不在表声明里，属块记录载荷格式的一部分。
+    ``body_size`` 是为**取长度**服务的投影：正文长度本来能由正文算出，但取元数据时不必为它
+    读一次正文（多媒体块很大），故随块记录存一份。它省掉的是"为长度而读正文"，
+    不等于"列举不读载荷"——判别块记录仍要逐行读载荷。它不在表声明里，属块记录载荷格式的一部分。
     """
     return {
         "attrs": block.attrs,

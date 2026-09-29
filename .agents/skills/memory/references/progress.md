@@ -258,5 +258,10 @@
   "槽数"两套口径分清、`iter_block_records` 文档如实。
   余 **1 条预留**：列举仍会读全库正文；去掉它要先把"块记录判据落成索引里的一列"
   （设计篇 §12 的 `body_addr` 字段问题，**待作者裁**，本轮不代裁）。
-  旧清单里另有两条**不在**这 16 条线程内、需另核：`tables.py` 的 `signature()` 含 `doc`
-  （改注释即改声明投影，代码里仍如此）、`record.py` ID 段二次解码。
+  旧清单里另有两条**不在**那 16 条线程内，已核实属实、均未修：`record.py` 的 ID 段**解两次**
+  （`_payload_start` 量边界解一次，`decode` 又解一次同一段）；`TableSpec.signature()` 含 `doc`，
+  即**注释文本参与声明投影**（`verify_declarations` 只在 `Vault.verify()` 里调、不在开库路径上，
+  且 `open` 每次都 `align()` 重写 meta，故改注释不会打不开库，只是口径耦合）。
+  另：`review`（第三方 OpenCodeReview）会因**安装抖动**失败（`ocr: command not found` /
+  `Cannot find module '/usr/local/bin/ocr'`），与代码无关、重跑可自愈（2026-09-29 连失败两次、
+  第三次通过）；该检查非 ruleset 必需项（只 `quality` 必需）。
