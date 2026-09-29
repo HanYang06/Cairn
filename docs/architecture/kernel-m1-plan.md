@@ -3,6 +3,9 @@
 
 # M1 · 门户与实例管理（落地计划）
 
+> ⚠️ **已作废，仅存档（2026-09-29）**：这份计划的产物（`Core` 门户、实例管理、5 对象）
+> 随 `refactor/clean-local-code` 整条删除。重建后的内核见 [`kernel.md`](./kernel.md) 与 `src/core/`。
+
 > 依据 `docs/architecture/kernel-spec.md` v1.0。分支 `refactor/kernel-object-core`。
 > 本文件是**施工计划**，写完 M1 后并入 `kernel-spec.md` 或删除。
 

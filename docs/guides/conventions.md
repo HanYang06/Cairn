@@ -47,20 +47,21 @@ core(L0)  ←  feature(L3)  ←  app(组合根)
                 ui_tools(工具箱) —— 谁都能用，但不认识领域
 ```
 
-- `src/core/`（桶 / 块存储）**必须 Qt-free、传输无关**。
-- `src/feature/` 只依赖 core 的公共 API；**域之间互不依赖**，跨域协作归 App。
-- `ui_tools` **不 import `feature` / `core.storage`**（已有架构测试断言）。UI 里出现
-  `bucket` / `block` / `body` / `attrs` / `checksum` 即失控。
+- `src/core/`（内核：事件 / 存储 / 异常）**必须 Qt-free、传输无关**。
+- `src/feature/`（**待重建**）只依赖 core 的公共 API；**域之间互不依赖**，跨域协作归 App。
+- `ui_tools`（**待重建**）**不 import `feature` / `core.storage`**。UI 里出现
+  `hub` / `block` / `body` / `checksum` 即失控。
 - **只有组合根认识领域**：建域服务并注入，不在 UI 内 new 领域对象。
 - 领域结构**直接继承 `Block`**，不得改 `Block` 顶层字段；扩展只走子类字段、新 `type`、新关系 `kind`。
 
-判据：**「新开发者要懂 UI 须先学 Bucket/Block」即失败。**
+判据：**「新开发者要懂 UI 须先学 hub/Block」即失败。**
 
 ## 4. 数据约定
 
-- 内部时间统一 **unix 毫秒 int**；对象身份用 **`ValueUuid`**（26 字符 Crockford ULID），
-  内容地址用 **`ValueHash`**（BLAKE3 十六进制）——两者都是 `core/types/id.py` 的 `Id` 上的凭证。
-- 类型名用 `feature.shared.Kind`（plain `Enum`，值即落盘字符串，如 `notedata`）。
+- 内部时间统一 **unix 毫秒**（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
+- 对象身份是 `core/storage/format/id.py` 的 **`ID`**：两套凭证并存——
+  `value_uuid`（`uuid4()`，比较有效）与 `value_hash`（`sha256` 十六进制，去重有效）。
+- 类型名由**程序**给出（`kind`），落盘不写类型标号；不认识的 ID 一律降级读回。
 - **未实现的设计标为「预留 / 草案」**，不要假装已存在；也别写"已实现"骗下一个读代码的人。
 
 ## 5. 质量门禁（企业级-ε）

@@ -15,11 +15,11 @@
 
 | 档 | 范围 | 说明 |
 |---|---|---|
-| **公共面**（较稳） | `core` 的 `Core` / `Signal` / `Storage` / `ConfEngine` / `core.types`；`feature` 的域与数据类；`ui_tools.core` 的接入点 | 会随设计走，但**改了会在这里体现**，且尽量留过渡 |
-| **界面工具箱**（在长） | `ui_tools.component` / `ui_tools.layout` / `ui_tools.page` | UI 内核正在重建，增长最快的一层 |
-| **内部**（别依赖） | `_` 开头的名字、`app.win.*` 的私有组合、`core.storage` 的实现细节 | 随时会动；`ui_tools` 连 `core.storage` 都不许 import |
+| **公共面**（较稳） | `core` 的 `Kernel` / `Storage` / `Bus` / `Event` / `ID`；`core.exc` 的异常层级 | 会随设计走，但**改了会在这里体现**，且尽量留过渡 |
+| **格式面**（改就是改格式） | `core.storage.format.*`（身份 / 块载荷 / 记录）与 `core.storage.carrier` 的文件头 | 动它们等于动落盘字节：旧库不兼容，须显式处置 |
+| **内部**（别依赖） | `_` 开头的名字、`core.storage` 的表结构与槽算术细节、`core.storage.patrol` 的比对内部 | 随时会动；`ui_tools` 连 `core.storage` 都不许 import |
 
-## 四层
+## 层次
 
 ```text
 core(L0)  ←  feature(L3)  ←  app(组合根)
@@ -27,12 +27,14 @@ core(L0)  ←  feature(L3)  ←  app(组合根)
                 ui_tools(工具箱)
 ```
 
-| 页 | 覆盖 |
-|---|---|
-| [core（底座）](core.md) | 内核本体、信号引擎、存储、配置引擎、类型地基 |
-| [feature（领域）](feature.md) | note / project 域，asset / canvas / group / relation / signature 共享件 |
-| [ui_tools（界面工具层）](ui-tools.md) | 声明树、编译管线、绑定、模型、主题、组件与布局 |
-| [app（应用组合根）](app.md) | 领域装配与平台入口（Windows 根壳） |
+`core` 是现在唯一有代码的一层；其余三层在 2026-09-29 的重建里被整条删除，页面留位。
+
+| 页 | 覆盖 | 状态 |
+|---|---|---|
+| [core（底座）](core.md) | 内核装配、事件引擎、存储引擎、字节格式、异常与时间 | 有代码 |
+| [feature（领域）](feature.md) | note / project 域与共享件 | 待重建 |
+| [ui_tools（界面工具层）](ui-tools.md) | 声明树、编译管线、绑定、模型、主题、组件与布局 | 待重建 |
+| [app（应用组合根）](app.md) | 领域装配与平台入口（Windows 根壳） | 待重建 |
 
 ## 怎么读
 
