@@ -16,12 +16,19 @@
   `core/storage/format/id.py`（`ID` 两套凭证 + 位置段；修掉共享默认值硬伤）、
   `core/storage/format/block.py`（`Body[T]` / `Block[T]`，PEP 695）、`tests/core/` 13 例。
   ruff / format / mypy strict / pytest / SPDX / 书面语全绿。
-- [ ] **片 2 · 待取作者口径**：`event/events.py` 的事件对象形态与 `event/parser.py` 的 `EventParser`
-  解析口径（包内含哪些标准信息、动作如何落到结果槽）、`storage/engine.py` 与 `bucket.py` 的引擎角色、
-  配置引擎（`core/conf` 目录尚未建）、`init.py` 的 `Kernel` 接线——三项形态未定，不得先写。
-  事件这一片已做行业调研（2026-09-29）：进程内主流分**信号扇出**（Guava EventBus / blinker /
-  Django signals / Qt signals）与**类型化处理器 + 中介者**（MediatR / Prism EventAggregator）两支；
-  `init.py` 的"事件对象 + 转述解析器"口径偏后者，待作者定形。
+- [x] **片 2a · 事件对象与总线**（2026-09-29）：`event/events.py` 的 `Event`（冻结；字段名借 CloudEvents
+  口径 `id` / `source` / `type` / `time` / `subject` / `data`，明写不代表实现该规范）、
+  `event/bus.py` 的 `Bus` 与 `Subscription`（按注册顺序投递、异常隔离并交回失败清单、显式撤订、
+  失败钩子）；`tests/core/test_events.py` 5 例 ＋ `test_bus.py` 13 例。六道门禁全绿，覆盖 96%。
+  **分发自制、不引库**（blinker 实测三条不合需求，装上后已撤净）：理由见 `decisions.md`「事件引擎自制」。
+- [x] **片 2b · 事件层收口**（2026-09-29，作者交办代定）：事件引擎到此完整——`Event` + `Bus` +
+  `Subscription`，只做扇出通知。`event/parser.py` 的 `EventParser` 空桩已删（全仓无引用）；
+  **决策层（形式二的中介者）明确不做**，重启条件见 `decisions.md`。删后门禁全绿：30 例、覆盖 96%。
+- [ ] **片 3 · 存储引擎（下一片）**：记录头 / 载体文件 / 定长槽算术（`storage-design.md` §5.2–§5.5 仍有效），
+  落 `storage/format/record.py` 与 `storage/carrier.py`；事件目录（`object.put` / `object.deleted`）
+  随存储写入路径一起声明，**不提前占位**。
+- [ ] **片 4 · 其余待定**：`storage/engine.py` 与 `bucket.py` 的引擎角色、配置引擎（`core/conf` 尚未建目录）、
+  `init.py` 的 `Kernel` 接线（对象管理表 + 四引擎挂载位）。
 - [x] **片 3 · ID 凭证算法已定**（2026-09-29 作者裁定）：保持 `uuid4` + `sha256`。
   理由：不需要时间排序（`birth_time` 已带时间戳，且排序本身需求不强）；回写 `AGENTS.md` 与设计篇 §3
   时改掉 ULID + BLAKE3 口径，实现切换点是 `format/id.py` 的 `new_uuid()` / `digest()`。
