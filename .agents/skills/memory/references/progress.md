@@ -89,11 +89,16 @@
 
 > ⚠️ 2026-09-29：本条所述实现已随 `refactor/clean-local-code` 整条删除，仅存档；当前主线见「内核重建」。
 
-> 2026-09-30 补记（**当前口径**）：声明层已按"ID 面 + 三类表"重做（见 `changes.md` 同日那条、
+> 2026-09-30 补记（**当前口径**）：声明层已按"ID 面 + 三类表"重做（见 `changes.md` 同日两条、
 > 设计篇 §8.1.1–§8.1.4）：列的来源分五种、绑定列的列名即 ID 字段名、`record` 主键
-> 改成 `(name, value_uuid)`、绑定列默认建索引。**待接回的只剩**：把 `KERNEL_TABLES`
-> 挪进 `config/tables.yaml`（经 `storage.db.tables` 的文件引用），届时 `core/storage/tables.py`
-> 的三表常量改成读它——接法已定，不必再议形状。
+> 改成 `(name, value_uuid)`、绑定列默认建索引；**声明本体已搬进 `config/tables.yaml`**，
+> 代码只读 / 校验 / 编译（`kernel_tables()` 惰性读，导入存储不再要求文件在那儿）；
+> 绑定列改成**字面式 `id(名字).字段`**。
+> **未做（作者 2026-09-30 裁定的下一步，本轮停在此处）**：`record` 该拆成 `block` / `body`
+> **两张表**（名字是表的坐标、不是行里的判别列），并补上"引擎建表 / 补列 /
+> 反写 `config/tables.yaml`"那一环——**当前声明文件是手写的**，自动诞生那一环完全没有。
+> 形状与开发顺序见 `decisions.md`「存储的表形状」。
+> **仍留的**：`META_TABLE_SPEC` 在代码里（不属声明集，是开库脚手架）。
 
 > 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，已落地，v1.3）。
 > 方向见 `decisions.md`「存储重设计」。分支 `feat/storage-redesign`（已并回 `main`）。

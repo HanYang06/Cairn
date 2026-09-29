@@ -17,21 +17,28 @@
       "description": "单个块的字节上限，超过即分片（预留，尚未接线）",
       "default": 1048576,
       "x-cairn-owner": "core.storage.conf",
-      "x-cairn-site": "src/core/storage/conf.py:39"
+      "x-cairn-site": "src/core/storage/conf.py:43"
+    },
+    "storage.db.tables": {
+      "type": "string",
+      "description": "索引库表声明所在文件（结构本体在那）",
+      "default": "tables.yaml",
+      "x-cairn-owner": "core.storage.conf",
+      "x-cairn-site": "src/core/storage/conf.py:44"
     },
     "storage.pack.max_bytes": {
       "type": "integer",
       "description": "单个载体的字节上限，写满即封口（只管封口线，不定槽长）",
       "default": 2147483648,
       "x-cairn-owner": "core.storage.conf",
-      "x-cairn-site": "src/core/storage/conf.py:33"
+      "x-cairn-site": "src/core/storage/conf.py:37"
     },
     "storage.pack.slot_bytes": {
       "type": "integer",
       "description": "槽长：载体内的定长分配与定位单位，写进文件头",
       "default": 512,
       "x-cairn-owner": "core.storage.conf",
-      "x-cairn-site": "src/core/storage/conf.py:32"
+      "x-cairn-site": "src/core/storage/conf.py:36"
     }
   }
 }

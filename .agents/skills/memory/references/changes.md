@@ -3,6 +3,41 @@
 
 # 变更
 
+- 2026-09-30 · 已定 · **作者裁定"一名一表"：`block` / `body` 该是两张表（实现未跟，记录为准）**：
+  作者指出"有多少个使用 ID 的类型就有多少张表"，而我把它做成了**一张 `record` 表 + `name` 判别列**
+  ——名字该是**表的坐标**，不是行里的字符串。同日已落的实现（`record` 单表、`(name, value_uuid)` 主键、
+  引擎写记录时填 `block` / `body` 两个作用域名）**按旧口径留着没拆**，作者要求到此为止、只更新记忆。
+  若要接着做：拆成 `block` / `body` 两张表（列见 `decisions.md`「存储的表形状」），
+  并补上"引擎建表 / 补列 / 反写 `config/tables.yaml`"那一环（**当前完全没实现**，
+  声明文件是手写的）；开发顺序是先建类型绑 ID → 跑一遍让字段诞生 → 再增量改。
+- 2026-09-30 · 已定 · **表声明的绑定列改成字面式 `id(名字).字段`（作者口径，落到代码与文件）**：
+  作者指出两处走偏：① 我们最早定的就是**字面式**——`id(name = block).value_uuid`，
+  含义只有两个："指向那张表"与"取它那个绑定字段"；② 我搬 YAML 时写成了
+  `{ name: value_uuid, from: id, type: text, doc: … }`，**等于把旧写法套了个新壳**，
+  `type` / `doc` 都是多余的第二份事实。
+  现按定稿落地：`tables.py` 加 `parse_id_ref()`（`partition('.')` + 括号切名字，**不用正则**）
+  与 `_bound_column()`，字符串项一律按字面式解析；绑定列的**类型与说明都不在声明里**
+  （类型随 `_COLUMN_TYPE_OF_ID`、说明随 ID 字段）；非绑定列才写映射与 `from:`。
+  **列进库的名字**：绑定列取裸字段名；带限定词的加前缀（`id(src).value_uuid` → `src_value_uuid`），
+  免得同一张表里两个 ID 的同名字段撞名；身份表的判别列 `id(scope).name` 例外，落的仍是 `name`。
+  跟着改：`Column.sql_name`（DDL / 主键 / 索引解析 / 索引名 / 开库比对一律走它）、
+  `_indexes` 的列名解析（认 `sql_name` 与 `reference` 两种写法）、`table.column()` / 自动索引。
+  `config/tables.yaml` 重写成字面式；`rows.py` 的 edge 列名跟到 `src_value_uuid` / `dst_value_uuid`。
+  七道门禁全绿（278 通过）。
+- 2026-09-30 · 已定 · **表声明搬进 `config/tables.yaml`（声明本体归位，代码只读 / 校验 / 编译）**：
+  按"接法已定、只等搬运"那一步落地——三张内核表（`record` / `hub` / `edge`）的声明从
+  `tables.py` 的 Python 字面量搬进 YAML，用新形状写（`from: id|ref|store|prog|digest`、
+  主键写在表级、限定词、`doc`）；`tables.py` 加 `load_tables()`（逐张过 `from_mapping`，
+  坏 YAML / 根不是列表 / 项不是映射都当场报错）与 `kernel_tables()`。
+  **惰性读、读一次就记住**：`KERNEL_TABLES` 常量换成 `kernel_tables()`——导入 `core.storage`
+  不再要求表声明文件已经在那儿（此前会在导入期直接炸）；`tables_path()` 问配置面要配置根
+  （`CAIRN_CONFIG` 旋钮 / 仓根 `config/`），那句 `from core.conf import conf` 故意放在函数里。
+  `META_TABLE_SPEC` **留在代码里**：它不属声明集（开库流程的脚手架），也不是业务声明。
+  一并：`core/storage/conf.py` 加 `storage.db.tables` 键（指向 `tables.yaml`）、
+  `IndexSpec` 收 `doc`、解析口收 `qualifier` 与 `ref` 来源、`pyproject.toml` 给 `tables.py`
+  开 `PLC0415`（延迟导入），并新写测试四例（入库文件可读、文件不在、坏 YAML、路径随配置面走）。
+  **中途踩到并修掉**：`storage.db.tables` 首次把文件名当成了键（值文件里冒出一行
+  `"tables.yaml": "tables.yaml"`），已清掉残留。六道门禁全绿（278 通过）。
 - 2026-09-30 · 已定 · **类型门禁扩到测试侧（`mypy src tools tests`）**：
   `pyproject.toml` 加 `mypy_path = "src"`（mypy 不读 pytest 的 `pythonpath`，此前单跑
   `mypy tests` 会把 `core` 当成缺 `py.typed` 的已装包，测试侧 `core.*` 全为 `Any`、判据失效）

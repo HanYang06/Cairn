@@ -36,7 +36,7 @@ repos:
 
       - id: mypy
         name: mypy (strict)
-        entry: uv run mypy src tools
+        entry: uv run mypy src tools tests
         language: system
         pass_filenames: false
         types_or: [python, pyi]

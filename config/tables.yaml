@@ -1,72 +1,88 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 #
-# 索引库的表声明（**本体就是这份文件**）。
+# 索引库的表声明（**本体就是这份文件**，设计篇 §8）。
 #
 # 改表即改这里：加一张表、加一列、改类型或索引，都不必碰 Python。
 # 代码只负责读它、校验它、把它编译成建表语句（见 core/storage/tables.py）。
 #
 # 字段速查（未知字段会直接报错，不静默忽略）：
 #   name         表名（小写字母 / 数字 / 下划线）
-#   tier         重建档：tier1 可扫载体重建 / tier2 需领域逻辑重算 / tier3 只能靠备份
-#   rebuild_from 重建来源；tier3 必须留空（写不出来源的表就是不可重建表）
+#   tier         重建档：derived 可由真源重建（必须写 rebuild_from）/ source 真源在库内
+#   rebuild_from 重建来源；tier: source 时必须留空（写不出来源的表就是不可重建表）
 #   owner        core = 开库即对齐；domain = 挂载该域时才对齐
-#   columns      列；**顺序即建表顺序**；每表恰好一个 primary_key
-#   indexes      索引；名字由表名与列组合推出，不手写
+#   columns      列；顺序即书写顺序
+#   primary_key  主键列名（列表；不写则取唯一的身份列，身份列多于一个时必须明写）
+#   indexes      索引；名字由表名与列组合推出，不手写。绑定列与引用列**默认有索引**，
+#                这里只写"额外的"那些
 #
-# 类型只用这五个中立词：text / integer / real / blob / boolean（方言由编译器映射）。
+# **绑定列就是一句话：`id(名字).字段`**——提到一个名字即建立一条指向它的引用，
+# 取它的字段就是从那张表取值。**类型与说明都不写**：它们随 ID 的字段走。
+# 解析不用正则：一个 `partition('.')` 切字段、括号里切名字，纯字符匹配。
+#
+# 非绑定列写映射，用 `from:` 标来路（只有这三种）：
+#   store    存储层顺扫载体时的观测（hub / pack / 格区间 / 大小）
+#   prog     程序给出（kind 这类不在记录头里的）
+#   digest   由本表其它列算出的摘要
+#
+# 中立类型只用这五个词：text / integer / real / blob / boolean（方言由编译器映射）。
 
-- name: bucket
-  doc: 桶登记：桶目录是存在证明，本表是登记
-  tier: tier1
-  owner: core
-  rebuild_from: 桶目录：扫 vault 下的桶目录
-  columns:
-    - { name: name, type: text, primary_key: true, doc: 桶名（即目录名） }
-    - { name: role, type: text, not_null: true, default: main, doc: 形态：主/归档/临时 }
-    - { name: state, type: text, not_null: true, default: mounted, doc: 挂载状态 }
-    - { name: created, type: integer, not_null: true, default: 0, doc: 建立时刻 }
+# —— 身份表：一行一个 ID ——
 
 - name: record
-  doc: 身份到位置：一行一条记录（块记录与内容记录同表）
-  tier: tier1
+  doc: 身份表：一行一个 ID（块记录与内容记录同表）；id(...) 里的名字就是作用域名
+  tier: derived
   owner: core
-  rebuild_from: 载体：顺扫全部记录，读记录头重建
+  rebuild_from: 载体记录头（设计篇 §8.5 档一）
   columns:
-    - { name: value_uuid, type: text, primary_key: true, doc: 分配形态凭证 }
-    - { name: value_hash, type: text, not_null: true, doc: 摘要形态凭证（指向内容） }
-    - { name: kind, type: text, not_null: true, default: "", doc: 类型名（由程序给出） }
-    - { name: bucket, type: text, not_null: true, default: "", doc: 所在桶 }
-    - { name: pack, type: text, not_null: true, default: "", doc: 所在载体名 }
-    - { name: slot_start, type: integer, not_null: true, default: 0, doc: 起始槽 }
-    - { name: slot_head, type: integer, not_null: true, default: 0, doc: 槽内偏移 }
-    - { name: slot_count, type: integer, not_null: true, default: 1, doc: 跨槽数 }
-    - { name: size, type: integer, not_null: true, default: 0, doc: 记录字节数 }
-    - { name: issued, type: integer, not_null: true, default: 0, doc: ID 签发时刻 }
-    - { name: created, type: integer, not_null: true, default: 0, doc: 落盘时刻 }
-    - { name: updated, type: integer, not_null: true, default: 0, doc: 最近写入时刻 }
+    - id(scope).name          # 作用域名：由引用方写下（写块记录时是 block，写内容记录时是 body）
+    - id().value_uuid         # 本行主语那个 ID 的分配凭证
+    - id().value_hash         # 与它同一身份的另一套凭证
+    - id().birth_time         # 它的签发时刻
+    - { name: kind, from: prog, type: text, doc: 类型标号；由程序给出，不在记录头里 }
+    - { name: hub, from: store, type: text, not_null: true, doc: 所属 hub（目录名） }
+    - { name: pack, from: store, type: text, not_null: true, doc: 载体文件名 }
+    - { name: slot_first, from: store, type: integer, not_null: true, doc: 起始格（两数格模型的第一个数字） }
+    - { name: slot_last, from: store, type: integer, not_null: true, doc: 末格（闭区间上界） }
+    - { name: size, from: store, type: integer, not_null: true, doc: 记录字节数，便于估算与巡检 }
+    - { name: created, from: store, type: integer, doc: 落盘时刻（unix 毫秒） }
+    - { name: updated, from: store, type: integer, doc: 最近一次改写时刻（unix 毫秒） }
+  primary_key: [name, value_uuid]
   indexes:
     - { columns: [value_hash], doc: 地址反查：这份内容被哪些记录引用 }
     - { columns: [kind], doc: 按类型筛选 }
-    - { columns: [bucket, pack], doc: 按载体归拢 }
+    - { columns: [hub, pack], doc: 按载体归拢 }
     - { columns: [updated], doc: 按时间排序 }
 
-- name: edge
-  doc: 关系边：一等行，src --kind--> dst
-  tier: tier1
-  owner: core
-  rebuild_from: 块记录：关系数据落在块内时由其派生
-  columns:
-    - { name: id, type: text, primary_key: true, doc: 边身份（由四元组算摘要） }
-    - { name: src, type: text, not_null: true, doc: 源身份 }
-    - { name: dst, type: text, not_null: true, doc: 目标身份 }
-    - { name: kind, type: text, not_null: true, default: "", doc: 关系种类 }
-    - { name: domain, type: text, not_null: true, default: "", doc: 归属域 }
-    - { name: created, type: integer, not_null: true, default: 0, doc: 建立时刻 }
-  indexes:
-    - { columns: [src, kind], doc: 出边（正向遍历） }
-    - { columns: [dst, kind], doc: 反查（backlinks） }
+# —— 登记表：主语不是 ID，真源在文件系统 ——
 
-- name: block
-  doc:xxx
-  
+- name: hub
+  doc: 登记表：位置由目录名推出，真源是目录本身；主语不是 ID，故没有绑定列
+  tier: derived
+  owner: core
+  rebuild_from: vault 下的 hub 目录（设计篇 §6）
+  columns:
+    - { name: name, from: store, type: text, not_null: true, doc: hub 名（目录名） }
+    - { name: role, from: store, type: text, doc: 主 hub / 短命 hub；短命 hub 为未来项 }
+    - { name: state, from: store, type: text, doc: 登记状态；合并期为未来项 }
+    - { name: created, from: store, type: integer, doc: 第一次见到它的时刻（unix 毫秒） }
+  primary_key: [name]
+
+# —— 关系表：两列指向 ID ——
+
+- name: edge
+  doc: 关系表：一行一条；两端各指一个 ID，关系不需要第二种语法
+  tier: derived
+  owner: core
+  rebuild_from: 关系数据落在块内时的块记录（设计篇 §8.2 注；归属待定）
+  columns:
+    - { name: id, from: digest, type: text, not_null: true, doc: 边身份摘要（由下列各列算出） }
+    - id(src).value_uuid      # 起点：一个 ID
+    - id(dst).value_uuid      # 终点：另一个 ID
+    - { name: kind, from: prog, type: text, not_null: true, doc: 关系种类 }
+    - { name: domain, from: prog, type: text, doc: 所属领域 }
+    - { name: created, from: store, type: integer, doc: 建立时刻（unix 毫秒） }
+  primary_key: [id]
+  indexes:
+    - { columns: [src_value_uuid, kind], doc: 出边（正向遍历） }
+    - { columns: [dst_value_uuid, kind], doc: 反查（backlinks） }
