@@ -3,6 +3,28 @@
 
 # 变更
 
+- 2026-09-29 · 进行中 · **作者裁定"不破不立"：旧实现整条删除，内核推倒重建；片 1（身份与块底座）已落**：
+  分支 `refactor/clean-local-code`（`cac7f22`）相对 `main` 删 **137 个文件 / 21045 行**——
+  `src/` 的 `core` / `feature` / `ui_tools` / `app` 全删、`tests/` 清空、
+  `docs/review/ocr-2026-09-22.md`（4045 行评审清单）删除；`docs/architecture/storage-design.md`
+  头部 v1.1–v1.5 的变更注记段被删（设计正文仍在）。作者口径：内核只管事件 / 存储 / 配置 / 异常四件事，
+  代码量应当很小；代码优先、以新写的方向为准、随片带最小回归测试、文档与仓库尾巴后补。
+  新骨架落 `src/core/`（未跟踪）：`init.py`（`Kernel` 草案）、`exc.py`、`event/`、
+  `storage/{engine,bucket,format/{id,block}}`。
+  **片 1 已落**：`exc.py`（`CairnError` / `InvalidIdError`，只声明确有抛出点的异常）；
+  `format/id.py` **修掉共享默认值硬伤**——原稿 `value_uuid: str = str(uuid4())` 与
+  `value_hash = sha256(str(uuid4))` 在**类定义时求值一次**，全部实例共用同一份身份，且摘要算的是
+  **函数对象的 repr 字符串**（少了一对括号），改为 `field(default_factory=…)`；
+  位置段按作者口径为 `in_hub` / `in_hub_pack` / `in_pack_slot`；未绑定内容时 `value_hash` 为空串；
+  `format/block.py` 去共享 `Body()` 默认、改 PEP 695 泛型（`Body[T]` / `Block[T]`），`Block` 补上类型参数
+  （原稿 `Body[T]` 出现在非泛型 `Block` 里是未绑定类型变量）；`core/__init__.py` docstring 错字 `Carin` → `Cairn`。
+  测试 `tests/core/{test_id,test_block}.py` 13 例（含唯一性与默认值独立性回归线）。
+  ruff / `ruff format --check` / mypy strict / pytest / SPDX / 书面语六道门禁全绿，覆盖率 88%。
+  **ID 凭证算法已由作者裁定**（2026-09-29）：保持 `uuid4` + `sha256`；理由是不需要时间排序
+  （`birth_time` 已带时间戳，排序需求本身不强）。`AGENTS.md` 与 `storage-design.md` §3 记的
+  26 字符 Crockford ULID + BLAKE3 待回写时改；实现切换点是 `format/id.py` 的 `new_uuid()` 与 `digest()`。
+  旧 `Id` 的 `issued` / `issuer` / 路径字段与 `SlotRange` 三元组未在新稿出现。
+
 - 2026-09-29 · 已定 · **PR #23 评审整改·第二轮：16 条线程重新分诊，真改 5 条 + 口径修正 3 条 + 带证据关闭 8 条**：
   先修事态：PR 的 base（`pre-storage-redesign`）被删，GitHub 因而自动关闭该 PR；已把该 ref 放回原
   commit（`8d3d1c0`，本就是 main 的祖先、提交一个没丢）并把 base 改为 `main`，12 个提交可快进。

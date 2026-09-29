@@ -6,7 +6,33 @@
 > 状态：进行中 / 已定 / 已废弃。完成后移入 `changes.md`，或直接删除。
 > 细则以 `docs/architecture/*.md` 与代码为准，本文件只记「还没做 + 在做」。
 
+## 内核重建（2026-09-29 立项；**当前唯一主线**）
+
+> 分支 `refactor/clean-local-code`：旧实现整条删除（137 文件 / 21045 行），本文其余内核条目均为存档。
+> 作者口径：代码优先、以新代码方向为准、随片带最小回归测试、文档与仓库尾巴后补；
+> 内核只管事件 / 存储 / 配置 / 异常四件事，总量应当很小。方向见 `decisions.md`「内核重建」。
+
+- [x] **片 1 · 身份与块底座**（2026-09-29）：`core/exc.py`（`CairnError` / `InvalidIdError`）、
+  `core/storage/format/id.py`（`ID` 两套凭证 + 位置段；修掉共享默认值硬伤）、
+  `core/storage/format/block.py`（`Body[T]` / `Block[T]`，PEP 695）、`tests/core/` 13 例。
+  ruff / format / mypy strict / pytest / SPDX / 书面语全绿。
+- [ ] **片 2 · 待取作者口径**：`event/events.py` 的事件对象形态与 `event/parser.py` 的 `EventParser`
+  解析口径（包内含哪些标准信息、动作如何落到结果槽）、`storage/engine.py` 与 `bucket.py` 的引擎角色、
+  配置引擎（`core/conf` 目录尚未建）、`init.py` 的 `Kernel` 接线——三项形态未定，不得先写。
+  事件这一片已做行业调研（2026-09-29）：进程内主流分**信号扇出**（Guava EventBus / blinker /
+  Django signals / Qt signals）与**类型化处理器 + 中介者**（MediatR / Prism EventAggregator）两支；
+  `init.py` 的"事件对象 + 转述解析器"口径偏后者，待作者定形。
+- [x] **片 3 · ID 凭证算法已定**（2026-09-29 作者裁定）：保持 `uuid4` + `sha256`。
+  理由：不需要时间排序（`birth_time` 已带时间戳，且排序本身需求不强）；回写 `AGENTS.md` 与设计篇 §3
+  时改掉 ULID + BLAKE3 口径，实现切换点是 `format/id.py` 的 `new_uuid()` / `digest()`。
+- [ ] **仓库尾巴（作者已同意延后）**：`tools/`（docgen / gen_conf / mypy_plugin / preview_shell）、
+  `.github/workflows/`、`config/`、`schema/`、`mkdocs.yml`、`pyproject.toml`
+  （`--cov=feature`、hatch `packages` 里的 `src/feature` 与 `src/ui_tools`、ruff per-file-ignores 里的
+  `src/core/storage/table.py` / `src/net` / `src/server`）仍指向已删模块。
+
 ## 存储重设计（2026-09-28 立项；**已收口**，只余未来项）
+
+> ⚠️ 2026-09-29：本条所述实现已随 `refactor/clean-local-code` 整条删除，仅存档；当前主线见「内核重建」。
 
 > 设计篇 = `docs/architecture/storage-design.md`（**L0 唯一事实来源**，已落地，v1.3）。
 > 方向见 `decisions.md`「存储重设计」。分支 `feat/storage-redesign`（已并回 `main`）。
@@ -132,6 +158,8 @@
 
 ## 内核重构（2026-09-22 立项；规格 `docs/architecture/kernel-spec.md`，2026-09-24 核对至 v1.4）
 
+> ⚠️ 2026-09-29：`Core` / `Signal` / `Event` 等实现已随 `refactor/clean-local-code` 删除，本条仅存档。
+
 > 性质变更：存储核心 + 通知 → **对象主干 + 事件对象**；对象集合 = 5 个；旧门户清理重做；`Vault` 解散。
 > 分支 `refactor/kernel-object-core`（`e4f32ec` 骨架 → `878fcb1` M1 → `be704b2` M2/M3 →
 > `b1e5995` 按作者口述重建 → `c35bebd` 引擎由内核自建 → `516e7e7` 收残留、全库转绿）。
@@ -245,7 +273,8 @@
   `pr_number` 入参）。草稿的 job 体是空的（只有一行 `call_workflows:`），带上会让 CI 直接红，
   故与分支一并删除；重做时按上面的意图重写，不要恢复那份草稿。
 - [ ] Linux 服务端 / CLI / Docker（待服务端）。
-- [ ] **OCR 评审 findings 清理**（进行中）：清单与分诊见 `docs/review/ocr-2026-09-22.md`；
+- [ ] **OCR 评审 findings 清理**（进行中；⚠️ 2026-09-29 清单文件已随分支删除，条目仅存档）：
+  原清单与分诊见 `docs/review/ocr-2026-09-22.md`（已删）；
   A 类分批批修已到 PR #18（第七批）、C 类档 1「删 / 简化 9 项」已落 PR #19；
   **清单表头仍停在 PR #16、计数待重算**（文件内勾选项 170：已勾 127 / 未勾 43）；余 B 类补文档、C 类待议。
   PR #20（内核重建）与 PR #21（配置引擎）的**新一轮评审**（65 条 + 49 条）已整改，
