@@ -24,10 +24,17 @@
 - [x] **片 2b · 事件层收口**（2026-09-29，作者交办代定）：事件引擎到此完整——`Event` + `Bus` +
   `Subscription`，只做扇出通知。`event/parser.py` 的 `EventParser` 空桩已删（全仓无引用）；
   **决策层（形式二的中介者）明确不做**，重启条件见 `decisions.md`。删后门禁全绿：30 例、覆盖 96%。
-- [ ] **片 3 · 存储引擎（下一片）**：记录头 / 载体文件 / 定长槽算术（`storage-design.md` §5.2–§5.5 仍有效），
-  落 `storage/format/record.py` 与 `storage/carrier.py`；事件目录（`object.put` / `object.deleted`）
-  随存储写入路径一起声明，**不提前占位**。
-- [ ] **片 4 · 其余待定**：`storage/engine.py` 与 `bucket.py` 的引擎角色、配置引擎（`core/conf` 尚未建目录）、
+- [x] **片 3 · 存储格式与载体**（2026-09-29）：`storage/format/record.py`（记录头＋ID 段＋载荷，
+  编码/解码与逐项自校验）、`storage/carrier.py`（24 字节文件头、定长槽追加写、按槽区间读、顺扫、
+  两套槽数口径）、`storage/format/id.py` 补落盘子集；`core/exc.py` 补 `StorageError` /
+  `RecordFormatError` / `SlotError`。测试 37 例；六道门禁全绿（74 例、覆盖率 99%）。
+- [ ] **待作者裁定 · 槽区间是几元组**：`ID.in_pack_slot` 现为二元组 `(槽, 槽内偏移)`，
+  设计篇 §5.2 要求三元组 `(起始槽, 槽数, 槽内偏移)`；载体层已按三元组实现（`SlotRange`），
+  ID 那个字段改成三元组还是直接持 `SlotRange`，等作者定。
+- [ ] **片 4 · 桶与存储引擎（下一片）**：`storage/bucket.py`（`vault/<桶>/packs/`、
+  活跃载体＝有空间的最满者、封口线只管换不换文件）、`storage/engine.py`（引擎角色与对象表）；
+  事件目录（`object.put` / `object.deleted`）随写入路径一起声明，**不提前占位**。
+- [ ] **片 5 · 其余待定**：索引库（表声明 + 可重建分档）、配置引擎（`core/conf` 尚未建目录）、
   `init.py` 的 `Kernel` 接线（对象管理表 + 四引擎挂载位）。
 - [x] **片 3 · ID 凭证算法已定**（2026-09-29 作者裁定）：保持 `uuid4` + `sha256`。
   理由：不需要时间排序（`birth_time` 已带时间戳，且排序本身需求不强）；回写 `AGENTS.md` 与设计篇 §3
