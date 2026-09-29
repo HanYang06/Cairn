@@ -53,8 +53,9 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true
 
 [tool.hatch.build.targets.wheel]
-# 应用 + 内核 + 领域；`ui_tools` 为界面工具层。
-packages = ["src/app", "src/core", "src/feature", "src/ui_tools"]
+# 现在只有内核一层。`src/app` / `src/feature` / `src/ui_tools` 随各自重建加回——
+# 列不存在的目录不会报错（hatch 静默跳过），但配置与事实不符本身就是尾巴。
+packages = ["src/core"]
 
 [tool.ruff]
 target-version = "py313"
@@ -98,25 +99,33 @@ ignore = [
 notice-rgx = "SPDX-FileCopyrightText: 2026 HanYang06"
 
 [tool.ruff.lint.isort]
-known-first-party = ["app", "core", "feature", "ui_tools"]
+# 现在只有内核一层；`app` / `feature` / `ui_tools` 随各自重建加回。
+known-first-party = ["core"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# 表名/列名来自内部领域自描述并经 _quote 转义，值全部参数化（无注入面）。
-"src/core/storage/table.py" = ["S608"]
+# 表名/列名来自声明层（tables.py）并经 quote_identifier 加引号，值全部参数化（无注入面）。
+"src/core/storage/rows.py" = ["S608"]
+"src/core/storage/index.py" = ["S608"]
 # 测试与工具脚本：断言、注解、docstring、魔法数、打印等不按产品代码要求
 "tests/**" = ["ANN", "D", "S101", "S105", "S603", "PLR2004", "SLF001", "INP001"]
 "tools/**" = ["ANN", "D", "S101", "S603", "C901", "PLR2004", "T201", "INP001", "ERA001"]
-"src/net/**" = ["ANN", "D", "S101", "T201", "INP001"]
-"src/server/**" = ["ANN", "D", "S101", "T201", "INP001"]
 
 [tool.mypy]
 python_version = "3.13"
 # 企业级-ε：类型按静态语言口径，未注解 / 隐式 Any / Any 泄漏一律报错。
 strict = true
 plugins = ["tools/mypy_plugin.py"]
+
+# 两个退役工具：它们依赖的层（`app` / `ui_tools` / 旧配置引擎）在本次重建里被整条删除，
+# 故现在既跑不起来、也过不了类型检查。文件留着当参考（各自的 docstring 写明了状态），
+# 这里显式放行以免整仓 mypy 门禁被这两处拖红；不放进 `exclude` 是为了让它们仍在检查范围内
+# ——一旦被谁 import，或被修回可运行，就该把它们从这个豁免里摘出去。
+[[tool.mypy.overrides]]
+module = ["tools.preview_shell", "tools.gen_conf"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -126,7 +135,6 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--cov=core",
-    "--cov=feature",
     "--cov-branch",
     "--cov-report=term-missing:skip-covered",
 ]

@@ -3,6 +3,169 @@
 
 # 变更
 
+- 2026-09-29 · 已定 · **片 10：文档回写——事实源按实现重写，"作废主轴"改存档**：
+  ① **L0 唯一事实来源 `storage-design.md`** 通篇与代码对齐：术语"桶"全部换 **hub**（64 处）；
+  §3 的 ID 字段表改成实现的 `ID`（`value_uuid` `uuid4` ＋ `value_hash` `sha256` ＋ `name` ＋
+  `birth_time` ＋ 位置三字段），落盘子集只留两套凭证；§3.2.1 改成"内容记录持有 body 的 ID、
+  块记录持有自己的 ID，指针在载荷里"；§5 标题与全节改成**两数格模型**（`(头格, 末格)`、
+  格号自文件头起算、写入补零对齐、一条至少占一格、格内偏移作废），§5.5 文件头 24 字节 =
+  魔数 ＋ 格长 ＋ 预留，§5.6 格长默认从 64 KiB 改成 **512 B** 并补"格长要小"的判据与
+  "配置引擎未落地、当前值在 `DEFAULT_*` 常量"；§6/§7 术语与列名（`in_hub`、`record.hub`、
+  `role`/`state`）；§8.2 表速览改成实现的三表加 `meta`；§8.4 补"`meta` 由开库保证、
+  声明占用该名即拒"；§8.5 表级重建档明确为 `DERIVED`/`SOURCE` 两项（档二是整库性质）；
+  §8.6 补"开库比对：先比 → 处置 → 重写登记，声明漂移只报告不阻断开库，破坏性才要
+  `RebuildPlan`、重建改名隔离"，并注明配置引擎那套文件引用**当前未落地**；
+  §8.7 发现从"五种"改成**六类**并换成实现里的 `FindKind` 名，处置补"只改坐标"；
+  §9.6/§10/§11/§12 按实现与现状重排（新增"ID 里格内偏移"已裁、摘块与巡检的相互作用待定、
+  依赖盘点待定、表声明配置通道未落地）。
+  ② **`AGENTS.md`**：层状态（只有 `core` 在位）、内核三件事与文件清单、身份与时间口径
+  （`ID` / `uuid4` + `sha256` / `now_ms` / `birth_time` 纳秒）、命令（换掉已删测试路径、
+  补三个退役工具的恢复说明）、环境与坑（没有 `CAIRN_VAULT` / 口令，本地不加密）。
+  ③ **`docs/architecture/index.md`**：逐篇状态表加"与代码的对应"一列（现状 / 意图 / 存档），
+  并写明事件层现行口径（只做扇出、没有解析器）。
+  ④ **`kernel.md` 重写**为现状总览（装配、事件引擎、存储引擎、异常与日志、预留）。
+  ⑤ **`kernel-spec.md` / `kernel-m1-plan.md` 顶部加"已作废，仅存档"横幅**（不删，留设计史）。
+  ⑥ **`glossary.md`**：存储与内核两节改成现状（hub / 格 / `ID` / 巡检），领域与界面两节
+  标为意图；**`data-model.md`** 顶部加现状提示、§0.1 与术语表按现状改、其余字段表标"待回写"；
+  **首页 `docs/index.md` 与 `guides/{conventions,quickstart}.md`** 的过时事实改掉。
+  **验证**：书面语 0 命中、SPDX 149 文件合规、`mkdocs build --strict` 通过、pytest 213 例全绿。
+
+- 2026-09-29 · 进行中 · **片 9：仓库尾巴——把还指向已删模块的引用清掉，仓库级门禁重新可用**：
+  修之前实测坏的四处：`mypy src tools`（pre-commit 的 mypy 钩子就是这条）卡在两个退役工具上、
+  `mkdocs build --strict` 因 nav 指向已删的 `docs/review/ocr-2026-09-22.md` 与 `api/app.md`
+  抽取不存在的包而中止、`ci.yml` 里 `gen_conf.py --check` 会在运行时 ImportError、
+  打标签触发的 `build-windows.yml` 依赖已删的应用入口。逐条处置：
+  **① `pyproject.toml`**：hatch `packages` 收到 `["src/core"]`、`known-first-party` 收到 `["core"]`
+  （都注明"其余三层随重建加回"）、删掉 `src/net/**` 与 `src/server/**` 两条已失效的 per-file-ignores、
+  pytest 去掉 `--cov=feature`；对两个退役工具（`tools/preview_shell.py` / `tools/gen_conf.py`）
+  加 `[[tool.mypy.overrides]] ignore_errors`，注明它们依赖的层已删、文件留作参考、修回时须摘掉豁免。
+  **② 文档站**：`mkdocs.yml` 去掉"评审记录"导航项；`docs/api/{app,feature,ui-tools}.md` 改写为
+  "待重建"占位（不再对不存在的包做 mkdocstrings 抽取，各写清原定位与恢复方式）；
+  `docs/api/core.md` 按**真实模块**重写抽取清单（`core.init` / `core.event.*` / `core.storage.*` /
+  `format.*` / `exc` / `clock`）；`docs/api/index.md` 的稳定度表与层次表改成现状。
+  **③ CI**：`ci.yml` 暂时摘掉"配置投影防漂移"这一步（工具依赖的配置引擎正在重做），
+  以注释保留原步骤与恢复条件；`build-windows.yml` 去掉标签触发（只留手动），
+  注明 UI 外壳回来后恢复。**④ 工具**：`tools/{build,gen_conf,preview_shell}.py` 的 docstring
+  写明"当前不可运行"及原因。
+  **验证**：本地把 CI 那套门禁全跑了一遍——SPDX / 书面语 / `docgen --check` / `docgen --coverage`
+  （0 处因缺 docstring 被隐藏）/ `ruff check .` / `ruff format --check .` / `mypy src tools` /
+  `pytest --cov-fail-under=80`（213 例、99.54%）/ `mkdocs build --strict` —— **全绿**。
+  **新发现待作者裁定**：声明的依赖里 `blake3` / `argon2-cffi` / `cryptography` / `fastcdc` / `pyyaml` /
+  `tomli-w` 现在**一处引用都没有**（`blake3` 被 sha256 取代；后两个属配置引擎、`fastcdc` 属分片未来项、
+  另两个属旧加密栈），只有 `cbor2` 与"退役工具里的 PySide6"还在用。是否现在就裁掉，等作者定
+  （裁了能缩短安装、缩小供应链面；留着的理由是各自的上层还要回来）。
+
+- 2026-09-29 · 已定 · **片 8：Kernel 接线（`core/init.py`）——内核代码侧收口**：
+  `Kernel` 落成"一个库根 ＋ 两个引擎"的组装处，只管三件事：**库的开关**（路径约定
+  `root/catalog.db` 与 `root/<hub>/packs/` 只在这里定；`open()` 不建东西、`create()` 是显式动作）、
+  **引擎挂载**（`Bus` 与 `Storage`，前者的失败钩子接上日志：处理器抛错只记 `cairn.kernel` 的
+  warning、由 `Bus` 隔离，写入不受影响）、**维护入口**（`patrol()` / `repair(report)`——整库动作，
+  不是某一次写入）。另给一个短面：`store` / `load` / `drop` / `locate`。
+  **作者旧稿里两件不假装存在的事**（都写进模块 docstring）：**配置引擎不在本层**（`src/core/conf/`
+  由作者推进，目标文本也已把配置从三个引擎里移出）；**对象管理表是预留**——它要服务"按对象收发事件"，
+  而那条路（中介者 / 解析器）已明确不做，故只把引擎挂在属性上，不给没有调用方的注册表。
+  `_Setup` 把四个可选输入（声明集 / 载体策略 / 重建授权 / 日志器）打成一包，避免装配处参数成串。
+  测试 `tests/core/test_kernel.py` 13 例；六道门禁全绿：213 例、覆盖率 99%（`init.py` 100%）。
+  **一处待作者裁定**（见 `progress.md`）：`drop` 只摘行、记录留在载体里（追加写不动旧字节），
+  故巡检会把它报成 `missing_row`、处置又会把它补回来——等于撤销这次摘块。消掉它要么引入墓碑、
+  要么等压实回收落地。
+
+- 2026-09-29 · 进行中 · **片 7：巡检与处置（`storage/patrol.py`）——库与真源双向比对，只补不删**：
+  六类发现落成 `FindKind`：`unregistered_hub` / `missing_row` / `misplaced`（可修复）与
+  `missing_record` / `missing_hub` / `corrupt_carrier`（只能报告）。三条口径钉在代码里：
+  ① **两个方向都比**——盘上有库里没有（`missing_row`）与库里有盘上读不出来（`missing_record`）分开报；
+  ② **一致要两项都对**——位置（hub / 载体 / 格区间）与摘要凭证**同时**与该身份的某次出现相符；
+  ③ **坏点不即停**——`_scan` 一次只扫一个载体，坏载体捕捉成 `corrupt_carrier` 后其余照扫
+  （与重建的"坏点即停"正相反）。`repair()` 只动可修复那一列：缺登记补登记、缺行补行、
+  坐标不符**只改坐标**（`Rows.move_location(location)` 只刷位置与 `updated`，类型标号与三个时刻不动）；
+  不可修复项一律不碰、一行都不删。同一身份在盘上出现多次不算差异（旧副本等压实回收）。
+  配套：`Hub.carrier(name)` 由私有转公开、`hub.find_hubs(root, policy=…)` 列形状合规的 hub、
+  `Rows.locations()` 取全部行（按 hub/载体/起始格/身份排序）、`Rows.move_location`。
+  **顺带修掉引擎一处欠账**：`Storage._hub(create=True)` 建 hub 时**一并登记**——否则写路径留下的
+  hub 每次巡检都被报"登记缺"，那不是发现，是引擎自己欠的账。测试 `tests/core/test_patrol.py` 12 例；
+  六道门禁全绿：201 例、覆盖率 99%（`patrol.py` / `hub.py` 100%）。
+  **设计篇待改**：§8.7 写"发现分五种"却列了六行；且 §6/§7/§8.7 里的"桶 / bucket"应统一改词为 hub。
+
+- 2026-09-29 · 进行中 · **片 6：存储引擎（块/载荷记录化 ＋ `store`/`load`/`drop` ＋ 落盘后通知）**：
+  `format/block.py` 补载荷面：保留键 `BODY_ADDR_KEY = "\x00cairn.body_addr"`、
+  `encode_block_payload()`（canonical CBOR）与 `body_addr_of()`（判据只有一条：载荷是不是一个
+  带保留键的映射）——**块记录与内容记录靠载荷分辨**，不靠行的类型标号猜（§3.2.1）。
+  `storage/engine.py` 落 `Storage`：`store(data, hub=…, kind=…)` 一次落两条记录
+  （内容记录按内容去重：先按地址反查，已在就不重复写；块记录载荷是指针），`load()` 按身份读回
+  （块身份顺指针一跳、内容身份本身就是 body）、`body(address)` 按内容地址读回（**找到行后当场核对摘要**，
+  行指向的字节不是那份内容就报"内容不在"）、`drop()` 只摘块行（内容面等压实回收）、`locate()` 给诊断。
+  `core/event/catalog.py` 落事件目录（`object.put` / `object.deleted`）——发布与订阅都引常量，
+  避免两处字面量分叉；事件在**落盘之后**发出，通知失败不影响写入。
+  `core/clock.py` 收口时钟（`now_ms` 给索引/事件/落盘时刻，`now_ns` 只给 ID 的 `birth_time`），
+  `format/id.py` 与 `rows.py` 都改成从这里取。
+  **口径一（记录在案）**：引擎边界是**字节**——`data` 必须是已经规范化过的字节，引擎不理解载荷结构
+  （规范化属编码与领域 §4.3）；`Block` / `Body` 是**领域侧的类型基座**，不是引擎的边界类型，
+  领域据此构造自己的块（`NoteData(Block)` 等）。
+  **口径二**：一次 `store` **不是一次事务**（两条记录各自提交）；中途崩溃只留下一条没人指向的内容记录，
+  无害，压实回收是未来项（§12）。刻意不引入跨行事务与崩溃恢复：当前代价只是空间。
+  `hub.py` 抽出 `PackPolicy`（槽长 ＋ 封口线）作为策略参数，引擎不再逐个传两个旋钮。
+  测试 `tests/core/test_engine.py` 16 例；六道门禁全绿：189 例、覆盖率 99%（`engine.py` 100%）。
+
+- 2026-09-29 · 进行中 · **片 5c：行层与档一重建（`storage/rows.py`）**：
+  三样东西的读写——**定位行** `Location`（两套凭证 ＋ hub/pack/格区间/size/kind/三个时刻）、
+  **hub 登记** `HubRow`（**只认第一次**：重复登记是空操作，改形态将来另给入口）、
+  **关系边** `EdgeRow`（主键即身份，重复写不产生第二行）。同身份重写定位行时位置与摘要跟着更新，
+  `issued` 与 `created` 保持第一次写下的值。SQL 语句在模块级拼好（表名来自声明层并经
+  `quote_identifier` 加引号，值全部参数化），调用点不拼串；`pyproject.toml` 的 per-file-ignores
+  从已删除的 `src/core/storage/table.py` 改指 `rows.py` / `index.py`（口径不变，顺带清掉一处指向
+  已删文件的尾巴）。写方法各自提交一次（一次写入即一次落盘）；本层不做跨行事务。`Index.rows` 是入口。
+  **档一重建**（§8.5）：以载体为真源、**只补缺行**——hub 目录在而登记缺即补登记；盘上有记录而库里
+  没有行即补行（身份与位置照实填，`kind` 与落盘时刻给空值，它们不在记录头里）；**已有行一律不动**
+  （清空重扫要程序按 ID 给类型，属 ID 专项）；坏点即停，已补的行留着，重跑幂等。
+  顺带把 `record` 表的 `hub` / `pack` / `slot_first` / `slot_last` / `size` 收成 NOT NULL
+  （一条没有位置的位置行没有意义）。测试 `tests/core/test_rows.py` 10 例 ＋ `test_rebuild.py` 6 例；
+  六道门禁全绿：174 例、覆盖率 99%（`rows.py` 100%）。
+
+- 2026-09-29 · 进行中 · **片 5b：索引库开库对齐（`storage/index.py`）——声明与实际结构的比对与处置**：
+  开 `catalog.db` 后先看库、再比、后处置：缺表即建、缺列即补（可补的用 `ALTER TABLE … ADD COLUMN`）、
+  索引缺失即建、**同名索引定义变了即拆掉重建**（唯一性或列组合；索引名里没有唯一性，只能靠比对发现）；
+  未声明的表 / 列 / 索引**只告警不删**；容器级漂移（列型、非空、主键、默认值、列级唯一）**默认拒绝**，
+  须开库时给出 `RebuildPlan(tables, reason)` 且覆盖每一张待重建的表；重建**改名隔离不删**
+  （`<表>__dropped_<时刻>`），隔离表随后按"多出的表"只告警，旧数据留在隔离表里。
+  比对结果落成结构化 `Difference(kind, table, subject, detail, destructive)`——处置不从 detail 散文反解名字；
+  `Alignment` 报告差异、实际执行的语句、告警、重建的表与"声明是否变了"。
+  **口径裁定一**：`meta` 是索引库自用表——不属任何声明集（开库流程自己保证它存在），但**建表语句
+  同样由声明编译**（`tables.META_TABLE_SPEC`），故"源码内不出现建表 SQL"这条在它身上也不破例；
+  声明里占用 `meta` 这个名字会被 `Declaration` 直接拒绝。**口径裁定二**：签名（`meta` 里那份
+  规范化描述）取"开库先比对、对齐后重写"的语义——声明变了不阻断开库，只报告 `declaration_drift`
+  并更新登记；真正中断的只有"改不动且未授权"的破坏性差异。设计篇 §8.6 那句"不一致即报错"按此落地
+  （否则加一张领域表就没法开库了），待回写时把这段说清。
+  顺带把 `tables.py` 的标识符引号助手公开为 `quote_identifier`、补 `sql_type` 与
+  `Column.default_sql()`（PRAGMA 不能带参数占位符，比对处要用）；`core/exc.py` 补
+  `IndexNotFoundError` / `IndexSchemaError`。测试 `tests/core/test_index.py` 21 例。
+  六道门禁全绿：159 例、覆盖率 99%（`index.py` 98%）。
+
+- 2026-09-29 · 进行中 · **片 5a：表声明层（`storage/tables.py`）——源码内不得出现建表 SQL 的那一半**：
+  中立类型（文本 / 整数 / 实数 / 二进制 / 布尔，方言映射只在一张表里）、重建档两项
+  （`DERIVED` 必写重建来源 / `SOURCE` 禁写来源——"可重建与真源不可兼得，必须明说"）、
+  约束开关（主键 / 唯一 / 非空 / 默认值，默认值按列类型编译成字面量，类型不符即报错）、
+  `from_mapping` 解析口（未知项、非法标识符、非法类型、重复列名、主键恰需一列、索引列必须在表内、
+  索引重复、旗标必须布尔——一律报错，不静默忽略）、DDL 编译（`create_table_ddl` / `create_index_ddl` /
+  `add_column_ddl`，补不了的主键与唯一列当场拒绝）、索引名 `idx_<表>_<列>`（列按名排序）并在
+  **声明集**这一层查跨表撞名、`signature()` 规范化描述（不含 `doc`，列与索引按名排序）。
+  `KERNEL_TABLES` 落内核三表：`record`（位置列按两数格模型给 `slot_first` / `slot_last`，
+  §8.2 的 `slot_head` / `slot_count` 属旧三数模型待回写）、`hub` 登记、`edge` 关系边。
+  `core/exc.py` 补 `TableDeclarationError`。**口径说明**：§8.5 的"档二"是领域介入后的**整库**性质，
+  不是第三档表——每张领域表仍须落进 `DERIVED` / `SOURCE` 之一，含糊的声明在解析口就被拦下。
+  测试 `tests/core/test_tables.py` 40 例。六道门禁全绿：137 例、覆盖率 99%（`tables.py` 100%）。
+
+- 2026-09-29 · 进行中 · **片 4：hub 层（载体之上、索引库之下的定位与写入）**：
+  `storage/hub.py` 从骨架落成实际逻辑——形状判据（`vault/<hub>/packs/` 才算 hub；`packs/` 里混着
+  不是载体的文件即 `HubShapeError`，不把看不懂的东西当成不存在）、**读路径不建 hub**
+  （目录不在即 `HubNotFoundError`；建立是显式动作 `Hub.create`，且撞上同名文件时把裸 `OSError`
+  收成 `HubShapeError`，不漏出内核异常体系）、**活跃载体＝有空间的最满者**（同大小按名字定序，
+  使判据完全确定；一个都没有就新开随机名载体）、`append` / `read` / `scan` 三个入口。
+  策略参数（槽长、封口线）由上层传入，**hub 不落盘自己的配置**；新载体取当前策略槽长，
+  既有载体一律以各自文件头为准（§5.6 第 2 条）。`core/exc.py` 补 `HubNotFoundError` /
+  `HubShapeError`。测试 `tests/core/test_hub.py` 18 例，含"读路径不建 hub 且不留空目录"、
+  "封口后新开载体"、"槽长只在建载体时取策略"、"撞名重取不覆盖"这条分支。
+  六道门禁全绿：97 例、覆盖率 99%。
+
 - 2026-09-29 · 进行中 · **术语统一：`hub` 是"桶"的新名字，`storage/bucket.py` 改名 `hub.py`**（作者裁定）：
   `ID.in_hub` = 在哪个 hub，`in_hub_pack` = hub 里的哪个载体；`vault`（库根）由打开时的上下文给出，
   不占 ID 字段。改名涉及 `storage/bucket.py` → `storage/hub.py`，并把 `storage/__init__.py`、

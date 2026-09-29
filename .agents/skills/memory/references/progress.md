@@ -31,18 +31,59 @@
 - [ ] **待回写 · 设计篇 §5.2 / §5.6 / 词汇表**：定位模型已由作者推翻为两数格模型（槽长推荐值
   64 KiB → 512 B）；术语"桶 / bucket"改为"hub"。`storage-design.md`、`AGENTS.md` 与 `data-model.md`
   里的旧口径待文档那一轮一并改正（记忆已记全口径）。
-- [ ] **片 4 · hub 与存储引擎（下一片）**：`storage/hub.py`（`vault/<hub>/packs/`、
-  活跃载体＝有空间的最满者、封口线只管换不换文件）、`storage/engine.py`（引擎角色与对象表）；
-  事件目录（`object.put` / `object.deleted`）随写入路径一起声明，**不提前占位**。
-- [ ] **片 5 · 其余待定**：索引库（表声明 + 可重建分档）、配置引擎（`core/conf` 尚未建目录）、
-  `init.py` 的 `Kernel` 接线（对象管理表 + 四引擎挂载位）。
-- [x] **片 3 · ID 凭证算法已定**（2026-09-29 作者裁定）：保持 `uuid4` + `sha256`。
-  理由：不需要时间排序（`birth_time` 已带时间戳，且排序本身需求不强）；回写 `AGENTS.md` 与设计篇 §3
-  时改掉 ULID + BLAKE3 口径，实现切换点是 `format/id.py` 的 `new_uuid()` / `digest()`。
-- [ ] **仓库尾巴（作者已同意延后）**：`tools/`（docgen / gen_conf / mypy_plugin / preview_shell）、
-  `.github/workflows/`、`config/`、`schema/`、`mkdocs.yml`、`pyproject.toml`
-  （`--cov=feature`、hatch `packages` 里的 `src/feature` 与 `src/ui_tools`、ruff per-file-ignores 里的
-  `src/core/storage/table.py` / `src/net` / `src/server`）仍指向已删模块。
+- [x] **片 4 · hub 层**（2026-09-29）：`storage/hub.py` 落实际逻辑——形状判据（`vault/<hub>/packs/`）、
+  **读路径不建 hub**（目录不在即报错，建立是显式动作）、**活跃载体＝有空间的最满者**（同大小按名字定序，
+  判据完全确定；一个都没有就新开随机名载体）、`append` / `read` / `scan`；策略参数（槽长、封口线）
+  由上层传入，hub 不落盘自己的配置；新载体取当前策略槽长，既有载体一律以文件头为准。
+  `core/exc.py` 补 `HubNotFoundError` / `HubShapeError`。测试 `test_hub.py` 18 例；
+  六道门禁全绿（97 例、覆盖率 99%）。
+- [x] **片 5a · 表声明层**（2026-09-29）：`storage/tables.py`（中立类型、重建档、约束开关、严格解析口、
+  DDL 编译、索引名与跨表撞名校验、`signature()`、`KERNEL_TABLES` 三表）；`core/exc.py` 补
+  `TableDeclarationError`。测试 40 例；六道门禁全绿（137 例、覆盖率 99%）。
+- [x] **片 5b · 索引库开库对齐**（2026-09-29）：`storage/index.py`——开 `catalog.db`、库内 `meta` 存声明
+  签名并在开库时比对（漂移只报告并更新登记）、差异分类处置（缺表即建 / 缺列即补 / 索引不符即建或拆重建 /
+  多出的只告警 / 容器级漂移须 `RebuildPlan` 授权 / 重建改名隔离不删）、结构化 `Difference` 与
+  `Alignment` 报告。`core/exc.py` 补 `IndexNotFoundError` / `IndexSchemaError`。测试 21 例；
+  六道门禁全绿（159 例、覆盖率 99%）。
+- [x] **片 5c · 行层与档一重建**（2026-09-29）：`storage/rows.py`——定位行 / hub 登记 / 关系边的读写，
+  以及"以载体为真源、只补缺行"的档一重建（已有行不动、坏点即停、重跑幂等）。
+  测试 16 例；六道门禁全绿（174 例、覆盖率 99%）。
+- [x] **片 6 · 存储引擎**（2026-09-29）：`format/block.py` 的载荷面（保留键 ＋ 指针编解码）、
+  `storage/engine.py` 的 `Storage`（store 落两条记录并按内容去重、load 按身份读回、body 按地址读回、
+  drop 只摘块行、locate 诊断）、`core/event/catalog.py` 的事件目录、`core/clock.py` 收口时钟。
+  测试 16 例；六道门禁全绿（189 例、覆盖率 99%）。
+- [x] **片 7 · 巡检与处置**（2026-09-29）：`storage/patrol.py`——六类发现、双向比对、坏点不即停、
+  处置只补不删（补登记 / 补行 / 只改坐标）；配套 `hub.find_hubs`、`Hub.carrier` 公开、
+  `Rows.locations` 与 `Rows.move_location`；引擎建 hub 时一并登记。测试 12 例；
+  六道门禁全绿（201 例、覆盖率 99%）。
+- [x] **片 8 · Kernel 接线**（2026-09-29）：`core/init.py` 的 `Kernel`（库根 ＋ 事件/存储两个引擎的装配、
+  路径约定只此一处、失败→日志联动、`patrol`/`repair` 维护入口、`store`/`load`/`drop`/`locate` 短面）。
+  配置引擎与对象管理表按口径**不在本层**（前者作者自办、后者是预留）。测试 13 例；
+  六道门禁全绿（213 例、覆盖率 99%）。**内核代码侧到此收口**：事件 / 存储 / 异常三个引擎 +
+  Kernel 装配都在，且 `Kernel.create → store/load → patrol/repair` 端到端跑得通。
+- [ ] **待作者裁定 · 摘块与巡检的相互作用**：`drop` 只摘行、记录留在载体里（追加写不动旧字节），
+  于是巡检把块记录报成 `missing_row`、处置又把它补回来（等于撤销摘块）。消掉它要么引入墓碑
+  （`drop` 写一条"已删"记录，巡检据此不补），要么等压实回收落地——两条都属未来项。
+- [x] **片 9 · 仓库尾巴**（2026-09-29）：`pyproject.toml`（hatch packages / isort first-party /
+  失效的 per-file-ignores / `--cov=feature` / 退役工具的 mypy 豁免）、文档站（nav 去掉已删的评审记录、
+  三页 API 改成"待重建"占位、`core.md` 按真实模块重写、`api/index.md` 改现状）、`ci.yml`（暂时摘掉
+  配置投影那一步）、`build-windows.yml`（去掉标签触发）、三个退役工具的 docstring。
+  **本地跑通 CI 全套门禁**：SPDX / 书面语 / docgen ×2 / ruff ×2 / mypy src tools /
+  pytest --cov-fail-under=80（213 例、99.54%）/ mkdocs --strict —— 全绿。
+- [ ] **待作者裁定 · 依赖盘点**：`blake3` / `argon2-cffi` / `cryptography` / `fastcdc` / `pyyaml` /
+  `tomli-w` 在 `src/` 与 `tools/` 里**一处引用都没有**（详见 `changes.md` 片 9 末段）。
+  裁掉能缩短安装与供应链面；留着的理由是各自的上层（分片、配置引擎、传输加密）还要回来。
+- [x] **片 10 · 文档回写**（2026-09-29）：L0 唯一事实来源 `storage-design.md` 通篇按实现重写
+  （hub 术语、两数格模型、512 B 格长、三表加 `meta`、`DERIVED`/`SOURCE`、开库比对语义、六类发现）；
+  `AGENTS.md` / `docs/architecture/index.md`（加"与代码的对应"列）/ `kernel.md` / `glossary.md` /
+  `data-model.md` / 首页与两篇 guides 按现状改；作废主轴（`kernel-spec.md` / `kernel-m1-plan.md`）
+  加"仅存档"横幅。验证：书面语 / SPDX / `mkdocs --strict` / pytest（213 例）全绿。
+- [ ] **未来项**：压实回收（删内容要判引用）、跨行事务与崩溃恢复、批量写入合并通知、大正文分片、
+  检索、`src/core/conf/`（作者自行推进），以及**领域 / 界面 / 应用三层与打包的重建**。
+- [ ] **文档后续（不阻塞，逐层回来时做）**：`domains.md` / `config.md` / `note-model.md` /
+  `access.md` / `ui-kernel.md` / `ui-theme.md` / `network.md` / `ecosystem.md` /
+  `reference/config.md` 描述的是**尚未重建的层**，现在只在 `architecture/index.md` 里标了"意图"；
+  各层重建时把对应页按实现回写（`data-model.md` 的 §2 / §3 字段表同理）。
 
 ## 存储重设计（2026-09-28 立项；**已收口**，只余未来项）
 

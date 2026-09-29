@@ -3,7 +3,7 @@
 
 # AGENTS.md
 
-Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.13；内核 Qt-free；UI = `src/ui_tools/`（工具箱）+ `src/app/win/`（外壳），其余界面待重建；用 `uv` 管理；Apache-2.0。
+Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.13；内核 Qt-free。**当前只有内核一层在位**（`src/core/`）；领域、界面工具箱与外壳（`feature` / `ui_tools` / `app`）随 2026-09-29 的重建被整条删除、待重建——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
 
 ## 开工前 SOP（每个任务都先做）
 
@@ -19,7 +19,7 @@ Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·�
 uv sync                                   # 安装/同步依赖
 
 uv run pytest                             # 全部测试（含覆盖率；CI 用 --cov-fail-under=80）
-uv run pytest tests/core/test_vault.py::test_put_open_roundtrip   # 单个测试
+uv run pytest tests/core/test_engine.py::test_store_then_load_roundtrip   # 单个测试
 uv run ruff check .                       # lint（--fix 自动修）
 uv run ruff format .                      # 格式化（提交前用 --check）
 uv run mypy src tools                     # 类型检查（strict）
@@ -34,7 +34,9 @@ uv run python tools/docgen.py --write     # 重新生成配置参考页（改了
 uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的公共成员会从 API 页消失）
 ```
 
-> 桌面入口 `uv run cairn` 与打包在 UI 重建后恢复。
+> 桌面入口 `uv run cairn`、打包（`tools/build.py` 与 `build-windows.yml`）、
+> 配置投影（`tools/gen_conf.py`）分别在 UI、应用层与配置引擎重建后恢复：
+> 那三个工具当前依赖已删除的层，`pyproject.toml` 里为它们留了 mypy 豁免，修回时一并摘掉。
 
 提交前顺序：`ruff -> mypy -> pytest`。质量口径见 `.agents/skills/rules/references/quality.md`
 （企业级-ε：mypy strict、ruff ALL、warning 零容忍、覆盖率 ≥80%）。**只有用户明确要求才 commit。**
@@ -55,25 +57,29 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
 
 ## 架构分层（别越界）
 
-- 顶层包在 `src/` 下、**一律去 `cairn.` 前缀**（`from core.storage import …`）：
-  `core` / `feature` / `ui_tools` / `app`（`net` / `server` 已删，待重设）。
-- `src/core/`（L0 存储底座）是公共底座：**必须 Qt-free、传输无关**；
-  存储原语在 `core/storage/`（块 / 载体 / 桶 / 多桶 / 索引库），基础类型在 `core/types/`。
-- `src/feature/`（L3）只依赖 core 公共 API，内部先分两支：**域**（`note` / `project`，`Domain` 子类，
-  管理型、单例、无 ID）与 **共享件**（`shared/`：数据结构 canvas / asset / group、值 signature、
-  设施 relation / provenance / base / kinds）。领域之间互不依赖；领域结构**直接继承 `Block`**，
-  不得改 `Block` 顶层字段，扩展只走子类字段（`Attr` / `Data` / `Body`）、新 `type` 或新关系 `kind`。
-- **类型词表 `feature.shared.Kind`**：`Kind.Feature`（域）/ `Kind.Data`（块类型），
-  plain `Enum`、值即落盘字符串（如 `notedata`），不用 `cairn.<domain>.<kind>` 旧命名空间；
-  第三方类型用自有前缀字符串。类型表按值归一（`core.types.type_name`）。
-- `src/app/` 是界面载体（按平台 `win` / `linux`）+ `ui_tools/` 界面工具层；
-  `core/conf/` 放配置与常量。
-- `src/net/`、`src/server/` 曾为 P2P / 服务端**实验顶层包**，**当前已删除、待重设**
-  （`tests/net/` 与 ruff 的 per-file-ignores 里还有残引用）。新内核代码放 `src/core` 或 `src/feature`。
-- `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源，
-  `data-model.md` 为数据结构总纲）。**有冲突以代码为准，改实现后回写文档。**
-- 内部时间统一 unix 毫秒 int；对象身份是 `ValueUuid`（26 字符 Crockford ULID），
-  内容哈希是 `ValueHash`（BLAKE3 十六进制）——两套凭证都在 `core/types/id.py` 的 `Id` 上。
+**现状**：`src/` 下只有 `core` 一层；`feature` / `ui_tools` / `app` 三层已在 2026-09-29 的重建里删除，
+下面是它们的**目标形态**（回来时按此落，别在 core 里提前实现它们）。
+
+- 顶层包在 `src/` 下、**一律去 `cairn.` 前缀**（`from core.storage import …`）。
+- `src/core/`（L0）是公共底座：**必须 Qt-free、传输无关**。当前装着三件事：
+  **事件引擎**（`core/event/`：`Event` / `Bus` / 事件目录）、**存储引擎**（`core/storage/`：
+  格式与身份 `format/`、载体 `carrier.py`、hub `hub.py`、表声明 `tables.py`、索引库 `index.py`、
+  行层 `rows.py`、引擎 `engine.py`、巡检 `patrol.py`）、**异常层**（`core/exc.py`）；
+  装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，配置引擎 `core/conf/` 重做中。
+- `src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
+  **共享件**（`shared/`）；域之间互不依赖；领域结构直接继承 `Block`，扩展只走子类字段、
+  新 `type` 或新关系 `kind`。
+- 类型词表（`Kind` 一类）随领域层重建再定：plain `Enum`、值即落盘字符串（如 `notedata`），
+  第三方类型用自有前缀。
+- `src/app/`（界面载体，按平台）与 `src/ui_tools/`（界面工具层）**待重建**；
+  界面工具箱**不认识领域**，也不碰 `core.storage`。
+- `src/net/`、`src/server/` 曾为 P2P / 服务端实验顶层包，**当前已删除、待重设**。
+- 存储的路径约定只在 `core/init.py` 定：`<root>/catalog.db` 是索引库、`<root>/<hub>/packs/` 是载体。
+- `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源），
+  **有冲突以代码为准，改实现后回写文档**；哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
+- 内部时间统一 unix 毫秒（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
+  对象身份是 `core/storage/format/id.py` 的 `ID`：两套凭证并存——`value_uuid`（签发时分配）
+  与 `value_hash`（由内容算出），算法分别是 `uuid4()` 与 `sha256`。
 
 ## 测试
 
@@ -82,8 +88,10 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
 
 ## 环境与坑
 
-- 开发库默认 `<repo>/vault/`（已 gitignore），可用 `CAIRN_VAULT` 覆盖；
-  口令 `CAIRN_DEV_PASSPHRASE`（默认 `cairn-dev`）。
+- 库根由调用方显式给出（`Kernel.create(root)` / `Kernel.open(root)`）；**尚无环境旋钮**——
+  `CAIRN_VAULT` 一类的重定向随 App 或测试夹具重建再定。**本地不加密**（设计篇 §9.5），
+  故没有口令 / 密钥类环境变量。
+- `.gitignore` 里仍留着 `vault/`（开发库的默认位置）：开发时别把库提交进来。
 - Python 3.13；`uv.lock` + 阿里云 PyPI 镜像（`pyproject.toml` 的 `[[tool.uv.index]]`）。
 - 图片走 Git LFS（`.gitattributes`）；未装 LFS 时 clone 到的 png 只是指针。
 
