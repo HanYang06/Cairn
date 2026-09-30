@@ -3,7 +3,7 @@
 
 # AGENTS.md
 
-Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.13；内核 Qt-free。**当前只有内核一层在位**（`src/core/`）；领域与界面（`feature` / `ui_tools` / `app`）随 2026-09-29 的重建被整条删除、待重建，且界面材质已于 2026-09-30 由 Qt 改为 **Tauri 壳 + Web 前端**——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
+Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.13；内核 Qt-free。**当前只有内核一层在位**（`py_src/core/`）；领域与界面（`feature` / `app`）随 2026-09-29 的重建被整条删除、待重建，且界面材质已于 2026-09-30 由 Qt 改为 **Tauri 壳 + Web 前端**（`app/` 是那份 Tauri 工程）——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
 
 ## 开工前 SOP（每个任务都先做）
 
@@ -22,7 +22,7 @@ uv run pytest                             # 全部测试（含覆盖率；CI 用
 uv run pytest tests/core/test_engine.py::test_store_then_load_roundtrip   # 单个测试
 uv run ruff check .                       # lint（--fix 自动修）
 uv run ruff format .                      # 格式化（提交前用 --check）
-uv run mypy src tools tests               # 类型检查（strict）
+uv run mypy py_src tools tests            # 类型检查（strict）
 uv run python tools/spdx.py --check       # SPDX 头门禁（缺头用 --fix 自动补）
 uv run python tools/prose.py              # 书面语门禁（文档/注释不得口语，词典即标准）
 uv run pre-commit run --all-files         # 提交前全量门禁（SPDX -> 书面语 -> ruff -> mypy）
@@ -34,7 +34,7 @@ uv run python tools/docgen.py --write     # 重新生成配置参考页（改了
 uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的公共成员会从 API 页消失）
 ```
 
-> 桌面外壳（Tauri 壳 + Web 前端）尚未落地：`src-tauri/` 与 `frontend/` 都还不存在；
+> 桌面外壳（Tauri 壳 + Web 前端）已在 `app/` 立项（脚手架已生成），但**功能未落地**；
 > 旧打包脚本（`tools/build.py` 与 `build-windows.yml`）依赖 Qt 时代已删除的层级，**待重做**。
 > 前端工具链已定（pnpm + Biome + TypeScript + Vitest），但**门禁尚未接线到 CI**——
 > 见 `.agents/skills/rules/references/ui-boundary.md` §六。
@@ -63,29 +63,30 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
 
 ## 架构分层（别越界）
 
-**现状**：`src/` 下只有 `core` 一层；`feature` / `ui_tools` / `app` 三层已在 2026-09-29 的重建里删除，
+**现状**：`py_src/` 下只有 `core` 一层；`feature` / `app` 两层已在 2026-09-29 的重建里删除，
 下面是它们的**目标形态**（回来时按此落，别在 core 里提前实现它们）。
 
 > **2026-09-30 起界面材质为 Tauri 壳 + Web 前端**（React / TypeScript），Python 内核以边车运行。
-> 故下面按 `src/` 描述的分层只覆盖 Python 一侧；`frontend/` 与 `src-tauri/` 的边界见
+> 故下面按 `py_src/` 描述的分层只覆盖 Python 一侧；界面侧的边界见
 > `rules/references/ui-boundary.md`。**`ui_tools` 这个层名随 Qt 作废**，其职责由前端共享组件承担。
 
-- 顶层包在 `src/` 下、**一律去 `cairn.` 前缀**（`from core.storage import …`）。
-- `src/core/`（L0）是公共底座：**必须 Qt-free、传输无关**。当前装着三件事：
+- **源码根有两个，名字不重**：Python 在 `py_src/`，前端在 `app/src/`（React）；
+  Rust 壳在 `app/src-tauri/`。**顶层包在 `py_src/` 下、一律去 `cairn.` 前缀**（`from core.storage import …`）。
+- `py_src/core/`（L0）是公共底座：**必须 Qt-free、传输无关**。当前装着三件事：
   **事件引擎**（`core/event/`：`Event` / `Bus` / 事件目录）、**存储引擎**（`core/storage/`：
   格式与身份 `format/`、载体 `carrier.py`、hub `hub.py`、表声明 `tables.py`、索引库 `index.py`、
   行层 `rows.py`、引擎 `engine.py`、巡检 `patrol.py`）、**异常层**（`core/exc.py`）；
   装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置引擎**在 `core/conf/`
   （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/config.md`）。
-- `src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
+- `py_src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
   **共享件**（`shared/`）；域之间互不依赖；领域结构直接继承 `Block`，扩展只走子类字段、
   新 `type` 或新关系 `kind`。
 - 类型词表（`Kind` 一类）随领域层重建再定：plain `Enum`、值即落盘字符串（如 `notedata`），
   第三方类型用自有前缀。
-- `src/app/`（Python 侧入口：命令行等）与 `frontend/`（React 界面）+ `src-tauri/`（Rust 壳）**待落地**；
-  原 `src/app/<平台>/` 的平台分目录**随 Qt 作废**（壳是跨平台的同一份 Tauri 工程）。
+- `py_src/app/`（Python 侧入口：命令行、未来的内核边车）**待落地**；
+  原「按平台分目录」的口径**随 Qt 作废**（Tauri 壳是跨平台的同一份工程）。
   界面侧**不认识领域内部、也不碰 `core.storage`**，只经契约与命令过边界。
-- `src/net/`、`src/server/` 曾为 P2P / 服务端实验顶层包，**当前已删除、待重设**。
+- `py_src/net/`、`py_src/server/` 曾为 P2P / 服务端实验顶层包，**当前已删除、待重设**。
 - 存储的路径约定只在 `core/init.py` 定：`<root>/catalog.db` 是索引库、`<root>/<hub>/packs/` 是载体。
 - `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源），
   **有冲突以代码为准，改实现后回写文档**；哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
@@ -95,7 +96,7 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
 
 ## 测试
 
-- pytest：`testpaths=["tests"]`、`pythonpath=["src"]`，无需安装即可 `import core`。
+- pytest：`testpaths=["tests"]`、`pythonpath=["py_src"]`，无需安装即可 `import core`。
 - 测试无外部服务/数据库，全部用临时本地库。
 
 ## 环境与坑

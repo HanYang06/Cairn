@@ -42,6 +42,8 @@ SKILL_NAME = "SKILL.md"
 _HASH = "hash"
 _BLOCK = "block"
 _SEMI = "semi"
+_SLASH = "slash"
+_CSTYLE = "cstyle"
 
 # 扩展名（小写含点）→ 注释风格。装不下注释的格式（.json / 图片 / 锁文件）**故意不收**，
 # 它们必须去 REUSE.toml 报到。
@@ -65,6 +67,10 @@ _COMMENT_STYLES: dict[str, str] = {
     ".html": _BLOCK,
     ".svg": _BLOCK,
     ".iss": _SEMI,  # Inno Setup 的注释是分号
+    ".rs": _SLASH,
+    ".tsx": _SLASH,  # 前端 TSX；`.ts` 已在上面
+    ".jsx": _SLASH,
+    ".css": _CSTYLE,
 }
 
 _FENCE = "---"
@@ -89,6 +95,10 @@ def _comment(style: str, text: str) -> str:
         return f"<!-- {text} -->"
     if style == _SEMI:
         return f"; {text}"
+    if style == _SLASH:
+        return f"// {text}"
+    if style == _CSTYLE:
+        return f"/* {text} */"
     return f"# {text}"
 
 

@@ -1,49 +1,20 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+// SPDX-FileCopyrightText: 2026 HanYang06
+// SPDX-License-Identifier: Apache-2.0
+
 import "./App.css";
 
+/**
+ * 外壳占位：脚手架自带的 Tauri + Vite + React 演示已清掉。
+ *
+ * 这里**故意不写业务**——界面骨架与「从内核取一条真实数据」那条闭环按
+ * `.agents/skills/memory/progress.md` 的落地顺序来；组件的规矩（样式绑进组件、
+ * 页面层禁原生标签）先在 `rules/references/frontend.md` 定下来再动手。
+ */
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
-
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+    <main className="shell">
+      <h1>Cairn</h1>
+      <p>本地优先的内容寻址对象池 / 笔记·资产·项目工作台</p>
     </main>
   );
 }

@@ -65,13 +65,14 @@ data = note.create("第一块石头", title="试笔")
 
 | 目录 | 职责 |
 |---|---|
-| `src/core/` | L0 底座：桶 / 块存储、信号引擎、配置引擎、类型地基；**Qt-free、传输无关** |
-| `src/feature/` | 领域：`note` / `project` 域 + `shared/` 共享件（asset / canvas / group / relation / signature） |
-| `src/ui_tools/` | 界面工具箱：声明树 / 编译 / 绑定 / 模型 / 主题 / 组件 / 布局 |
-| `src/app/` | 应用组合根，按平台（`win` / `linux`）；**只有它认识领域** |
+| `py_src/core/` | L0 底座：事件引擎 / 存储引擎 / 配置引擎 / 异常层；**Qt-free、传输无关** |
+| `py_src/feature/` | 领域（`note` / `project`）**待重建** |
+| `py_src/app/` | Python 侧入口（命令行、未来的内核边车）**待落地** |
+| `app/` | 桌面外壳：Tauri 工程（`app/src/` React 前端 · `app/src-tauri/` Rust 壳）**功能待落地** |
+| `assets/` | 品牌素材单一真源（logo / 启动图 / Tauri 与安装包图标都从这里取） |
 
-顶层包一律去 `cairn.` 前缀（如 `from core.storage import Bucket`）。
-`src/net/`、`src/server/` 是已删除的实验顶层包，**待重设**。
+Python 顶层包一律去 `cairn.` 前缀（如 `from core.storage import …`）；源码根叫 `py_src/`
+（不叫 `src/`：与 `app/src/` 撞名）。逐层红线见 [`AGENTS.md`](AGENTS.md) 的「架构分层」。
 
 分层红线与约定见 [约定与红线](docs/guides/conventions.md)；设计事实来源见
 [架构文档](docs/architecture/index.md)（`storage-design.md` 为 L0 存储的唯一事实来源）。

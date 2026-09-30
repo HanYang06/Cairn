@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 HanYang06
+// SPDX-License-Identifier: Apache-2.0
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-expect-error type error without @types/node package

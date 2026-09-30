@@ -26,8 +26,9 @@ dependencies = [
     "tomli-w>=1.2.0",
 ]
 
-# 桌面外壳与前端不在本文件里：壳是 Tauri（`src-tauri/` 的 Cargo 工程），
-# 前端是 `frontend/` 的 pnpm 工程。原先的 `pyside6` 随 2026-09-30「Qt 退场」一并移除。
+# 桌面外壳与前端不在本文件里：`app/` 是一份 Tauri 工程（`app/src-tauri/` 的 Cargo 工程
+# ＋ `app/src/` 的 React 前端，同一个 pnpm 工程）。
+# 原先的 `pyside6` 随 2026-09-30「Qt 退场」一并移除。
 # 命令入口的脚本声明见下方 `[project.scripts]`。
 
 [dependency-groups]
@@ -54,9 +55,10 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true
 
 [tool.hatch.build.targets.wheel]
-# 现在只有内核一层。`src/app` / `src/feature` / `src/ui_tools` 随各自重建加回——
+# Python 源码根是 `py_src/`（不叫 `src/`：仓里另有 `app/src/` 是 React 前端，两个 `src` 无法区分）。
+# 现在只有内核一层；`py_src/app` / `py_src/feature` 随各自重建加回——
 # 列不存在的目录不会报错（hatch 静默跳过），但配置与事实不符本身就是尾巴。
-packages = ["src/core"]
+packages = ["py_src/core"]
 
 [tool.ruff]
 target-version = "py313"
@@ -108,13 +110,13 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 # 表名/列名来自声明层（tables.py）并经 quote_identifier 加引号，值全部参数化（无注入面）。
-"src/core/storage/rows.py" = ["S608"]
-"src/core/storage/index.py" = ["S608"]
+"py_src/core/storage/rows.py" = ["S608"]
+"py_src/core/storage/index.py" = ["S608"]
 # `conf` 的调用形是**对的形状本身就是契约**：声明与取值共用一个签名，`path` 之后全是可选副参数
 # （类型 / 说明 / 文件引用 / 强写）。拆成小对象会把"一种调用形"这个卖点拆掉。
-"src/core/conf/registry.py" = ["PLR0913"]
+"py_src/core/conf/registry.py" = ["PLR0913"]
 # 表声明层要问"配置在哪"：`core.conf` 在函数里导入，免得"导入存储"就得先有配置文件在那儿。
-"src/core/storage/tables.py" = ["PLC0415"]
+"py_src/core/storage/tables.py" = ["PLC0415"]
 # 测试与工具脚本：断言、注解、docstring、魔法数、打印等不按产品代码要求。
 # `FBT003` 也放行：配置面就是 `conf(键, 值)` 这种位置调用，测试里写布尔字面量是"取值"而非开关。
 "tests/**" = ["ANN", "D", "S101", "S105", "S603", "PLR2004", "SLF001", "INP001", "FBT003"]
@@ -128,7 +130,7 @@ plugins = ["tools/mypy_plugin.py"]
 # 源码根要显式指给 mypy：它不读 pytest 的 `pythonpath`，不指路时 `core` 会被认成
 # site-packages 里缺 `py.typed` 的第三方包，于是测试侧的 `core.*` 全成 Any——
 # 报错数看着不少，判据却已经失效。指路之后单独跑 `mypy tests` 也是同一口径。
-mypy_path = "src"
+mypy_path = "py_src"
 
 # 原先这里给 `tools.preview_shell` 开了豁免（它依赖已删除的 `app` / `ui_tools`）。
 # 2026-09-30「Qt 退场」之后该文件已删除：它按新材质**永远不会恢复**，
@@ -146,7 +148,7 @@ disallow_incomplete_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["py_src"]
 addopts = [
     "-ra",
     "--strict-markers",

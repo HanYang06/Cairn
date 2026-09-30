@@ -43,6 +43,31 @@ path = [".fileTemplates.json"]
 SPDX-FileCopyrightText = "2026 HanYang06"
 SPDX-License-Identifier = "Apache-2.0"
 
+# —— 桌面外壳工程（`app/`）：装不下内联头的那些 ——
+# 本项目的工程文件（JSON / 数据格式 / 锁文件）与自有图形资源。
+# 前端源码本身（`.tsx` / `.ts` / `.css`）与 Rust（`.rs`）走内联头，由 `tools/spdx.py` 校验。
+[[annotations]]
+path = [
+  "app/package.json",
+  "app/pnpm-lock.yaml",
+  "app/tsconfig.json",
+  "app/tsconfig.node.json",
+  "app/.vscode/**",
+  "app/src/assets/**",
+  "app/src-tauri/Cargo.toml",
+  "app/src-tauri/tauri.conf.json",
+  "app/src-tauri/capabilities/**",
+]
+SPDX-FileCopyrightText = "2026 HanYang06"
+SPDX-License-Identifier = "Apache-2.0"
+
+# `app/src-tauri/icons/**` 目前是 **create-tauri-app 脚手架的占位图标**（上游 MIT），
+# 不是本项目图形：换上 Cairn 的图标（`pnpm tauri icon <方形 PNG>`）之后**改成上面那一条**。
+[[annotations]]
+path = ["app/src-tauri/icons/**"]
+SPDX-FileCopyrightText = "Tauri Apps contributors"
+SPDX-License-Identifier = "MIT"
+
 # —— 法律文书本身（不给自己加头）——
 [[annotations]]
 path = [

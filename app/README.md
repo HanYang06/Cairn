@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 HanYang06
+# SPDX-License-Identifier: Apache-2.0
 # Tauri + React + Typescript
 
 This template should help get you started developing with Tauri, React and Typescript in Vite.

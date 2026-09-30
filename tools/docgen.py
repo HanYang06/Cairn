@@ -32,8 +32,11 @@ if TYPE_CHECKING:
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:  # 直接跑脚本时，`tools` 未必在导入路径上
     sys.path.insert(0, str(ROOT))
-if str(ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(ROOT / "src"))
+
+#: Python 源码根：一个地方写死，免得各处散着 `ROOT / "…"`（改名时漏一处就静默跑偏）。
+PY_ROOT = ROOT / "py_src"
+if str(PY_ROOT) not in sys.path:
+    sys.path.insert(0, str(PY_ROOT))
 
 # 导入即登记：**每加一个带配置的模块，在这里补一行**——参考页的取材就是这些声明现算出来的。
 import core.conf.params  # noqa: E402
@@ -47,11 +50,12 @@ CONFIG_PAGE = ROOT / "docs" / "reference" / "config.md"
 #: 公共 API 的 docstring 覆盖阈值（`--coverage` 用它给出达标 / 未达标判定；达标后接 CI）
 DOCSTRING_MIN = 0.95
 
-#: 覆盖率统计只看这四层（与 API 参考页一致）
-DOCSTRING_ROOTS = ("core", "feature", "ui_tools", "app")
+#: 覆盖率统计只列**当前真实存在的层**（`feature` / `ui_tools` / `app` 在 2026-09-29 的重建里
+#: 已删除；把它们留在名单里会让覆盖率数字量的是"以为存在的那套"，判据因此失效）。
+DOCSTRING_ROOTS = ("core",)
 
-#: 不参与统计的模块（占位包 / 生成物）
-_SKIPPED = ("app/linux",)
+#: 不参与统计的模块（占位包 / 生成物）；当前没有，占位留空。
+_SKIPPED: tuple[str, ...] = ()
 
 _PAGE_HEAD = """\
 <!-- SPDX-FileCopyrightText: 2026 HanYang06 -->
@@ -83,7 +87,7 @@ _PAGE_TAIL = """
 - 值文件 `config/settings.json`、词表 `config/schema/settings.json`——**跑一遍程序就生成**
   （引擎退出时落盘，不需要专门的生成脚本）。
 - 格式常量（载体魔数、文件头长度、记录头布局这类改了会坏库的）**故意不进配置**，留在实现处。
-- 想加一条配置：在**用到它的那个包**里声明（例：`src/core/storage/conf.py`），
+- 想加一条配置：在**用到它的那个包**里声明（例：`py_src/core/storage/conf.py`），
   再跑一次 `uv run python tools/docgen.py --write` 把这一页更新。
 """
 
@@ -169,8 +173,8 @@ def docstring_stats() -> tuple[int, int, list[Residue]]:
     total = 0
     holes: list[Residue] = []
     for root in DOCSTRING_ROOTS:
-        for source in sorted((ROOT / "src" / root).rglob("*.py")):
-            rel = source.relative_to(ROOT / "src").as_posix()
+        for source in sorted((PY_ROOT / root).rglob("*.py")):
+            rel = source.relative_to(PY_ROOT).as_posix()
             if any(rel.startswith(skip) for skip in _SKIPPED):
                 continue
             count = missing = 0
