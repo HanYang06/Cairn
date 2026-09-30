@@ -8,6 +8,8 @@
 #   id().字段       本行主语的 ID 字段（列名就是字段名，类型随 ID 走）
 #   id(名字).字段   指向别处的指针（只带两套凭证，列名加名字前缀）
 #   { name, from, type, doc }  存储层观测（store）/ 程序给出（prog）/ 派生（digest）
+#
+# 本次更换形状淘汰的表: notediff
 
 - name: block
   doc: "存储单元：身份壳加自包含属性。"
@@ -107,24 +109,6 @@
 
 - name: noteasset
   doc: "一份媒体。"
-  tier: derived
-  owner: note
-  rebuild_from: "载体记录头（设计篇 §8.5 档一）"
-  columns:
-    - id().name
-    - id().value_uuid
-    - id().value_hash
-    - id().birth_time
-    - id().in_hub
-    - id().in_hub_pack
-    - id().in_pack_slot
-    - id(body).value_uuid
-    - id(body).value_hash
-    - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }
-  primary_key: [value_uuid]
-
-- name: notediff
-  doc: "一篇笔记的变更链。"
   tier: derived
   owner: note
   rebuild_from: "载体记录头（设计篇 §8.5 档一）"

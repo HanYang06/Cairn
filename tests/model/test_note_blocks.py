@@ -17,18 +17,14 @@ from core.storage.tablegen import kernel_declarations
 from model.note.types import (
     CanvasLink,
     Chunk,
-    DiffStep,
     Figure,
-    LineAction,
     NoteAsset,
     NoteAssetBody,
     NoteCanvas,
     NoteCanvasBody,
     NoteData,
-    NoteDiffBody,
     NoteGroup,
     NoteGroupBody,
-    NoteLine,
     NoteTag,
     NoteTagTable,
     PlacedShape,
@@ -37,7 +33,7 @@ from model.note.types import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-_NOTE_TABLES = ("noteasset", "notecanvas", "notedata", "notediff", "notegroup", "notetag")
+_NOTE_TABLES = ("noteasset", "notecanvas", "notedata", "notegroup", "notetag")
 
 
 # ---- 登记与建表 ----
@@ -202,43 +198,6 @@ def test_an_asset_body_is_a_chunk_manifest_and_its_size_is_summed():
     assert body.size == 50
     assert [chunk.id for chunk in body.chunks] == ["c1", "c2", "c3"]
     assert NoteAssetBody().size == 0
-
-
-# ---- 变更日志 ----
-
-
-def test_a_diff_step_records_actions_only_never_content():
-    """一步只记 `(行 id, 动作)`——**内容一个字节都不写**：按行 id 回正文里取。
-
-    这就是"diff 不是文档"在结构上的落点；把内容写进来，它就成了正文的副本。
-    """
-    step = DiffStep(
-        hash="h1",
-        lines=[("line-1", LineAction.CHANGE), ("line-2", LineAction.INSERT)],
-    )
-    assert step.lines[0] == ("line-1", LineAction.CHANGE)
-    assert step.lines[1][1] is LineAction.INSERT
-    assert not hasattr(step.lines[0][1], "data")
-
-
-def test_a_diff_chain_is_ordered_and_lookup_is_by_hash():
-    """链是有序的若干步；按哈希取一步——哈希的用处就是这条连续性。"""
-    first = DiffStep(hash="h1", lines=[("line-1", LineAction.INSERT)])
-    second = DiffStep(hash="h2", lines=[("line-1", LineAction.CHANGE)])
-    body = NoteDiffBody(steps=[first, second])
-    assert len(body) == 2
-    assert [step.hash for step in body.steps] == ["h1", "h2"]
-    assert body.step("h2") is second
-    assert body.step("没有这一步") is None
-    assert NoteDiffBody().steps == []
-
-
-def test_a_line_deleted_in_a_step_leaves_only_its_id():
-    """删除形式只剩 ID：那一行已经不在正文里了，故内容无从可写。"""
-    line = NoteLine(data="要删的行")
-    step = DiffStep(hash="h1", lines=[(line.id, LineAction.DELETE)])
-    assert step.lines[0][0] == line.id
-    assert step.lines[0][1] is LineAction.DELETE
 
 
 # ---- 画板 ----

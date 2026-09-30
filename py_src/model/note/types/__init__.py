@@ -6,11 +6,13 @@
 前半是**载荷内的结构**——它们不登记、不建表，只活在各自载体的载荷里，随载荷一起重建；
 后半是**继承 `Block` 的落盘载体**——它们**一写就登记、开库即建表**，
 故本模块被 import 的那一刻，``notedata`` / ``notetag`` / ``notegroup`` /
-``noteasset`` / ``notediff`` / ``notecanvas`` 几张表就进了登记表。
+``noteasset`` / ``notecanvas`` 几张表就进了登记表。
 
-容器选型有一条规矩：**变长的用列表**（行、区间、步、分片、图），**定长的用元组**
-（`(start, end, style)`、`(行 id, 动作)`、`(操作, 坐标)`）；结构整体**默认不冻结**——
+容器选型有一条规矩：**变长的用列表**（行、区间、分片、图），**定长的用元组**
+（`(start, end, style)`、`(操作, 坐标)`）；结构整体**默认不冻结**——
 盘上是追加写、旧字节不动，内存里冻结换不来好处，只会逼着每次编辑整份复制。
+
+**变更记录（diff）不在这一层**：它整体**推迟成预留**，等真有调用方再设计（见 `progress.md`）。
 """
 
 from __future__ import annotations
@@ -18,9 +20,8 @@ from __future__ import annotations
 from model.note.types.asset import Chunk, NoteAsset, NoteAssetBody
 from model.note.types.body import NoteBody
 from model.note.types.canvas import CanvasLink, Figure, NoteCanvas, NoteCanvasBody, PlacedShape
-from model.note.types.diff import DiffStep, NoteDiff, NoteDiffBody
 from model.note.types.group import NoteGroup, NoteGroupBody
-from model.note.types.kinds import REFERENCE_TABLES, LineAction, LineKind, reference_table
+from model.note.types.kinds import REFERENCE_TABLES, LineKind, reference_table
 from model.note.types.line import (
     Code,
     Heading,
@@ -40,10 +41,8 @@ __all__ = [
     "CanvasLink",
     "Chunk",
     "Code",
-    "DiffStep",
     "Figure",
     "Heading",
-    "LineAction",
     "LineData",
     "LineKind",
     "Link",
@@ -54,8 +53,6 @@ __all__ = [
     "NoteCanvas",
     "NoteCanvasBody",
     "NoteData",
-    "NoteDiff",
-    "NoteDiffBody",
     "NoteGroup",
     "NoteGroupBody",
     "NoteLine",

@@ -57,8 +57,11 @@ CATALOG_FILENAME = "catalog.db"
 LOGGER_NAME = "cairn.kernel"
 """内核日志记录器名：统一日志的入口。"""
 
-SUPERSEDED_TABLES: tuple[str, ...] = ("record",)
-"""更换形状时淘汰的旧表：`record` 单表在 2026-09-30 拆成 `block` / `body` 两张。
+SUPERSEDED_TABLES: tuple[str, ...] = ("record", "notediff")
+"""更换形状时淘汰的旧表。
+
+- `record`：单表在 2026-09-30 拆成 `block` / `body` 两张；
+- `notediff`：笔记的变更记录整体**推迟成预留**（2026-10-01，零调用方），那张表随之淘汰。
 
 写在代码里、名字点明，是为了让"淘汰哪张表"这一动作可见——它不是猜出来的，
 而是在这里被人写下的。声明文件里没有这张表时它是空操作。

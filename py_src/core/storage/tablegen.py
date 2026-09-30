@@ -170,7 +170,10 @@ def sync(
     kept, removed_here = _prune(_surviving(path, found), pruned)
     fresh, _removed_fresh = _prune(kernel_declarations(registry), pruned)
     merged, changed = _merge(kept, fresh, replace=replace)
+    # `found` 先记上：**淘汰一张表本身就是一次改动**。漏了它的话，本轮若恰好没有
+    # 新增表与列，报告就是空的，于是文件不重写、点名的表静默留着（已实测发生过）。
     report = (
+        *(f"淘汰表: {name}" for name in found),
         *changed,
         *(f"淘汰列: {name}" for name in dict.fromkeys(removed_here)),
     )

@@ -18,7 +18,6 @@ from model.note.types import (
     REFERENCE_TABLES,
     Code,
     Heading,
-    LineAction,
     LineKind,
     Link,
     ListItem,
@@ -46,11 +45,6 @@ def test_line_kind_values_are_short_names_without_prefix():
         "canvas",
         "note",
     }
-
-
-def test_line_action_has_exactly_the_three_forms_of_a_change():
-    """正文的变更只有三种形式：新增 / 修改 / 删除。"""
-    assert {action.value for action in LineAction} == {"insert", "change", "delete"}
 
 
 def test_reference_tables_cover_only_the_kinds_with_one_target():

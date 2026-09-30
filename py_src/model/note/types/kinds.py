@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ["REFERENCE_TABLES", "LineAction", "LineKind", "reference_table"]
+__all__ = ["REFERENCE_TABLES", "LineKind", "reference_table"]
 
 
 class LineKind(StrEnum):
@@ -55,22 +55,6 @@ class LineKind(StrEnum):
 
     NOTE = "note"
     """嵌入的笔记：`data` 是 `Ref`，装笔记 ID。"""
-
-
-class LineAction(StrEnum):
-    """正文变更的**三种形式**：新增 / 修改 / 删除。
-
-    变更记录只记"行 ID + 一个动作"，**不写内容**——内容按行 ID 回当前正文里取。
-    """
-
-    INSERT = "insert"
-    """新增：这一行是这一步加进来的（内容与位置都在当前正文里）。"""
-
-    CHANGE = "change"
-    """修改：这一行的内容在这一步变了。"""
-
-    DELETE = "delete"
-    """删除：这一行在这一步被去掉（它已不在正文里，故只剩 ID）。"""
 
 
 REFERENCE_TABLES: Mapping[LineKind, str] = MappingProxyType(

@@ -223,3 +223,26 @@ def test_pruning_a_primary_key_column_is_refused(tmp_path: Path):
 
     with pytest.raises(TableDeclarationError):
         tablegen.sync(file, prune_columns={"block": ["value_uuid"]})
+
+
+def test_sync_drops_a_named_table_even_when_nothing_else_changes(tmp_path: Path):
+    """**淘汰一张表本身就是一次改动**：本轮没有新增表与列，文件也必须重写。
+
+    这条曾经漏报：报告里只记"新增"与"淘汰列"，点名的表被去掉却当成没变化，
+    于是文件原封不动、淘汰静默不发生（实测：`notediff` 明明点了名却留在文件里）。
+
+    `replace` 点的是**已不在代码里**的表（文件里那张是上一版留下的），故下面先手写一张。
+    """
+    file = tmp_path / "tables.yaml"
+    tablegen.sync(file)
+    file.write_text(
+        file.read_text(encoding="utf-8")
+        + "\n- name: legacy\n  tier: derived\n  owner: core\n  rebuild_from: 上一版留下的\n"
+        "  columns:\n    - id().name\n  primary_key: [name]\n",
+        encoding="utf-8",
+    )
+
+    report = tablegen.sync(file, replace=("legacy",))
+
+    assert "淘汰表: legacy" in report
+    assert "legacy" not in {table.name for table in load_tables(file)}
