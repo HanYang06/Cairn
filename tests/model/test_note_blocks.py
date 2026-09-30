@@ -15,11 +15,15 @@ from core.storage.format.block import block_attrs
 from core.storage.registry import REGISTRY
 from core.storage.tablegen import kernel_declarations
 from model.note.types import (
+    CanvasLink,
     Chunk,
     DiffStep,
+    Figure,
     LineContent,
     NoteAsset,
     NoteAssetBody,
+    NoteCanvas,
+    NoteCanvasBody,
     NoteData,
     NoteDiffBody,
     NoteGroup,
@@ -27,18 +31,19 @@ from model.note.types import (
     NoteLine,
     NoteTag,
     NoteTagTable,
+    PlacedShape,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-_NOTE_TABLES = ("noteasset", "notedata", "notediff", "notegroup", "notetag")
+_NOTE_TABLES = ("noteasset", "notecanvas", "notedata", "notediff", "notegroup", "notetag")
 
 
 # ---- 登记与建表 ----
 
 
-def test_the_three_carriers_register_themselves_under_note_prefixed_tables():
+def test_the_carriers_register_themselves_under_note_prefixed_tables():
     """继承即登记；表名带 note 前缀——领域专属的类型以域名开头，project 那边同名也不相干。"""
     tables = {decl.table for decl in REGISTRY.declarations()}
     assert set(_NOTE_TABLES) <= tables
@@ -224,3 +229,45 @@ def test_a_diff_keeps_the_new_content_of_a_real_line():
     changed = NoteLine(id=line.id, data="改后")
     step = DiffStep(hash="h1", lines=((line.id, changed.content),))
     assert step.lines[0][1].data == "改后"
+
+
+# ---- 画板 ----
+
+
+def test_a_canvas_keeps_shapes_by_identifier_and_in_painting_order():
+    """图编号 → 那一枚图；顺序就是画的先后。"""
+    body = NoteCanvasBody(
+        shapes=(
+            ("1", PlacedShape(figure=Figure(kind="rect", path=(("M", (0.0, 0.0)),)))),
+            ("2", PlacedShape(figure=Figure(kind="arrow"))),
+        ),
+    )
+    assert [key for key, _ in body.shapes] == ["1", "2"]
+    second = body.shape("2")
+    assert second is not None
+    assert second.figure.kind == "arrow"
+    assert body.shape("9") is None
+
+
+def test_a_canvas_link_is_semantic_only():
+    """连线只记语义（连哪些图 / 怎么连 / 标签 / 线型）：几何归自动布局，故不存折点。"""
+    link = CanvasLink(figures=("1", "2"), mode="折线", label="依赖", line="虚线")
+    body = NoteCanvasBody(links=(("L1", link),))
+    assert body.link("L1") == link
+    assert body.link("L2") is None
+    assert not hasattr(link, "points")
+
+
+def test_a_placed_shape_carries_the_figure_and_its_placement():
+    """一枚图 = 图 + 摆放：缩放 / 旋转 / 坐标 / 样式。"""
+    placed = PlacedShape(
+        figure=Figure(kind="bitmap", ref="asset-1"),
+        scale=2.0,
+        rotation=90.0,
+        at=(10.0, 20.0),
+        style=(("stroke", "var(--color-text)"),),
+    )
+    assert placed.figure.ref == "asset-1"
+    assert placed.at == (10.0, 20.0)
+    assert placed.style == (("stroke", "var(--color-text)"),)
+    assert NoteCanvas().body.data is None
