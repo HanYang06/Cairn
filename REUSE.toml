@@ -43,6 +43,13 @@ path = [".fileTemplates.json"]
 SPDX-FileCopyrightText = "2026 HanYang06"
 SPDX-License-Identifier = "Apache-2.0"
 
+# —— 文档里的截图（装不下内联头）——
+# 手写文档在 `docs/**/*.md`，走内联头；文档配的位图（如窗口截图）走这里。
+[[annotations]]
+path = ["docs/**/*.png", "docs/**/*.jpg", "docs/**/*.webp"]
+SPDX-FileCopyrightText = "2026 HanYang06"
+SPDX-License-Identifier = "Apache-2.0"
+
 # —— 桌面外壳工程（`app/`）：装不下内联头的那些 ——
 # 本项目的工程文件（JSON / 数据格式 / 锁文件）与自有图形资源。
 # 前端源码本身（`.tsx` / `.ts` / `.css`）与 Rust（`.rs`）走内联头，由 `scripts/spdx.py` 校验。
