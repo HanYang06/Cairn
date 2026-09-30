@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-"""离屏把壳渲染成 PNG，用于自检外观（开发工具，不参与产品）。"""
+"""离屏把壳渲染成 PNG，用于自检外观（开发工具，不参与产品）。
+
+**当前不可运行**：它依赖的 `app` 与 `ui_tools` 两层在 2026-09-29 的内核重建里被整条删除
+（见 `.agents/skills/memory/progress.md`「内核重建」）。文件留着当参考，
+待 UI 外壳重建后修回；`pyproject.toml` 的 mypy 覆盖里为它开了豁免，修回时请一并摘掉。
+"""
 
 from __future__ import annotations
 
@@ -16,14 +21,14 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from PySide6.QtGui import QFont  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
 from app import Feature  # noqa: E402
 from app.win import CairnApp  # noqa: E402
-from core import Core  # noqa: E402
+from PySide6.QtGui import QFont  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 from ui_tools.core.cardview import CardStageView  # noqa: E402
 from ui_tools.core.qt import build_window  # noqa: E402
+
+from core import Core  # noqa: E402
 
 _SAMPLES: list[tuple[str, str]] = [
     ("行身份与区间样式", "一行 = 一段。样式是叠加层，行 id 稳定，所以不拆 body、也没有下标漂移。"),

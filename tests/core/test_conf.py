@@ -1,690 +1,482 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-
-"""配置引擎：注册即事实，两个投影落盘，取值三条规则。
-
-- 带值注册（``Cfg("k", 4096)``）→ ``config`` 与 ``schema`` 两侧都出现；
-- 不带值（``Cfg("k")``）→ 只有 ``schema`` 出现，值丢了就报错（补不了）；
-- key 在但值为空 → **报错**（不猜、不自动修）；
-- 补只补缺失的键，**用户改过的值一个字都不动**。
-"""
+"""配置引擎契约：一种调用形（声明 / 取值）、引擎自组批次、单向写入、类型判据、单文件投影。"""
 
 from __future__ import annotations
 
 import json
-import logging
 import os
-import subprocess
-import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
-from core.conf import (
-    ConfEngine,
-    ConfigConflictError,
+from core.conf import Config
+from core.conf.types import JsonValue, check_type, spec_of
+from core.exc import (
+    ConfigDuplicateError,
     ConfigFileError,
     ConfigKeyError,
-    ConfigValueError,
-    Folder,
+    ConfigReferenceError,
+    ConfigTypeError,
 )
-from core.conf import conf as engine_conf
-from core.conf.params import conf as kernel_conf
-from core.conf.schema import type_schema
-from core.storage import CarrierFile, Vault
-from core.storage.conf import conf as storage_conf
-from core.types import CairnError
-from core.types.cfg import Cfg, clear, item, items, register
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-# 本文件之外的真声明（内核 / 存储那几组）：每例收尾要放回去，别让它被清掉。
-_REAL_ITEMS = tuple(items())
-
-_REAL = "core.demo.pack.max_blocks"
-_VERSION = "core.demo.catalog.version"
-_LEVEL = "core.demo.log.level"
-_EMPTY_OK = "core.demo.pack.empty_ok"
-_REF = "core.demo.tables"
-
-# 从 Python 3.14 起，模块级注解的求值不再受 `from __future__` 影响。
-_REAL_DEFAULT = 4096
-
-
-def _declared_fields() -> dict[str, object]:
-    """每次现造声明对象：描述符带 ``_resolved`` 缓存，跨用例复用会串味。"""
-    return {
-        "max_blocks": Cfg(_REAL, _REAL_DEFAULT, doc="单个载体最多装多少块"),
-        "version": Cfg(_VERSION, doc="格式版本：只登记，不给值"),
-        "level": Cfg(_LEVEL, "WARNING"),
-        "empty_ok": Cfg(_EMPTY_OK, 7, empty_ok=True),
-        "tables": Cfg(_REF, item_type=list, file_type="yaml"),
-    }
-
-
-@pytest.fixture(autouse=True)
-def _isolated_registry() -> Iterator[None]:
-    """测试自己管登记表：跑完清干净，再**把真声明放回去**（别让别的用例失明）。"""
-    yield
-    clear()
-    for declared_item in _REAL_ITEMS:
-        register(declared_item)
 
 
 @pytest.fixture
-def declared() -> type:
-    """每个用例重新声明一遍：登记表由用例清干净，声明得跟着重来。"""
-    fields = _declared_fields()
-    return type(
-        "DemoCfg",
-        (),
-        {"__annotations__": dict.fromkeys(fields, Cfg), **fields},
-    )
+def root(tmp_path: Path) -> Path:
+    """一个空的配置根：值文件与词表都落在它下面。"""
+    return tmp_path / "config"
 
 
 @pytest.fixture
-def engine(tmp_path: Path) -> ConfEngine:
-    """隔离的引擎：根在临时目录，不碰仓库里的真配置。"""
-    return ConfEngine(tmp_path)
+def conf(root: Path) -> Config:
+    """一份独立的配置面（不碰进程级那个 `conf`，免得用例互相污染）。"""
+    return Config(root=root)
 
 
-def _value_file(engine: ConfEngine) -> Path:
-    """值文件：``config/<hub>/<包树>/<源文件名>.<type>``。"""
-    return engine.root / "config" / engine.hub / "tests" / "core" / "test_conf.json"
+def values(conf: Config) -> dict[str, object]:
+    """读回值文件里的键与值（去掉开头的 `$schema` 那一行）。"""
+    data: dict[str, object] = json.loads(conf.settings_path().read_text(encoding="utf-8"))
+    data.pop("$schema", None)
+    return data
 
 
-def _schema_file(engine: ConfEngine) -> Path:
-    """词表文件：与值文件同构（只换根目录、固定 ``.json``）。"""
-    return engine.root / "schema" / engine.hub / "tests" / "core" / "test_conf.json"
+# ---- 一种调用形：声明与取值 ---- #
 
 
-def _write(engine: ConfEngine, data: dict[str, object]) -> None:
-    path = _value_file(engine)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    engine.reload()
+def test_declare_then_read_back(conf: Config):
+    """声明即拿到默认值；同一形状的取值拿到同一个值。"""
+    assert conf("storage.pack.slot_bytes", 65536, type=int) == 65536
+    assert conf("storage.pack.slot_bytes") == 65536
 
 
-def _ref_file(engine: ConfEngine, name: str = "tables.yaml") -> Path:
-    """被引用文件：与值文件**同目录**（默认引用名就是同层级的那一个）。"""
-    return _value_file(engine).parent / name
+def test_declaration_without_default_is_read_only(conf: Config):
+    """只给 `type` / `doc` 是在声明"没有默认值"的项：不补进文件，读不到就报错。"""
+    conf("core.mode", type=str, doc="运行模式")
+
+    with pytest.raises(ConfigKeyError):
+        conf("core.mode")
+    assert conf.plan() == ()
 
 
-# ---- 两个投影 ----
+def test_reading_an_undeclared_key_is_an_error(conf: Config):
+    """没声明的键读不出来：不猜、不自动造。"""
+    with pytest.raises(ConfigKeyError):
+        conf("nobody.knows")
 
 
-@pytest.mark.usefixtures("declared")
-def test_sync_writes_both_sides(engine: ConfEngine) -> None:
-    """带值注册 → 两侧都有；不带值 → 只有词表有。"""
-    engine.sync()
-    assert _value_file(engine).is_file()
-    assert _schema_file(engine).is_file()
-    values = json.loads(_value_file(engine).read_text(encoding="utf-8"))
-    schema = json.loads(_schema_file(engine).read_text(encoding="utf-8"))
-    assert values[_REAL] == _REAL_DEFAULT
-    assert _VERSION not in values  # 没默认值 → 值文件里不呈现
-    assert _VERSION in schema["properties"]  # 但词表里承认它
-    assert schema["properties"][_REAL]["type"] == "integer"
-    assert schema["properties"][_REAL]["description"] == "单个载体最多装多少块"
-    assert schema["properties"][_VERSION]["x-cairn-fillable"] is False
+def test_values_of_every_json_type(conf: Config):
+    """六种 JSON 值各走一遍：写出去、读回来、类型不变。"""
+    conf("a.int", 1)
+    conf("a.float", 1.5)
+    conf("a.bool", True)
+    conf("a.str", "文字")
+    conf("a.list", [1, 2], type=list[int])
+    conf("a.dict", {"k": "v"}, type=dict[str, str])
+    conf("a.null", None)
+    conf.sync()
+
+    assert conf("a.int") == 1
+    assert conf("a.float") == 1.5
+    assert conf("a.bool") is True
+    assert conf("a.str") == "文字"
+    assert conf("a.list") == [1, 2]
+    assert conf("a.dict") == {"k": "v"}
+    assert conf("a.null") is None
 
 
-@pytest.mark.usefixtures("declared")
-def test_value_file_points_at_its_schema(engine: ConfEngine) -> None:
-    """值文件顶部的 ``$schema`` 指向对应词表（IDE 提示的入口）。"""
-    engine.sync()
-    values = json.loads(_value_file(engine).read_text(encoding="utf-8"))
-    assert (
-        values["$schema"].replace("\\", "/").endswith("schema/settings/tests/core/test_conf.json")
+def test_pending_value_is_visible_before_flush(conf: Config):
+    """写了立刻读必须拿到刚写的值：批内可见，不然用法自相矛盾。"""
+    conf("a.b", 1)
+
+    assert conf("a.b") == 1
+    assert not conf.settings_path().exists()
+
+
+# ---- 批：写只记一笔，落盘一次 ---- #
+
+
+def test_dense_writes_flush_once(conf: Config):
+    """密集调用只落一次盘：默认通路不即时，`sync()` 才写文件。"""
+    for index in range(20):
+        conf(f"a.k{index}", index)
+
+    assert not conf.settings_path().exists()
+    result = conf.sync()
+    assert len(result.added) == 20
+    assert len(values(conf)) == 20
+
+
+def test_sync_is_idempotent_and_does_not_touch_an_unchanged_file(conf: Config):
+    """第二次落盘没有内容变化：不重写文件（时间戳也不动）。"""
+    conf("a.b", 1)
+    conf.sync()
+    stamp = conf.settings_path().stat().st_mtime_ns
+
+    result = conf.sync()
+
+    assert result.added == ()
+    assert result.changed == ()
+    assert conf.settings_path().stat().st_mtime_ns == stamp
+
+
+def test_plan_reports_only_real_changes(conf: Config):
+    """`plan()` 按内容判：写进文件之后就没有待落盘的变化了。"""
+    conf("a.b", 1)
+    assert conf.plan() == ("a.b",)
+
+    conf.sync()
+    assert conf.plan() == ()
+
+
+def test_sync_keeps_a_key_that_is_only_scanned(root: Path):
+    """扫描登记不等于本会话声明：没 import 到声明模块的键，值文件里那份要留住。
+
+    `reduce()` 只说明"全仓有这一条声明"，本会话手里并没有可写的值；若把它计入引擎的账，
+    `_payload` 就会把它从用户段剔除，`_flush` 随即当成"应删除"清掉用户写下的那一行。
+    """
+    root.mkdir(parents=True)
+    settings = root / "settings.json"
+    settings.write_text(
+        json.dumps({"$schema": "schema/settings.json", "old.key": 1}) + "\n", encoding="utf-8"
     )
+    fresh = Config(root=root)
+    fresh.reduce({"old.key": "core.somewhere"})
+
+    fresh.sync()
+
+    assert values(fresh) == {"old.key": 1}
 
 
-@pytest.mark.usefixtures("declared")
-def test_root_schema_collects_everything(engine: ConfEngine) -> None:
-    engine.sync()
-    root = json.loads(engine.index_path().read_text(encoding="utf-8"))
-    assert _REAL in root["properties"]
-    assert root["additionalProperties"] is False
-
-
-# ---- 取值三条 ----
-
-
-@pytest.mark.usefixtures("declared")
-def test_get_returns_file_value_then_default(engine: ConfEngine) -> None:
-    engine.sync()
-    assert engine.get(_REAL) == _REAL_DEFAULT
-    _write(engine, {_REAL: 512})
-    assert engine.get(_REAL) == 512  # 文件说了算
-
-
-@pytest.mark.usefixtures("declared")
-def test_missing_key_with_default_is_refilled(engine: ConfEngine) -> None:
-    """key 丢了但有默认值 → 补回来（文件删了也能重展开）。"""
-    engine.sync()
-    _write(engine, {})
-    assert engine.get(_REAL) == _REAL_DEFAULT
-    values = json.loads(_value_file(engine).read_text(encoding="utf-8"))
-    assert values[_REAL] == _REAL_DEFAULT  # 真写回文件了
-
-
-@pytest.mark.usefixtures("declared")
-def test_missing_key_without_default_raises(engine: ConfEngine) -> None:
-    """key 丢了且没默认值 → 报错（补不了）。"""
-    engine.sync()
-    with pytest.raises(ConfigKeyError, match="没有默认值"):
-        engine.get(_VERSION)
-
-
-@pytest.mark.usefixtures("declared")
-def test_empty_value_raises(engine: ConfEngine) -> None:
-    """key 在、值空 → 报错，不自动修。"""
-    engine.sync()
-    _write(engine, {_REAL: None})
-    with pytest.raises(ConfigValueError, match="值为空"):
-        engine.get(_REAL)
-
-
-@pytest.mark.usefixtures("declared")
-def test_empty_ok_treats_empty_as_default(engine: ConfEngine) -> None:
-    """``empty_ok=True``（增强写法）：空值也按默认处理。"""
-    engine.sync()
-    for blank in (None, "", []):
-        _write(engine, {_EMPTY_OK: blank})
-        assert engine.get(_EMPTY_OK) == 7
-
-
-# ---- 文件引用（值是一行引用名，本体在别处） ----
-
-
-@pytest.mark.usefixtures("declared")
-def test_reference_is_written_as_a_same_level_name(engine: ConfEngine) -> None:
-    """值文件里写的是一行**同层级引用名**（像 import），不是仓内全路径。"""
-    engine.sync()
-    values = json.loads(_value_file(engine).read_text(encoding="utf-8"))
-    assert values[_REF] == "tables.yaml"
-    assert "\\" not in values[_REF]
-
-
-@pytest.mark.usefixtures("declared")
-def test_reference_schema_says_string(engine: ConfEngine) -> None:
-    """词表按**字符串**出（值确实是字符串），内容类型另记一处。
-
-    照内容类型（数组）出词表，值文件顶部的 ``$schema`` 会当场把它标成错的。
-    """
-    engine.sync()
-    schema = json.loads(_schema_file(engine).read_text(encoding="utf-8"))
-    declared = schema["properties"][_REF]
-    assert declared["type"] == "string"
-    assert declared["default"] == "tables.yaml"
-    assert declared["x-cairn-file-type"] == "yaml"
-
-
-@pytest.mark.usefixtures("declared")
-def test_reference_reads_the_referenced_file(engine: ConfEngine) -> None:
-    """读到的值 = 被引用文件的内容（**值就是这个文件**）。"""
-    engine.sync()
-    _ref_file(engine).write_text("- name: record\n", encoding="utf-8")
-    engine.reload()
-    assert engine.get(_REF) == [{"name": "record"}]
-
-
-@pytest.mark.usefixtures("declared")
-def test_reference_resolves_against_the_value_file(engine: ConfEngine) -> None:
-    """引用相对**值文件自己**解析：指向别处只改引用名，不改任何路径推算。"""
-    engine.sync()
-    shared = _value_file(engine).parent.parent / "shared"
-    shared.mkdir(parents=True, exist_ok=True)
-    (shared / "tables.yaml").write_text("- name: edge\n", encoding="utf-8")
-    engine.set(_REF, "../shared/tables.yaml")
-    assert engine.get(_REF) == [{"name": "edge"}]
-
-
-@pytest.mark.usefixtures("declared")
-def test_edited_reference_is_not_overwritten(engine: ConfEngine) -> None:
-    """值文件里那一行是事实、不是装饰：改过之后补缺不得把它改回默认。"""
-    engine.sync()
-    engine.set(_REF, "../shared/tables.yaml")
-    engine.sync()
-    engine.sync()
-    values = json.loads(_value_file(engine).read_text(encoding="utf-8"))
-    assert values[_REF] == "../shared/tables.yaml"
-
-
-@pytest.mark.usefixtures("declared")
-def test_absolute_reference_is_refused(engine: ConfEngine) -> None:
-    """绝对路径绑死本机目录 → 拒收；**写入侧就拒**，手改文件落到读取侧也拒。"""
-    engine.sync()
-    absolute = str(_ref_file(engine))
-
-    with pytest.raises(ConfigValueError, match="相对引用"):
-        engine.set(_REF, absolute)
-
-    _write(engine, {_REF: absolute})  # 模拟手改值文件：读取侧同样不放过
-    with pytest.raises(ConfigValueError, match="相对引用"):
-        engine.get(_REF)
-
-
-@pytest.mark.usefixtures("declared")
-def test_reference_may_not_escape_the_repo(engine: ConfEngine) -> None:
-    """`../` 允许（同仓跨目录引用是合理用途），但**不许跑出仓根**。
-
-    跑出去就不是"跟仓走"了：读到的内容不再属于这个仓，路径也随 checkout 位置漂移。
-    """
-    outside = engine.root.parent / "outside.yaml"
-    outside.write_text("- name: 仓外\n", encoding="utf-8")
-    engine.sync()
-    escape = os.path.relpath(outside, _value_file(engine).parent).replace("\\", "/")
-
-    with pytest.raises(ConfigValueError, match="跑出仓根"):
-        engine.set(_REF, escape)
-
-    _write(engine, {_REF: escape})
-    with pytest.raises(ConfigValueError, match="跑出仓根"):
-        engine.get(_REF)
-
-
-@pytest.mark.usefixtures("declared")
-def test_set_refuses_a_non_reference_value(engine: ConfEngine) -> None:
-    """写入口与读入口同一口径：这一类只能写引用名。
-
-    否则会落成一份"写得进、读不出"的配置——写的时候不拦、读的时候才报，最难查。
-    """
-    engine.sync()
-    _ref_file(engine).write_text("- name: record\n", encoding="utf-8")
-
-    for bad in ([{"name": "record"}], 7, "   "):
-        with pytest.raises(ConfigValueError, match="引用名"):
-            engine.set(_REF, bad)
-
-    engine.set(_REF, "tables.yaml")  # 合法引用名照旧可写
-    assert engine.get(_REF) == [{"name": "record"}]
-
-
-@pytest.mark.usefixtures("declared")
-def test_reference_must_be_a_string(engine: ConfEngine) -> None:
-    """引用名写成数组 / 数字 → 在取值口报清楚，不把类型错误带到读文件处。"""
-    engine.sync()
-    _write(engine, {_REF: ["tables.yaml"]})
-    with pytest.raises(ConfigValueError, match="引用名"):
-        engine.get(_REF)
-
-
-@pytest.mark.usefixtures("declared")
-def test_missing_referenced_file_raises(engine: ConfEngine) -> None:
-    """文件缺失即报错，不退回默认——"写坏了"与"没写"必须可分。"""
-    engine.sync()
-    with pytest.raises(ConfigValueError, match="不存在"):
-        engine.get(_REF)
-
-
-@pytest.mark.usefixtures("declared")
-def test_broken_referenced_file_raises(engine: ConfEngine) -> None:
-    engine.sync()
-    _ref_file(engine).write_text("- [ 不是 yaml\n", encoding="utf-8")
-    engine.reload()
-    with pytest.raises(ConfigValueError, match="解析失败"):
-        engine.get(_REF)
-
-
-def test_file_reference_rejects_a_default() -> None:
-    """带值注册与文件引用互斥：值不设两处。"""
-    with pytest.raises(ValueError, match="不该带默认值"):
-        Cfg("core.demo.tables.both", [1], item_type=list, file_type="yaml")
-
-
-# ---- 写与维护 ----
-
-
-@pytest.mark.usefixtures("declared")
-def test_user_value_is_never_overwritten(engine: ConfEngine) -> None:
-    """补只补缺失的键；用户改过的值一个字都不动。"""
-    engine.sync()
-    engine.set(_REAL, 128)
-    engine.sync()
-    engine.sync()
-    assert engine.get(_REAL) == 128
-
-
-@pytest.mark.usefixtures("declared")
-def test_set_unknown_key_raises(engine: ConfEngine) -> None:
-    engine.sync()
-    with pytest.raises(ConfigKeyError, match="未登记"):
-        engine.set("core.demo.nope", 1)
-
-
-def test_attribute_access_reports_engine_state(
-    engine: ConfEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """属性访问 = 引擎的判据：引擎说读到什么，属性就给什么。
-
-    真值路径由 `test_get_returns_file_value_then_default` 等用例覆盖；这里只钉住
-    "描述符确实把判据交给引擎"——把引擎换成隔离的那份，写什么就读到什么。
-    """
-    monkeypatch.setattr("core.conf.engine.conf", engine)
-    holder = type(
-        "Holder",
-        (),
-        {"__annotations__": {"max_blocks": Cfg}, "max_blocks": Cfg(_REAL, _REAL_DEFAULT)},
+def test_declared_key_without_default_keeps_its_file_value(root: Path):
+    """只声明、没给默认值的键：值只能由文件给，落盘时不得把它当"应删除"清掉。"""
+    root.mkdir(parents=True)
+    settings = root / "settings.json"
+    settings.write_text(
+        json.dumps({"$schema": "schema/settings.json", "core.mode": "strict"}) + "\n",
+        encoding="utf-8",
     )
-    engine.set(_REAL, 64)
-    assert holder.max_blocks == 64
-    engine.set(_REAL, _REAL_DEFAULT)
-    assert holder.max_blocks == _REAL_DEFAULT
+    fresh = Config(root=root)
+    fresh("core.mode", type=str, doc="运行模式")
+
+    assert fresh("core.mode") == "strict"
+    fresh.sync()
+
+    assert values(fresh) == {"core.mode": "strict"}
 
 
-@pytest.mark.usefixtures("declared")
-def test_sync_is_idempotent(engine: ConfEngine) -> None:
-    """同步是投影：重复跑不产生新文件、不改内容、第二次不再写。"""
-    first = sorted(path for path, _touched in engine.sync())
-    before = {path: path.read_bytes() for path in first}
-    second = sorted(path for path, _touched in engine.sync())
-    after = {path: path.read_bytes() for path in second}
-    assert first == second
-    assert before == after
-    assert all(not touched for _path, touched in engine.sync())
+# ---- 写入方向：代码 → 文件，单向 ---- #
 
 
-@pytest.mark.usefixtures("declared")
-def test_broken_file_raises(engine: ConfEngine) -> None:
-    engine.sync()
-    _value_file(engine).write_text("{ 不是 json", encoding="utf-8")
-    engine.reload()
-    with pytest.raises(ConfigFileError, match="不可读"):
-        engine.get(_REAL)
+def test_second_assignment_in_code_is_refused(conf: Config):
+    """同一键再赋值即报错，报错里带上先声明那一处（模块 + 文件 + 行号）。"""
+    conf("a.b", 1)
+
+    with pytest.raises(ConfigDuplicateError) as caught:
+        conf("a.b", 2)
+
+    assert "test_conf.py" in str(caught.value)
 
 
-# ---- 重名检查（不覆盖别人的文件） ----
+def test_duplicate_inside_one_batch_is_refused(conf: Config):
+    """一批里写两次同一个键同样报错：判据含待写项，不看落盘了没有。"""
+    conf("a.b", 1)
+
+    with pytest.raises(ConfigDuplicateError):
+        conf("a.b", 2)
 
 
-@pytest.mark.usefixtures("declared")
-def test_foreign_file_is_refused_not_overwritten(engine: ConfEngine) -> None:
-    """值文件位置上压着一份别人的文件（无 ``$schema``、也没有我们的键）→ 拒写。"""
-    path = _value_file(engine)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"别人的键": 1}', encoding="utf-8")
-    engine.reload()
-    found = engine.conflicts()
-    assert any("重名" not in line and str(path) in line for line in found)
-    with pytest.raises(ConfigConflictError, match="重名"):
-        engine.sync()
-    assert json.loads(path.read_text(encoding="utf-8")) == {"别人的键": 1}  # 一个字没动
+def test_value_in_the_file_does_not_block_a_declaration(conf: Config, root: Path):
+    """文件里有这个键不构成"不许再声明"：删了值文件的键之后再补回来是常态。
 
-
-@pytest.mark.usefixtures("declared")
-def test_file_pointing_elsewhere_is_refused(engine: ConfEngine) -> None:
-    """值文件带着指向**别处**的 ``$schema`` → 拒写（那是别人的词表）。"""
-    path = _value_file(engine)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"$schema": "../../schema/other.json"}', encoding="utf-8")
-    engine.reload()
-    assert any("$schema 指向别处" in line for line in engine.conflicts())
-    with pytest.raises(ConfigConflictError):
-        engine.sync()
-
-
-def test_repo_projections_match_declarations() -> None:
-    """端到端：仓库里已提交的投影与声明一致（`gen_conf.py --check` 的等价断言）。"""
-    root = Path(__file__).resolve().parents[2]
-    command = [sys.executable, str(root / "tools" / "gen_conf.py"), "--check"]
-    done = subprocess.run(
-        command,
-        cwd=root,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",  # 工具按 UTF-8 打印中文；别让子进程按活动代码页解码
-        check=False,
+    "已经有值"的判据是**本会话声明过**，不是"文件里有这一行"——否则补写会被自己的口径挡住。
+    """
+    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
+    conf.settings_path().write_text(
+        json.dumps({"$schema": "schema/settings.json", "a.b": 99}) + "\n", encoding="utf-8"
     )
-    assert done.returncode == 0, done.stdout + done.stderr
+    fresh = Config(root=root)
+
+    assert fresh("a.b", 1) == 1
+    assert fresh("a.b") == 1
 
 
-# ---- 接线：声明的默认值真的生效 ----
+def test_redeclaring_in_the_same_session_is_refused_by_the_ledger(conf: Config):
+    """同一会话里第二次声明同一个键：登记账说了算，与文件里有没有无关。"""
+    conf("a.b", 1)
+
+    with pytest.raises(ConfigDuplicateError):
+        conf("a.b", 1)
 
 
-def test_vault_takes_the_seal_line_from_config(tmp_path: Path) -> None:
-    """封口线是**策略**，每次写入按当前配置判（旧层那种"桶存一份配置"已退役）。"""
-    original = engine_conf.get("storage.pack.max_bytes")
-    try:
-        engine_conf.set("storage.pack.max_bytes", 4096)
-        with Vault.open(tmp_path / "vault") as vault:
-            assert vault.bucket("main").pack_max_bytes == 4096
-    finally:
-        engine_conf.set("storage.pack.max_bytes", original)
+def test_force_overwrites(conf: Config):
+    """强写：`force=True` 是唯一能顶掉已有值的通路。"""
+    conf("a.b", 1)
+
+    assert conf("a.b", 2, force=True) == 2
+    assert conf("a.b") == 2
+    conf.sync()
+    assert values(conf)["a.b"] == 2
 
 
-def test_carrier_slot_bytes_default_comes_from_declaration(tmp_path: Path) -> None:
-    """建载体时槽长向声明要；**读回时从文件头读**，不再问配置。"""
-    declared = storage_conf.pack_slot_bytes
-    carrier = CarrierFile.create(tmp_path / "pack")
-    assert carrier.layout.slot_bytes == declared
-    original = engine_conf.get("storage.pack.slot_bytes")
-    try:
-        engine_conf.set("storage.pack.slot_bytes", declared * 2)
-        # 已建载体不被新配置改写：仍按自己文件头里的槽长解释
-        assert CarrierFile.open(tmp_path / "pack").layout.slot_bytes == declared
-    finally:
-        engine_conf.set("storage.pack.slot_bytes", original)
+def test_force_still_checks_type(conf: Config):
+    """强写只放开"能不能改"，不放开类型判据。"""
+    conf("a.b", 1, type=int)
+
+    with pytest.raises(ConfigTypeError):
+        conf("a.b", 1.5, force=True)
 
 
-def test_config_decides_the_slot_bytes_of_a_new_carrier(tmp_path: Path) -> None:
-    """新建的载体按**当前**配置的槽长建（改完配置，新载体用新槽长）。"""
-    original = engine_conf.get("storage.pack.slot_bytes")
-    try:
-        engine_conf.set("storage.pack.slot_bytes", 4096)
-        with Vault.open(tmp_path / "vault") as vault:
-            carrier = vault.bucket("main").new_pack()
-            assert carrier.layout.slot_bytes == 4096
-    finally:
-        engine_conf.set("storage.pack.slot_bytes", original)
+# ---- 用户手改的文件 ----
 
 
-def test_seal_line_rejects_non_integer_value(tmp_path: Path) -> None:
-    """值文件里的整数项被改成字符串 → 在配置边界报清楚，不带进比较表达式抛 `TypeError`。"""
-    original = engine_conf.get("storage.pack.max_bytes")
-    try:
-        engine_conf.set("storage.pack.max_bytes", "1048576")
-        with Vault.open(tmp_path / "vault") as vault, pytest.raises(CairnError, match="正整数"):
-            _ = vault.bucket("main").pack_max_bytes
-    finally:
-        engine_conf.set("storage.pack.max_bytes", original)
+def test_user_edited_value_wins_and_is_not_overwritten(conf: Config, root: Path):
+    """用户改过的值永不被覆写：代码手里的默认值顶不掉文件里的改动。"""
+    conf("a.b", 1)
+    conf.sync()
+    data = values(conf)
+    data["a.b"] = 4096
+    conf.settings_path().write_text(json.dumps(data) + "\n", encoding="utf-8")
+
+    fresh = Config(root=root)
+    assert fresh("a.b") == 4096
+    assert fresh.plan() == ()
+    fresh.sync()
+    assert values(fresh)["a.b"] == 4096
 
 
-def test_slot_bytes_rejects_non_integer_value(tmp_path: Path) -> None:
-    """槽长同样在配置边界报清楚：值文件可被人改成字符串，别把 `TypeError` 留给建载体那一刻。"""
-    original = engine_conf.get("storage.pack.slot_bytes")
-    try:
-        engine_conf.set("storage.pack.slot_bytes", "65536")
-        with pytest.raises(CairnError, match="slot_bytes 必须是不小于"):
-            CarrierFile.create(tmp_path / "pack")
-    finally:
-        engine_conf.set("storage.pack.slot_bytes", original)
+def test_user_added_keys_are_kept(conf: Config, root: Path):
+    """用户自己加的键留着：引擎只补缺失的键、不删不改别人的东西。"""
+    conf("a.b", 1)
+    conf.sync()
+    data = values(conf)
+    data["user.mine"] = {"hello": "world"}
+    conf.settings_path().write_text(json.dumps(data) + "\n", encoding="utf-8")
+
+    fresh = Config(root=root)
+    assert fresh("user.mine") == {"hello": "world"}
+    fresh.sync()
+    assert values(fresh)["user.mine"] == {"hello": "world"}
 
 
-def test_kernel_log_level_is_applied() -> None:
-    """`core.log.level` 真接到 `core.*` 这族 logger 上。"""
-    assert logging.getLogger("core").level == logging.getLevelName(kernel_conf.log_level)
+def test_missing_default_is_filled_back(conf: Config, root: Path):
+    """文件里少了带默认值的键：模块一跑（声明一次）就补回来。"""
+    conf("a.b", 7)
+    conf.sync()
+    conf.settings_path().write_text(json.dumps({"$schema": "schema/settings.json"}) + "\n")
+
+    fresh = Config(root=root)
+    assert fresh("a.b", 7) == 7
+    fresh.sync()
+
+    assert values(fresh) == {"a.b": 7}
 
 
-# ---- 评审回归：投影坐标 / 计划去重 / 坏文件判定 / 描述符边界 ----
+# ---- 类型判据 ---- #
 
 
-def test_folder_of_path_matches_folder_of() -> None:
-    """由配置路径反推的 `Folder` 必须与由模块名建的那个**相等**。
+@pytest.mark.parametrize(
+    ("value", "declared", "expected"),
+    [
+        (1, float, 1.0),
+        (1.5, float, 1.5),
+        (True, bool, True),
+        ("x", str, "x"),
+        (None, type(None), None),
+    ],
+)
+def test_type_rules_that_pass(conf: Config, value: object, declared: object, expected: object):
+    """判据放行的几种：整数在浮点键上按浮点算，其余要求类型同一。"""
+    conf("a.b", value, type=declared)
 
-    `Folder` 是 frozen dataclass，`source` 参与相等性与哈希——差一层目录
-    （`src/core/core/storage/conf`）会让「按路径找回声明」静默失配，重名检查随之退化。
-    """
-    assert Folder.of_path(Path("core/storage/conf.json")) == Folder.of("core.storage.conf")
-    assert Folder.of_path(Path("core/storage/conf.json")).source == Path("src/core/storage/conf")
-
-
-@pytest.mark.usefixtures("declared")
-def test_plan_lists_each_projection_once(engine: ConfEngine) -> None:
-    """每份投影只入队一次：总词表若放在按 folder 的循环里，会被重复追加与重复写入。"""
-    paths = [path for path, _body, _stale in engine.plan()]
-
-    assert len(paths) == len(set(paths))
-    assert paths.count(engine.index_path()) == 1
-
-
-@pytest.mark.usefixtures("declared")
-def test_broken_value_file_raises_file_error_in_conflicts(engine: ConfEngine) -> None:
-    """config 侧读到坏文件 → `ConfigFileError`（「文件坏了」比「像不像自己人」更准）。"""
-    engine.sync()
-    _value_file(engine).write_text("{ 不是 json", encoding="utf-8")
-    engine.reload()
-
-    with pytest.raises(ConfigFileError, match="不可读"):
-        engine.conflicts()
+    assert conf("a.b") == expected
+    assert conf("a.b") is not True or expected is True
 
 
-@pytest.mark.usefixtures("declared")
-def test_conflicts_reports_every_problem_at_once(engine: ConfEngine) -> None:
-    """坏文件与重名同时存在时，异常信息里两者都要有（先收集、末尾统一抛）。
-
-    计划直接构造为「已过期」，模拟「算计划时还好、写盘时已坏」的时序：
-    中途 `raise` 会把这一轮已经查到的重名项一起丢掉。
-    """
-    value, schema = _value_file(engine), _schema_file(engine)
-    value.parent.mkdir(parents=True, exist_ok=True)
-    schema.parent.mkdir(parents=True, exist_ok=True)
-    plans = [(value, {"$schema": "x"}, True), (schema, {"$schema": "y"}, True)]
-    value.write_text("{ 也不是 json", encoding="utf-8")
-    schema.write_text("{ 不是 json", encoding="utf-8")
-
-    with pytest.raises(ConfigFileError, match="另有 1 处重名"):
-        engine.conflicts(plans)
+@pytest.mark.parametrize("bad", [1.5, "x", None, True])
+def test_int_key_refuses_everything_but_int(conf: Config, bad: object):
+    """`type=int` 只收整数：浮点、字符串、空值、布尔一律拦下（`True` 也不放行）。"""
+    with pytest.raises(ConfigTypeError):
+        conf("a.b", bad, type=int)
 
 
-@pytest.mark.usefixtures("declared")
-def test_set_refuses_to_overwrite_a_foreign_file(engine: ConfEngine) -> None:
-    """单值写也不得覆盖别人的文件：`set()` 与 `sync()` 同一口径（整份重写同样危险）。"""
-    path = _value_file(engine)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"别人的键": 1}', encoding="utf-8")
-    engine.reload()
-
-    with pytest.raises(ConfigConflictError, match="重名"):
-        engine.set(_REAL, 5)
-
-    assert json.loads(path.read_text(encoding="utf-8")) == {"别人的键": 1}  # 一个字没动
+def test_bool_does_not_masquerade_as_int(conf: Config):
+    """`isinstance(True, int)` 为真，但 `type=int` 配 `True` 必须拦下。"""
+    with pytest.raises(ConfigTypeError):
+        conf("a.b", True, type=int)
 
 
-@pytest.mark.usefixtures("declared")
-def test_repair_refuses_to_adopt_a_foreign_file(engine: ConfEngine) -> None:
-    """补缺失键（`_repair`）同样不得把别人的文件据为己有，也不得注入自己的 `$schema`。"""
-    path = _value_file(engine)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"别人的键": 1}', encoding="utf-8")
-    engine.reload()
+def test_widening_writes_a_float(conf: Config):
+    """整数默认值在浮点键上按浮点写出：否则读回变整数，会自己把自己拦下。"""
+    conf("a.b", 65536, type=float)
+    conf.sync()
 
-    with pytest.raises(ConfigConflictError, match="重名"):
-        engine.get(_REAL)
-
-    assert json.loads(path.read_text(encoding="utf-8")) == {"别人的键": 1}
+    assert values(conf)["a.b"] == 65536.0
+    assert isinstance(values(conf)["a.b"], float)
 
 
-@pytest.mark.usefixtures("declared")
-def test_runtime_write_does_not_drift_from_the_plan(engine: ConfEngine) -> None:
-    """运行期写值之后文件必须与 `plan()` 的期望逐字节一致（键序也要一致）。
+def test_type_is_inferred_from_the_default(conf: Config):
+    """省略 `type` 时按默认值自身的类型判。"""
+    conf("a.b", "文字")
 
-    `gen_conf.py --check` 按文本比较：写值若另排一种键序，配置会被误报成漂移。
-    """
-    engine.sync()
-    path = _value_file(engine)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    path.write_text(json.dumps({"zz.user": 1, **data}, ensure_ascii=False), encoding="utf-8")
-    engine.reload()
-
-    engine.set(_REAL, 128)
-
-    assert all(not stale for _path, _payload, stale in engine.plan())
+    assert conf("a.b") == "文字"
 
 
-def test_annotated_item_type_wins_over_the_default() -> None:
-    """文档推荐的 `Cfg[int]` 写法必须真的生效（下标即注解里的类型，不退化成按默认值推）。"""
-    field = Cfg("core.demo.typed.size", "默认值是字符串")
-    holder = type("TypedCfg", (), {"__annotations__": {"size": Cfg[int]}, "size": field})
-
-    assert holder is not None
-    declared = item("core.demo.typed.size")
-    assert declared is not None
-    assert declared.type is int
-    assert declared.default == "默认值是字符串"
+@pytest.mark.parametrize("bad_type", [bytes, set, tuple, object])
+def test_unsupported_types_are_refused_at_declaration(conf: Config, bad_type: object):
+    """落不成 JSON 的类型在声明期就拒，而不是等落盘时崩。"""
+    with pytest.raises(ConfigTypeError):
+        conf("a.b", 1, type=bad_type)
 
 
-def test_none_default_is_rejected_unless_empty_ok() -> None:
-    """空默认值（`None` / 空串 / 空容器）都会写出读不回来的配置 → 声明期即拒绝。"""
-    for blank in (None, "", [], {}, ()):
-        with pytest.raises(ValueError, match="默认值不得为空"):
-            Cfg("core.demo.pack.none_default", blank)
+def test_containers_take_one_level_of_element(conf: Config):
+    """容器类型可以带一层元素，非法元素当场拦下。"""
+    conf("a.list", [1, 2], type=list[int])
+    conf("a.dict", {"k": 1}, type=dict[str, int])
+    conf.sync()
 
-    allowed = Cfg("core.demo.pack.none_default", None, empty_ok=True)
-    assert allowed.default is None
+    assert conf("a.list") == [1, 2]
+    assert conf("a.dict") == {"k": 1}
 
-
-def test_zero_and_false_are_not_empty_defaults() -> None:
-    """`0` 与 `False` 不算空值（与引擎的空值口径一致），可以正常带值注册。"""
-    assert Cfg("core.demo.pack.zero", 0).default == 0
-
-    disabled = False
-    assert Cfg("core.demo.pack.off", disabled).default is disabled
+    with pytest.raises(ConfigTypeError):
+        conf("a.bad", [1], type=list[str])
 
 
-def test_union_annotation_reaches_the_schema() -> None:
-    """`Cfg[int | None]` 必须被采纳：按「必须是 type」筛掉会让显式声明被无声吞掉。"""
-    field = Cfg("core.demo.typed.optional", 0)
-    holder = type(
-        "OptionalCfg",
-        (),
-        {"__annotations__": {"optional": Cfg[int | None]}, "optional": field},
+def test_hand_edited_type_mismatch_is_refused_on_read(conf: Config, root: Path):
+    """人手把值改成别的类型：下一个进程一声明它就当场报错，不静默当另一个类型用。"""
+    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
+    conf.settings_path().write_text(
+        json.dumps({"$schema": "schema/settings.json", "a.b": "文字"}) + "\n", encoding="utf-8"
     )
+    fresh = Config(root=root)
 
-    assert holder is not None
-    declared = item("core.demo.typed.optional")
-    assert declared is not None
-    assert declared.type == int | None
-    assert type_schema(declared.type) == {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+    with pytest.raises(ConfigTypeError):
+        fresh("a.b", 1, type=int)
 
 
-def test_type_schema_does_not_narrow_a_union() -> None:
-    """联合里有认不出的分支时整体不给约束——只留认得的那支会给出过窄的错约束。"""
-
-    class Custom:
-        """词表不认的自定义类型。"""
-
-    assert type_schema(int | Custom) == {}
-    assert type_schema(str | int) == {"anyOf": [{"type": "string"}, {"type": "integer"}]}
-    assert type_schema(Custom) == {}
+def test_non_json_default_is_refused(conf: Config):
+    """默认值本身落不成 JSON（如 `Path`）同样在声明期拒。"""
+    with pytest.raises(ConfigTypeError):
+        conf("a.b", Path("x"))
 
 
-def test_type_schema_handles_parameterised_generics() -> None:
-    """`list[int]` / `dict[str, int]` 这类泛型提示要认：声明采纳了它们，词表不得静默丢掉。"""
-    assert type_schema(list[int]) == {"type": "array", "items": {"type": "integer"}}
-    assert type_schema(list) == {"type": "array", "items": {}}
-    assert type_schema(dict[str, int]) == {"type": "object"}
-    assert type_schema(list[object]) == {"type": "array", "items": {}}
+# ---- 坏文件 ---- #
 
 
-@pytest.mark.usefixtures("declared")
-def test_sync_leaves_no_temporary_files(engine: ConfEngine) -> None:
-    """投影走「临时文件 + 改名」的原子写：写完不得留下 `.tmp` 残渣。"""
-    for path, _touched in engine.sync():
-        assert not path.with_name(f"{path.name}.tmp").exists()
+def test_broken_json_is_an_error(conf: Config):
+    """值文件读不成 JSON：报错，不猜也不重写。"""
+    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
+    conf.settings_path().write_text("{ not json", encoding="utf-8")
+
+    with pytest.raises(ConfigFileError):
+        conf("a.b")
 
 
-def test_caller_default_is_not_cached(engine: ConfEngine) -> None:
-    """未登记键的「调用方 default」不进缓存：同一个 key 换一个 default 必须给新值。"""
-    assert engine.get("core.demo.unknown", 5) == 5
-    assert engine.get("core.demo.unknown", 9) == 9
+def test_root_must_be_an_object(conf: Config):
+    """值文件的根不是对象：报错。"""
+    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
+    conf.settings_path().write_text("[1, 2]\n", encoding="utf-8")
+
+    with pytest.raises(ConfigFileError):
+        conf("a.b")
 
 
-def test_blank_docstring_does_not_break_registration() -> None:
-    """类 docstring 是空白串时不得在类体定义期抛 `IndexError`（登记仍要完成）。"""
-    field = Cfg("core.demo.blank.doc", 1)
-    holder = type("BlankDoc", (), {"__doc__": "   ", "value": field})
+# ---- 文件引用 ---- #
 
-    assert holder is not None
-    assert item("core.demo.blank.doc") is not None
+
+def test_file_reference_resolves_next_to_the_value_file(conf: Config):
+    """`file="yaml"` 默认指向同层级的 `<字段名>.yaml`，值文件里那一行是引用名。"""
+    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
+    (conf.settings_path().parent / "tables.yaml").write_text("- name: x\n", encoding="utf-8")
+
+    conf("storage.db.tables", "", type=str, file="yaml")
+    conf.sync()
+
+    assert values(conf)["storage.db.tables"] == "tables.yaml"
+
+
+def test_file_reference_must_exist(conf: Config):
+    """被引用的文件不在：声明期就报错，本体要放好。"""
+    with pytest.raises(ConfigReferenceError):
+        conf("storage.db.tables", "", type=str, file="yaml")
+
+
+def test_file_reference_may_not_escape_the_root(conf: Config):
+    """引用名不许跑出仓根。"""
+    with pytest.raises(ConfigReferenceError):
+        conf("storage.db.tables", "../../etc/passwd", type=str, file="yaml")
+
+
+# ---- 路径与装配 ---- #
+
+
+def test_value_file_points_at_the_schema(conf: Config):
+    """值文件顶部那句 `$schema` 指向词表（相对路径，搬仓不失效）。"""
+    conf("a.b", 1)
+    conf.sync()
+
+    head = json.loads(conf.settings_path().read_text(encoding="utf-8"))["$schema"]
+    assert head == "schema/settings.json"
+    assert conf.schema_path().is_file()
+
+
+def test_schema_carries_type_default_and_owner(conf: Config):
+    """词表带类型、默认值、说明、出处：IDE 悬停与文档页都吃它。"""
+    conf("a.b", 1, type=int, doc="说明")
+    conf.sync()
+
+    properties = json.loads(conf.schema_path().read_text(encoding="utf-8"))["properties"]
+    assert properties["a.b"]["type"] == "integer"
+    assert properties["a.b"]["default"] == 1
+    assert properties["a.b"]["description"] == "说明"
+    assert properties["a.b"]["x-cairn-owner"].startswith("tests.core.test_conf.")
+    assert "tests/core/test_conf.py:" in properties["a.b"]["x-cairn-site"]
+
+
+def test_config_root_follows_the_environment_knob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """`CAIRN_CONFIG` 是找到配置的办法（测试与部署用），不是配置项。"""
+    monkeypatch.setenv("CAIRN_CONFIG", str(tmp_path / "elsewhere"))
+    conf = Config()
+
+    assert conf.config_root() == tmp_path / "elsewhere"
+
+    conf.use(tmp_path / "here")
+    assert conf.config_root() == tmp_path / "here"
+    assert os.environ["CAIRN_CONFIG"] == str(tmp_path / "elsewhere")
+
+
+def test_reduce_registers_declarations_without_running_them(conf: Config):
+    """扫描那条路：按清单登记，不执行模块；本处没声明的键读不到。"""
+    assert conf.reduce({"a.b": "core.somewhere", "c.d": "core.elsewhere"}) == ("a.b", "c.d")
+    assert conf.used() == frozenset()
+
+    with pytest.raises(ConfigKeyError):
+        conf("a.b")
+
+
+def test_reduce_does_not_shadow_a_real_declaration(conf: Config):
+    """本处声明过的键，扫描登记不覆盖它。"""
+    conf("a.b", 1)
+
+    assert conf.reduce({"a.b": "core.somewhere"}) == ()
+    assert conf("a.b") == 1
+
+
+# ---- 判据函数本身 ---- #
+
+
+@pytest.mark.parametrize(
+    ("type_arg", "value"),
+    [
+        (int, 1),
+        (float, 1.5),
+        (bool, False),
+        (str, "x"),
+        (list[int], [1]),
+        (dict[str, int], {"a": 1}),
+        (None, None),
+        (int | None, 3),
+    ],
+)
+def test_spec_and_check_round_trip(type_arg: object, value: JsonValue):
+    """`spec_of` 收下的写法，`check_type` 都判得过。"""
+    assert check_type(value, spec_of(type_arg)) == value

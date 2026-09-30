@@ -8,11 +8,18 @@
 > 语义与领域规则见 [`domains.md`](./domains.md)、[`note-model.md`](./note-model.md)。
 > 一句话：**Cairn = 含义堆（meaning heap）**——底座只加能力、不改结构，语义往上堆。
 
-状态：**草案 v0.4**（2026-09-17 按「桶 + 块」模型整体重写；行序列 + 行内区间样式、关系落 DB、
-通用版本引擎**已实现**。旧稿的 Manifest / 加密 / structure.db / FastCDC 分块等表述全部作废）
+状态：**草案 v0.4**（2026-09-17 按当时的「桶 + 块」模型重写；**2026-09-29 现状提示见下**）
 
-> **2026-09-19 现状导引**：领域目录为 `feature/`（非 `domains/`）；五域口径统一为「`XxxData(Block)` + `Xxx(Domain)`」；
-> 存储表已重构（`block` / `body` / `type` 整数码 / `block.data`；表名单数直白）。细节以 `storage-design.md` / `domains.md` / 代码为准。
+> ⚠️ **现状提示（2026-09-29）**：本文写于旧的「桶 + 块」实现之上，那套实现已随
+> `refactor/clean-local-code` 整条删除。读本文时按这三条对齐：
+> ① **存储态以 [`storage-design.md`](./storage-design.md) 为准**——身份是 `ID`（`uuid4` ＋ `sha256`，
+> 不再是 `ValueUuid` / `ValueHash`）；载体按**两数格模型** `(头格, 末格)` 定位（不再是三元组）；
+> **hub** 取代"桶"；块落成**内容记录 ＋ 块记录**两条，指针在块记录的载荷里（不是 `block` / `body` 表）。
+> ② **领域与界面各章是目标形态**：`feature` / `ui_tools` / `app` 当前没有代码，待重建。
+> ③ 凡与代码冲突，**以代码为准**；§2 / §3 里仍未逐条核过的字段表（行 id、`body_hash`、
+> `checksum` 的口径等）按"待回写"看待，具体以 [`storage-design.md`](./storage-design.md) §3 与代码为准。
+
+> **2026-09-19 现状导引**（历史）：领域目录为 `feature/`（非 `domains/`）；五域口径统一为「`XxxData(Block)` + `Xxx(Domain)`」。
 
 ---
 
@@ -21,12 +28,13 @@
 ### 0.1 两条铁律
 
 1. **只有一个存储物种：块（Block）。**
-   笔记 / 资产 / 项目 / 画板 / 索引 / 分片，最终都是块，区别只在 `type` 与 `body`。
+   笔记 / 资产 / 项目 / 画板 / 索引 / 分片，最终都是块，区别只在**类型**与 `body`。
    没有"清单"、没有"空间"、没有第二种持久化对象。
 2. **按性质分家。**
-   **内容**（字节）进块的 `body`，按 `body_hash` 进**内容池**去重；
-   **描述**（标题 / 标签 / 签名）进块的 `attrs`，随块行存、不参与去重；
-   **结构**（关系）落 **DB 表**（`relations`），可查询 / join。
+   **内容**（字节）进**内容记录**（载荷即 body，身份按内容签发，故同内容只存一份）；
+   **描述**（标题 / 标签 / 签名）**当前尚未落地**——块的属性面随领域层重建再长，
+   将来的口径是随块记录存、不参与去重；
+   **结构**（关系）落**索引库的 `edge` 表**，可查询 / join。
 
 > 判据仍是三关（见 §1）：性能、存储利用率、综合（并发 / 安全 / 扩展）。
 
@@ -78,23 +86,24 @@ graph TD
 
 | 词 | 英文 | 含义 |
 |---|---|---|
-| 桶 | Bucket | `vault/<桶名>/`：装若干载体；桶名即桶的地址（目录名） |
-| 载体 | Pack | 追加写的载体文件，定长槽、记录自框定；写满即封口 |
-| 块 | Block | 存储单元：`{id, type, body, attrs, …}`；落盘成**两条记录**（内容 ＋ 块） |
-| 索引库 | Index | `vault/catalog.db`：桶登记、身份到位置、关系边；**可重建的投影** |
-| 身份 | `Id` | 两套凭证：`value_uuid`（分配形态，ULID）与 `value_hash`（摘要形态）。**身份 ≠ 内容** |
-| 地址 | address | 由 body 内容算出的确定性摘要（BLAKE3 十六进制）；即摘要形态 |
-| checksum | — | 块的 body 地址；块记录载荷里的 `body_addr` 指向它 |
-| type | — | 块类型（短名，取 `Kind.Data` 的值）：如 `notedata`；落索引库的 `kind` 列 |
+| hub | hub | `<root>/<hub>/`：装若干载体；hub 名即地址（目录名） |
+| 载体 | Pack | 追加写的载体文件，**定长格**、记录自框定；写满即封口 |
+| 块 | Block | 存储单元：当前实现只有 `id` ＋ `body`；落盘成**两条记录**（内容 ＋ 块） |
+| 索引库 | Index | `<root>/catalog.db`：hub 登记、身份到位置、关系边；**可重建的投影** |
+| 身份 | `ID` | 两套凭证：`value_uuid`（`uuid4`，比较有效）与 `value_hash`（`sha256`，去重有效）。**身份 ≠ 内容** |
+| 地址 | address | 由 body 内容算出的确定性摘要（`sha256` 十六进制）；即摘要形态 |
+| checksum | — | 记录头里的载荷摘要（与身份摘要同源）；块记录载荷里的指针（`body_ref`）指向它 |
+| type | — | 块类型（短名），如 `notedata`：由**程序**给出，落索引库的 `kind` 列，不落盘 |
 | body | — | 块的主体内容，进**内容记录**（同内容只存一份） |
-| attrs | — | 块的描述字段（标题 / 标签 / 签名 / `props`），随块记录存 |
-| config | — | 写入配置，随块记录存（写入行为的开关，见设计篇 §12） |
-| 关系 | relation | 一等 DB 行：`src --kind--> dst`，**不是块** |
+| attrs | — | 块的描述字段（标题 / 标签 / 签名）：**当前未落地**，随领域层重建再长 |
+| config | — | 写入配置：**未落地**（旧 pack 那套语义已退役） |
+| 关系 | edge | 一等 DB 行：`src --kind--> dst`，**不是块**（表名 `edge`） |
 | 行 | line | 笔记正文的一个元素（一行 / 一块），带稳定行 id |
 | 区间样式 | range style | 行内 `[start, end)` 的样式覆盖层 |
 | 分片 / 索引块 | part / index | 大内容切成的块 + 聚合成一个可引用 id 的索引块（**预留**，尚未接进块面） |
 
-> 术语以代码为准：块 = `core/storage/block.py` 的 `Block`；桶 = `core/storage/vault.py` 的 `Bucket`。
+> 术语以代码为准：块 = `core/storage/format/block.py` 的 `Block`，内容 = 同处的 `Body`，
+> hub = `core/storage/hub.py` 的 `Hub`。
 
 ---
 
@@ -133,11 +142,12 @@ note ──relation(DB)──► project / note
 | | 内容 | 描述 | 结构 |
 |---|---|---|---|
 | 是什么 | 字节流：正文、画板、图片 | 标题、标签、签名、`props` | 关系（成员 / 引用 / 派生） |
-| 载体 | 块 `body` → **内容池**（按 `body_hash` 去重） | 块 `attrs` → `blocks` 行 | `relations` 表 |
-| 为什么 | 去重 / 传输 / 随机读 | 随块读写、不进内容池 | 索引 / 约束 / join |
+| 载体 | 内容记录（载荷即 body，按内容地址去重） | 块记录（**当前只有指向 body 的指针**；属性面待领域层） | 索引库的 `edge` 表 |
+| 为什么 | 去重 / 传输 / 随机读 | 随块读写、不进内容面 | 索引 / 约束 / join |
 | 例 | `note.body` / `asset.body` | `title` / `tags` / `signature` | `contains` / `references` / `derived-from` |
 
-> 旧稿的 "结构数据全部进 DB" 已收窄：**只有关系进 DB**；标签 / 属性是块的 `attrs`，随块行存。
+> 旧稿的 "结构数据全部进 DB" 已收窄：**只有关系进 DB**；标签 / 属性将来的口径是随块记录存，
+> **当前尚未落地**（见 §0 的现状提示）。
 
 ### 4.3 type → 承载 映射（一张表，禁止造第二套类型系统）
 
@@ -271,25 +281,28 @@ Block:
 ### 6.3 内容记录与分片
 
 - **内容记录**：载荷就是编码后的 body，身份按内容签发（`value_hash` 即 body 地址），
-  故同 body 只存一份；块记录靠载荷里的 `body_addr` 指向它。
+  故同 body 只存一份；块记录靠载荷里的指针（两套凭证）指向它。
 - 大内容：**分片预留**（切成 `part` 块 + 一个 `index` 索引块，返回索引块 id），
   尚未接进块面，见设计篇 §5.6 与 §12。
 
 ### 6.4 索引库（catalog.db，可重建的投影）
 
 ```sql
-bucket(name PK, role, state, created)                       -- 桶登记（真源是桶目录）
-record(value_uuid PK, value_hash, kind, bucket, pack,
-       slot_start, slot_head, slot_count, size, issued, created, updated)
-edge(id PK, src, dst, kind, domain, created)                -- 关系边
-meta(key PK, value)                                         -- 声明投影（开库时比对）
+hub(name PK, role, state, created)                          -- hub 登记（真源是 hub 目录）
+block(value_uuid PK, value_hash, birth_time, name,
+      body_value_uuid, body_value_hash, kind,
+      hub, pack, slot_first, slot_last, size, created, updated)
+body(value_uuid PK, value_hash, birth_time, name,
+     hub, pack, slot_first, slot_last, size, created, updated)
+edge(id PK, src_value_uuid, dst_value_uuid, kind, domain, created)   -- 关系边
+meta(name PK, value)                                        -- 声明投影（开库时比对）
 -- 领域业务表（如 relation）由领域经 Storage.table() 建，落同一个库
 ```
 
-- **表结构由声明给出**（`config/settings/core/storage/tables.yaml`），源码内不出现建表语句；
-  开库时对比 → 分类 → 处置，破坏性变更默认拒绝（设计篇 §8.4）。
-- **索引库是投影、不是真源**：真源是载体里的记录；索引丢了可顺扫重建（`Vault.patrol` / `Vault.repair`）。
-- 领域业务表走 `core.storage.table(...)`；上层不 import sqlite。
+- **表结构由声明给出**（本体在 `config/tables.yaml`，由类型登记现算写出），
+  源码内不出现建表语句；开库时对比 → 分类 → 处置，破坏性变更默认拒绝（设计篇 §8.4、§8.2.1）。
+- **索引库是投影、不是真源**：真源是载体里的记录；索引丢了可顺扫重建（`patrol` / `repair`）。
+- 领域类型一登记，它那张表就诞生（`core/storage/registry.py`）；上层不 import sqlite。
 
 ### 6.5 版本（**存储不承载**）
 
@@ -369,8 +382,8 @@ Storage ── BlockStore ── Vault ── Bucket(packs/) + Index(catalog.db)
 4. 多设备 / 多作者的合并（CRDT vs 版本链合并）。
 5. 载体压实（收回删除与更新造成的空洞）。
 6. 事务（一次写入同时落字节与目录行）。
-7. 存储侧的那些字段问题：`body_addr` 要不要提升成索引列、属性要不要投影进库
-   （设计篇 §12；影响的是"列举要不要读载荷"）。
+7. 存储侧那些字段问题：属性（标题 / 标签）要不要投影进库；"删掉类型要不要删表"
+   （设计篇 §12；影响的是"列举要不要读载荷"与"表能不能自己消失"）。
 
 ---
 

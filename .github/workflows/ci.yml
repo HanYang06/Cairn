@@ -35,9 +35,9 @@ jobs:
       - name: Prose check (书面语)
         run: uv run python tools/prose.py
 
-      # 两个投影（config/ 与 schema/）是否与声明一致：docgen 只比参考页，投影漂移看这里
-      - name: Config projections (no drift)
-        run: uv run python tools/gen_conf.py --check
+      # 配置投影（config/settings.json 与 config/schema/settings.json）**没有生成脚本**：
+      # 跑一遍程序就顺带生成，入库的产物与声明是否分叉由 pytest 的投影契约用例拦住
+      # （`tests/core/test_conf_projection.py`）。详情见 docs/architecture/config.md。
 
       - name: Generated config reference (no drift)
         run: uv run python tools/docgen.py --check
@@ -54,7 +54,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check (mypy strict)
-        run: uv run mypy src tools
+        run: uv run mypy src tools tests
 
       - name: Tests with coverage gate
         run: uv run pytest --cov-fail-under=80

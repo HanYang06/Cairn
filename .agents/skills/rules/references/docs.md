@@ -14,18 +14,21 @@
 [mkdocstrings](https://mkdocstrings.github.io/) 从 `src/**` 抽取（走 griffe 的 AST 解析，
 不执行代码）。手写一份必然过期，最终与代码不符。
 
-**不许手写「机器已有单一事实源」的表**：配置项来自 `schema/settings.json`，
+**不许手写「机器已有单一事实源」的表**：配置项来自**声明现算**（`core/conf` 的词表投影），
 由 `tools/docgen.py` 生成整页到 `docs/reference/config.md`（带 SPDX 头与「勿手改」声明）。
-要加一条配置 → 在用到它的包里声明 → 跑 `gen_conf.py --fix` + `docgen.py --write`。
-`docgen.py --check` 已进 CI，漂移即失败。
+要加一条配置 → 在用到它的包里 `conf("键", 默认值, type=…, doc=…)` 声明 →
+跑一遍程序（值文件与词表顺带落盘）、再跑 `docgen.py --write` 更新参考页。
+`docgen.py --check` 已进 CI，漂移即失败；入库的投影与声明是否分叉由
+`tests/core/test_conf_projection.py` 拦。
 
 ## 工具链（已落）
 
 | 手段 | 负责 | 命令 |
 |---|---|---|
 | 站点与 API 参考 | `mkdocs` + `mkdocstrings`（griffe AST 抽取） | `uv run mkdocs serve` / `uv run mkdocs build --strict` |
-| 配置项参考页 | `tools/docgen.py`（读 `schema/settings.json`） | `uv run python tools/docgen.py --write` / `--check` |
-| docstring 覆盖报告 | 同上（AST 统计） | `uv run python tools/docgen.py --coverage` |
+| 配置项参考页 | `tools/docgen.py`（读声明现算的词表投影） | `uv run python tools/docgen.py --write` / `--check` |
+| 投影防漂移（值文件 / 词表） | `tests/core/test_conf_projection.py`（跑一遍即生成） | `uv run pytest tests/core/test_conf_projection.py` |
+| docstring 覆盖报告 | `tools/docgen.py`（AST 统计） | `uv run python tools/docgen.py --coverage` |
 
 - 依赖在 `pyproject.toml` 的 `[dependency-groups] dev`：`mkdocs-material`（**MIT**）、
   `mkdocstrings[python]`（**ISC**）。**构建期依赖**，不进运行期、不进 wheel。

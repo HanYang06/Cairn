@@ -1,40 +1,16 @@
 <!-- SPDX-FileCopyrightText: 2026 HanYang06 -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# ui_tools（界面工具层）
+# ui_tools（界面工具层）· 待重建
 
-> 界面**工具箱**：声明树 / 编译 / 绑定 / 模型 / 主题 / 组件 / 布局。
-> **不认识领域** —— 不 import `feature`、不碰 `core.storage`（有架构测试断言）。
+> **这一层在 2026-09-29 的内核重建里被整条删除**（见
+> `.agents/skills/memory/progress.md`「内核重建」）：`src/ui_tools/` 已不存在，
+> 故本页暂时没有可抽取的代码。
 
-## 包入口
+原定位（重建后照这个方向回来）：
 
-工具箱的公共面收在 `ui_tools.core`：
+- 界面**工具箱**：声明树 / 编译 / 绑定 / 模型 / 主题 / 组件 / 布局；
+- **不认识领域** —— 不 import `feature`、不碰 `core.storage`（有架构测试断言）；
+- **这一层不依赖 Qt**；Qt 只在接入点那一处出现（边界）。
 
-::: ui_tools
-    options:
-      members: false
-
-## UI 内核（Qt-free）
-
-接入点、声明树基元、词汇表与编译管线。**这一层不依赖 Qt**；
-Qt 只在 `ui_tools.core.qt` 出现（边界）。
-
-::: ui_tools.core
-
-## 组件
-
-原子（`Label` / `Button` / `Field` / …）与结构件（`Toolbar` / `ListPanel` / …）。
-
-::: ui_tools.component
-
-## 布局
-
-**纯几何组织器**（`VBox` / `HBox` / `Grid` / `Split` / `Stack`），不进主题词汇表。
-
-::: ui_tools.layout
-
-## 页面
-
-页面层独立扩展点。
-
-::: ui_tools.page
+代码回来之后，把这一页改回 mkdocstrings 抽取（`::: ui_tools` / `::: ui_tools.core` …）。

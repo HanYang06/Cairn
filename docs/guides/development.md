@@ -19,7 +19,7 @@ uv run pytest                              # 全部测试（含覆盖率；CI �
 uv run pytest tests/core/test_conf.py -x   # 单个测试
 uv run ruff check .                        # lint（--fix 自动修）
 uv run ruff format .                       # 格式化（提交前用 --check）
-uv run mypy src tools                      # 类型检查（strict）
+uv run mypy src tools tests                 # 类型检查（strict）
 uv run python tools/spdx.py --check        # SPDX 头门禁（缺头用 --fix 自动补）
 uv run pre-commit run --all-files          # 提交前全量门禁（SPDX → ruff → mypy）
 ```
@@ -42,15 +42,14 @@ uv run mkdocs build --strict   # 跟 CI 同口径构建（坏链接 / 缺页面 
 
 ```text
 src/
-  core/        L0 底座：存储 / 信号 / 配置 / 类型地基（**Qt-free、传输无关**）
+  core/        L0 底座：存储 / 事件 / 配置 / 异常（**Qt-free、传输无关**）
   feature/     领域：note / project 域 + shared/ 共享件
   ui_tools/    界面工具箱：声明树 / 编译 / 绑定 / 模型 / 主题
   app/         应用组合根，按平台（win / linux）；**只有它认识领域**
-tools/         开发工具（spdx / gen_conf / mypy 插件 / 构建 / 预览）
+tools/         开发工具（spdx / 书面语 / docgen / mypy 插件 / 构建 / 预览）
 docs/          手写文档（事实源）
 tests/         pytest 用例
-config/        主题与图形集（外观唯一真源）
-schema/        配置词表（生成物）
+config/        配置（值文件与词表，**跑一遍即生成**）+ 主题与图形集
 vault/         开发库（gitignore）
 ```
 

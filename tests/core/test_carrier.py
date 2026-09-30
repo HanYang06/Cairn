@@ -1,399 +1,343 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
+"""载体契约：文件头、格算术、追加写、按格区间读、顺扫。
 
-"""载体层用例：槽布局算术、记录编解码、载体读写与顺扫重建。
-
-设计依据：`docs/architecture/storage-design.md` §5。
+模型是"一串等大的格子、记录从格边界开始、写不下往后拼格子"，故这里的用例同时钉住它的
+**代价**：一条记录至少占一格，格尾补零——那不是实现细节，是这套定位方式的前提。
 """
 
 from __future__ import annotations
 
-import struct
 from typing import TYPE_CHECKING
 
 import pytest
 
-from core.storage import CarrierFile, CarrierLayout, Record, RecordHeader
+from core.exc import RecordFormatError, SlotError
 from core.storage.carrier import (
-    CARRIER_HEADER_BYTES,
-    CARRIER_MAGIC,
-    slot_offset,
-    slot_span,
-    slots_for,
-)
-from core.types import (
-    CorruptObjectError,
-    Id,
-    RecordFormatError,
-    SlotError,
+    HEADER_BYTES,
+    MAGIC,
+    Carrier,
     SlotRange,
-    ValueHash,
+    build_header,
+    parse_header,
+    slots_needed,
 )
+from core.storage.format.id import ID
+from core.storage.format.record import HEADER_BYTES as RECORD_HEADER_BYTES
+from core.storage.format.record import decode, encode
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-SLOT = 64
+_SLOT = 512
+_TIGHT = 256
 
 
-def _record(payload: bytes, **place: object) -> Record:
-    """造一条记录（内容凭证由载荷算出，位置字段可选）。"""
-    return Record.create(Id.new(payload, **place), payload, SLOT)  # type: ignore[arg-type]
+def _record(payload: bytes) -> bytes:
+    """造一条真实记录。"""
+    return encode(ID.of(payload), payload)
 
 
-def _carrier(tmp_path: Path) -> CarrierFile:
-    return CarrierFile.create(tmp_path / "pack", slot_bytes=SLOT)
+# ---- 文件头 ----
 
 
-# ---- 槽算术 ----
+def test_file_header_roundtrip():
+    """文件头写槽长、读槽长；长度是设计篇记的 24 字节。"""
+    raw = build_header(_SLOT)
+
+    assert len(raw) == HEADER_BYTES == 24
+    assert raw.startswith(MAGIC)
+    assert parse_header(raw) == _SLOT
 
 
-@pytest.mark.parametrize(
-    ("length", "expected"),
-    [(0, 1), (1, 1), (64, 1), (65, 2), (128, 2), (129, 3)],
-)
-def test_slots_for_rounds_up(length: int, expected: int) -> None:
-    assert slots_for(length, SLOT) == expected
+def test_header_rejects_foreign_or_short_bytes():
+    """认不出魔数就不猜；文件头不足即报错。"""
+    with pytest.raises(RecordFormatError, match="不是载体"):
+        parse_header(b"NOTAPACK" + bytes(HEADER_BYTES - 8))
+    with pytest.raises(RecordFormatError, match="不足"):
+        parse_header(MAGIC)
 
 
-def test_slot_offset_is_linear() -> None:
-    assert slot_offset(0, SLOT) == 0
-    assert slot_offset(3, SLOT) == 3 * SLOT
+def test_header_rejects_non_positive_slot():
+    """槽长为 0 的载体算不出任何偏移，直接拒绝。"""
+    with pytest.raises(SlotError, match="槽长"):
+        parse_header(MAGIC + (0).to_bytes(8, "big") + bytes(8))
 
 
-@pytest.mark.parametrize(
-    ("offset", "start", "head"),
-    [(0, 0, 0), (1, 0, 1), (63, 0, 63), (64, 1, 0), (70, 1, 6)],
-)
-def test_slot_span_keeps_head(offset: int, start: int, head: int) -> None:
-    span = slot_span(offset, 10, SLOT)
-    assert (span.start, span.head) == (start, head)
+# ---- 格算术 ----
 
 
-def test_slot_span_count_covers_length() -> None:
-    assert slot_span(0, 65, SLOT).count == 2
+def test_slots_needed_rounds_up_and_never_zero():
+    """装不下就多占一格；正好整除不多占；一条记录至少算一格。"""
+    assert slots_needed(1, 512) == 1
+    assert slots_needed(512, 512) == 1
+    assert slots_needed(513, 512) == 2
+    assert slots_needed(4096, 512) == 8
 
 
-@pytest.mark.parametrize(
-    ("offset", "length", "expected"),
-    [
-        (0, 4, 1),  # 起点对齐：4 字节正好占满第 0 槽
-        (1, 4, 2),  # 起点偏了 1：末字节落到第 1 槽，跨两槽
-        (3, 1, 1),  # 末字节仍在第 0 槽内
-        (3, 2, 2),  # 末字节跨到第 1 槽
-        (0, 0, 1),  # 空跨度也至少占 1 槽
-    ],
-)
-def test_slot_span_counts_the_head_offset(offset: int, length: int, expected: int) -> None:
-    """槽数要把槽内偏移算进去，不能只按长度取整。
+def test_slots_needed_rejects_nonsense():
+    """长度为零、槽长非正都不是合法输入。"""
+    with pytest.raises(SlotError):
+        slots_needed(0, 512)
+    with pytest.raises(SlotError):
+        slots_needed(10, 0)
 
-    起点向下取整之后，末字节落在 ``(head + length - 1) // 槽长`` 号槽里：
-    ``offset=1, length=4, 槽长 4`` 的字节落在 ``[1, 5)``，横跨第 0、1 两槽。
-    这与 :func:`slots_for` 是两套口径：后者算的是"起点落在槽边界"的槽数
-    （记录头自检用它），只按长度取整在起点偏移时就会少算。
+
+def test_slot_range_is_two_numbers():
+    """两个数字即位置：头格与末格，闭区间；格数与字节偏移都由它推出。"""
+    span = SlotRange(first=3, last=5)
+
+    assert span.count == 3
+    assert span.offset(512) == HEADER_BYTES + 3 * 512
+    assert str(span) == "3-5"
+    assert SlotRange(first=7, last=7).count == 1
+
+
+def test_slot_range_validates_order():
+    """末格不得小于起始格，起始格不得为负。"""
+    with pytest.raises(SlotError):
+        SlotRange(first=-1, last=0)
+    with pytest.raises(SlotError):
+        SlotRange(first=5, last=4)
+
+
+# ---- 载体 ----
+
+
+def test_new_carrier_writes_header(tmp_path: Path):
+    """新建载体：文件头先落地，文件长度即文件头长度。"""
+    with Carrier(tmp_path / "p1", slot_bytes=_SLOT) as carrier:
+        assert carrier.slot_bytes == _SLOT
+        assert carrier.size == HEADER_BYTES
+
+
+def test_new_carrier_needs_slot_bytes(tmp_path: Path):
+    """新建时不给槽长就不知道该按什么粒度定位，拒绝。"""
+    with pytest.raises(SlotError, match="槽长"):
+        Carrier(tmp_path / "p2")
+
+
+def test_open_reads_slot_from_header(tmp_path: Path):
+    """槽长以文件头为准：重开时给不给都要一致，给错了拒绝。"""
+    path = tmp_path / "p3"
+    Carrier(path, slot_bytes=_SLOT).close()
+
+    without_slot = Carrier(path)
+    assert without_slot.slot_bytes == _SLOT
+    without_slot.close()
+
+    same_slot = Carrier(path, slot_bytes=_SLOT)
+    assert same_slot.slot_bytes == _SLOT
+    same_slot.close()
+
+    with pytest.raises(SlotError, match="不符"):
+        Carrier(path, slot_bytes=_TIGHT)
+
+
+def test_open_rejects_foreign_file(tmp_path: Path):
+    """不是载体的文件一律拒开。"""
+    path = tmp_path / "foreign"
+    path.write_bytes(b"not a carrier at all" * 4)
+
+    with pytest.raises(RecordFormatError):
+        Carrier(path)
+
+
+def test_append_starts_at_slot_boundary(tmp_path: Path):
+    """第一条记录从第 0 格的格边界开始；返回的两个数字即它的位置。"""
+    raw = _record(b"hello")
+    with Carrier(tmp_path / "p4", slot_bytes=_SLOT) as carrier:
+        span = carrier.append(raw)
+
+        assert span.first == 0
+        assert span.last == slots_needed(len(raw), _SLOT) - 1
+        assert span.offset(_SLOT) == HEADER_BYTES
+        assert carrier.read(span) == raw
+
+
+def test_tail_is_padded_to_whole_slots(tmp_path: Path):
+    """写完后末格补零：记录区恒为整格，下一格自然落在格边界。"""
+    raw = _record(b"hello")
+    with Carrier(tmp_path / "p5", slot_bytes=_SLOT) as carrier:
+        carrier.append(raw)
+
+        assert (carrier.size - HEADER_BYTES) % _SLOT == 0
+        assert carrier.size == HEADER_BYTES + slots_needed(len(raw), _SLOT) * _SLOT
+
+
+def test_record_filling_whole_slots_needs_no_padding(tmp_path: Path):
+    """记录正好占满整数格时不补零（补零只发生在末格写不满时）。"""
+    overhead = len(encode(ID.of(b""), b""))
+    payload = b"\x00" * (_SLOT * 2 - overhead)
+    raw = encode(ID.of(payload), payload)
+    assert len(raw) == _SLOT * 2
+
+    with Carrier(tmp_path / "p5b", slot_bytes=_SLOT) as carrier:
+        span = carrier.append(raw)
+
+        assert span == SlotRange(first=0, last=1)
+        assert carrier.size == HEADER_BYTES + _SLOT * 2
+        assert carrier.read(span) == raw
+
+
+def test_each_record_takes_whole_slots(tmp_path: Path):
+    """**代价的契约**：一条记录至少占一格，再小也独占一整格，第二条从下一格开始。
+
+    这是"记录从格边界开始"换来的简单定位所必须付的账；若哪天改成紧凑排布，
+    这条用例会红，提醒定位模型也跟着变了。
     """
-    assert slot_span(offset, length, 4).count == expected
+    first, second = _record(b"one"), _record(b"two")
+    with Carrier(tmp_path / "p6", slot_bytes=_SLOT) as carrier:
+        span_a = carrier.append(first)
+        span_b = carrier.append(second)
 
+        assert span_a == SlotRange(first=0, last=0)
+        assert span_b.first == 1
+        assert carrier.read(span_a) == first
+        assert carrier.read(span_b) == second
 
-def test_slot_aligned_and_actual_counts_differ_by_design() -> None:
-    """同一段字节两套槽数：**槽对齐**（记录头自检）与实际占用（索引行的 ``slot_count``）。
 
-    ``offset=1, length=4, 槽长 4``：起点落在槽边界时只要 1 槽，实际起点偏了 1 字节故要 2 槽。
-    两者不是"谁算错了"——上一轮评审把这两件事当成一个数，故用这条用例把区别钉住。
-    """
-    assert (slots_for(4, 4), slot_span(1, 4, 4).count) == (1, 2)
+def test_record_larger_than_one_slot_spans_more(tmp_path: Path):
+    """写不下就往后拼格子：一条大记录占连续的若干格。"""
+    raw = _record(b"x" * (_SLOT * 3))
+    with Carrier(tmp_path / "p7", slot_bytes=_SLOT) as carrier:
+        span = carrier.append(raw)
 
+        assert span.count == slots_needed(len(raw), _SLOT)
+        assert span.count >= 4
+        assert carrier.read(span) == raw
 
-@pytest.mark.parametrize(("offset", "length"), [(-1, 1), (0, -1)])
-def test_slot_helpers_reject_negative(offset: int, length: int) -> None:
-    with pytest.raises(SlotError):
-        slot_span(offset, length, SLOT)
 
+def test_read_rejects_range_whose_last_slot_disagrees(tmp_path: Path):
+    """声明的末格与记录总长推出的不一致即报错，不读错位内容。"""
+    raw = _record(b"x" * 200)
+    with Carrier(tmp_path / "p8", slot_bytes=_SLOT) as carrier:
+        span = carrier.append(raw)
+        wrong = SlotRange(first=span.first, last=span.last + 1)
 
-def test_slot_helpers_reject_bad_slot_bytes() -> None:
-    with pytest.raises(SlotError):
-        slots_for(1, 0)
-    with pytest.raises(SlotError):
-        slot_offset(1, 0)
+        with pytest.raises(SlotError, match="末格"):
+            carrier.read(wrong)
 
 
-def test_layout_offset_and_span_are_inverse() -> None:
-    layout = CarrierLayout(slot_bytes=SLOT)
-    for offset in (0, 1, 63, 64, 200, 1000):
-        span = layout.span_of(layout.header_bytes + offset, 137)
-        assert layout.offset_of_span(span) == layout.header_bytes + offset
+def test_read_reports_missing_record_header(tmp_path: Path):
+    """按区间读到文件尾之外：读不到总长，报错而不是返回空。"""
+    with (
+        Carrier(tmp_path / "p9", slot_bytes=_SLOT) as carrier,
+        pytest.raises(RecordFormatError, match="读不到记录总长"),
+    ):
+        carrier.read(SlotRange(first=0, last=0))
 
 
-def test_layout_rejects_bad_values() -> None:
-    with pytest.raises(SlotError):
-        CarrierLayout(slot_bytes=0)
-    with pytest.raises(SlotError):
-        CarrierLayout(slot_bytes=SLOT, header_bytes=CARRIER_HEADER_BYTES - 1)
+def test_read_rejects_bogus_total_len(tmp_path: Path):
+    """记录头的总长小于记录头本身：这种脏值会让顺扫打转，当场报错。"""
+    path = tmp_path / "p10"
+    path.write_bytes(build_header(_SLOT) + (2).to_bytes(4, "big") + bytes(_SLOT - 4))
 
+    with Carrier(path) as carrier, pytest.raises(RecordFormatError, match="总长非法"):
+        carrier.read(SlotRange(first=0, last=0))
 
-def test_layout_record_bytes_lower_bound() -> None:
-    layout = CarrierLayout(slot_bytes=SLOT)
-    assert layout.record_bytes(1) == 1
-    assert layout.record_bytes(3) == 2 * SLOT + 1
-    with pytest.raises(SlotError):
-        layout.record_bytes(0)
 
+def test_read_reports_truncated_record(tmp_path: Path):
+    """记录头在、载荷不全：截断即报错，不返回半条记录。"""
+    path = tmp_path / "p11"
+    with Carrier(path, slot_bytes=_SLOT) as carrier:
+        carrier.append(_record(b"first"))
+        span = carrier.append(_record(b"second"))
 
-# ---- 载体文件头 ----
+    with path.open("r+b") as handle:
+        handle.truncate(span.offset(_SLOT) + RECORD_HEADER_BYTES)
 
+    with Carrier(path) as carrier, pytest.raises(RecordFormatError, match="截断"):
+        carrier.read(span)
 
-def test_header_roundtrip() -> None:
-    layout = CarrierLayout(slot_bytes=4096)
-    back = CarrierLayout.decode_header(layout.encode_header())
-    assert back.slot_bytes == 4096
-    assert back.header_bytes == CARRIER_HEADER_BYTES
 
+def test_append_refuses_unaligned_tail(tmp_path: Path):
+    """尾部不是整格（残写或外来改动）：拒绝续写，不猜从哪儿接。"""
+    path = tmp_path / "p12"
+    with Carrier(path, slot_bytes=_SLOT) as carrier:
+        carrier.append(_record(b"first"))
+        size = carrier.size
 
-def test_header_starts_with_magic_and_reserves_room() -> None:
-    raw = CarrierLayout(slot_bytes=SLOT).encode_header()
-    assert raw.startswith(CARRIER_MAGIC)
-    assert len(raw) > len(CARRIER_MAGIC) + 8
+    with path.open("r+b") as handle:
+        handle.truncate(size + 17)
 
+    with Carrier(path) as carrier, pytest.raises(RecordFormatError, match="格边界"):
+        carrier.append(_record(b"second"))
 
-def test_header_rejects_short_input() -> None:
-    with pytest.raises(RecordFormatError):
-        CarrierLayout.decode_header(CARRIER_MAGIC)
 
+def test_append_refuses_record_shorter_than_header(tmp_path: Path):
+    """短于记录头的字节根本不是记录，不许落盘。"""
+    with (
+        Carrier(tmp_path / "p13", slot_bytes=_SLOT) as carrier,
+        pytest.raises(RecordFormatError, match="短于记录头"),
+    ):
+        carrier.append(b"short")
 
-def test_header_rejects_bad_magic() -> None:
-    raw = bytearray(CarrierLayout(slot_bytes=SLOT).encode_header())
-    raw[0] ^= 0xFF
-    with pytest.raises(RecordFormatError):
-        CarrierLayout.decode_header(bytes(raw))
 
+def test_append_refuses_broken_record(tmp_path: Path):
+    """写入前核对自框定字段：总长与实际字节数不符的记录不许落盘。"""
+    raw = bytearray(_record(b"data"))
+    raw[0] = 0xFF
+    with Carrier(tmp_path / "p14", slot_bytes=_SLOT) as carrier, pytest.raises(RecordFormatError):
+        carrier.append(bytes(raw))
 
-def test_header_rejects_zero_slot_bytes() -> None:
-    raw = CARRIER_MAGIC + struct.pack(">Q", 0) + b"\x00" * 8
-    with pytest.raises(RecordFormatError):
-        CarrierLayout.decode_header(raw)
 
+def test_scan_yields_every_record_in_order(tmp_path: Path):
+    """顺扫交出全部记录，顺序即写入顺序（末格补零不被当成下一条记录）。"""
+    payloads = [b"alpha", b"beta", b"gamma"]
+    with Carrier(tmp_path / "p15", slot_bytes=_SLOT) as carrier:
+        for payload in payloads:
+            carrier.append(_record(payload))
 
-def test_create_writes_header_and_open_reads_it_back(tmp_path: Path) -> None:
-    path = tmp_path / "pack"
-    CarrierFile.create(path, slot_bytes=4096)
-    assert path.stat().st_size == CARRIER_HEADER_BYTES
-    assert CarrierFile.open(path).layout.slot_bytes == 4096
+        scanned = [decode(raw).payload for _span, raw in carrier.scan()]
 
+    assert scanned == payloads
 
-def test_open_rejects_foreign_file(tmp_path: Path) -> None:
-    path = tmp_path / "not_a_pack"
-    path.write_bytes(b"hello world" * 4)
-    with pytest.raises(RecordFormatError):
-        CarrierFile.open(path)
 
+def test_scan_reports_spans_matching_writes(tmp_path: Path):
+    """顺扫报出的格区间与写入时返回的一致。"""
+    with Carrier(tmp_path / "p16", slot_bytes=_SLOT) as carrier:
+        written = [carrier.append(_record(b"a" * (i * 300))) for i in range(1, 4)]
 
-# ---- 槽长来自配置，此后按文件头读 ----
+        assert [span for span, _raw in carrier.scan()] == written
 
 
-def test_slot_bytes_comes_from_declaration(tmp_path: Path) -> None:
-    from core.storage.conf import conf as storage_conf  # noqa: PLC0415 — 按需取声明
+def test_scan_detects_truncation(tmp_path: Path):
+    """记录被截断时顺扫当场报错，不静默跳过（跳过是巡检的策略，不是本层）。"""
+    path = tmp_path / "p17"
+    with Carrier(path, slot_bytes=_SLOT) as carrier:
+        carrier.append(_record(b"first"))
+        carrier.append(_record(b"second"))
 
-    declared: int = storage_conf.pack_slot_bytes
-    assert CarrierFile.create(tmp_path / "pack").layout.slot_bytes == declared
+    path.write_bytes(path.read_bytes()[: HEADER_BYTES + _SLOT + 10])
 
+    with Carrier(path) as carrier, pytest.raises(RecordFormatError, match="截断"):
+        list(carrier.scan())
 
-def test_explicit_slot_bytes_overrides_config(tmp_path: Path) -> None:
-    carrier = CarrierFile.create(tmp_path / "pack", slot_bytes=4096)
-    assert carrier.layout.slot_bytes == 4096
-    assert CarrierFile.open(tmp_path / "pack").layout.slot_bytes == 4096
 
+def test_sealed_is_a_threshold_judgement(tmp_path: Path):
+    """封口是策略判断：达到封口线即"已封口"，且不阻止继续写入大记录。"""
+    with Carrier(tmp_path / "p18", slot_bytes=_SLOT) as carrier:
+        carrier.append(_record(b"a"))
+        assert not carrier.sealed(carrier.size + 1)
+        assert carrier.sealed(carrier.size)
 
-def test_changing_config_does_not_reinterpret_existing_carrier(tmp_path: Path) -> None:
-    """槽长只在**建载体**时读一次配置；已落盘的载体永远按自己文件头解释。
+        big = _record(b"b" * 500)
+        span = carrier.append(big)
 
-    否则改一次配置，老载体的偏移全部错位——这是"物理坐标是投影"的前提。
-    """
-    from core.conf import conf as engine_conf  # noqa: PLC0415
+        assert carrier.read(span) == big
 
-    original = engine_conf.get("storage.pack.slot_bytes")
-    carrier = CarrierFile.create(tmp_path / "pack", slot_bytes=4096)
-    try:
-        engine_conf.set("storage.pack.slot_bytes", 8192)
-        assert CarrierFile.open(tmp_path / "pack").layout.slot_bytes == 4096
-        record = _record(b"still readable")
-        span = carrier.append(record)
-        assert Record.decode(carrier.read(span), carrier.layout) == record
-    finally:
-        engine_conf.set("storage.pack.slot_bytes", original)
 
+def test_carrier_exposes_its_path(tmp_path: Path):
+    """载体认得自己的路径（桶与巡检要从它推出位置）。"""
+    path = tmp_path / "p19"
+    with Carrier(path, slot_bytes=_SLOT) as carrier:
+        assert carrier.path == path
 
-# ---- 记录编解码 ----
 
-
-def test_record_header_reports_derived_values() -> None:
-    record = _record(b"hello")
-    header = record.header(SLOT)
-    assert header.total_len == record.total_len
-    assert header.aligned_slots == slots_for(record.total_len, SLOT)
-    assert header.checksum == ValueHash.of(b"hello")
-    assert header.id == record.id
-
-
-def test_record_roundtrip_preserves_id_and_payload() -> None:
-    record = _record(b"payload-bytes", name="body ID", issuer="cairn", in_bucket_name="main")
-    back = Record.decode(record.encode(), CarrierLayout(slot_bytes=SLOT))
-    assert back == record
-    assert back.id.value_hash == record.id.value_hash
-    assert back.payload == b"payload-bytes"
-
-
-def test_record_roundtrip_empty_payload() -> None:
-    record = _record(b"")
-    assert Record.decode(record.encode()).payload == b""
-
-
-def test_record_roundtrip_large_payload() -> None:
-    payload = bytes(range(256)) * 4096  # 1 MiB
-    record = _record(payload)
-    back = Record.decode(record.encode(), CarrierLayout(slot_bytes=SLOT))
-    assert back.payload == payload
-    assert back == record
-
-
-def test_record_create_rejects_slot_mismatch() -> None:
-    record = _record(b"x")
-    with pytest.raises(SlotError):
-        RecordHeader(
-            total_len=record.total_len,
-            checksum=record.checksum,
-            id=record.id,
-            aligned_slots=1,  # 实际需要 5 槽
-        ).verify(CarrierLayout(slot_bytes=SLOT))
-
-
-def test_record_header_rejects_tiny_total_len() -> None:
-    with pytest.raises(RecordFormatError):
-        RecordHeader(total_len=1, checksum=ValueHash.of(b""), id=Id.new(b""), aligned_slots=1)
-
-
-def test_record_header_rejects_zero_slots() -> None:
-    with pytest.raises(SlotError):
-        RecordHeader(total_len=1024, checksum=ValueHash.of(b""), id=Id.new(b""), aligned_slots=0)
-
-
-def test_decode_rejects_short_buffer() -> None:
-    with pytest.raises(RecordFormatError):
-        Record.decode(b"\x00\x00")
-
-
-def test_decode_rejects_length_mismatch() -> None:
-    raw = _record(b"hello").encode()
-    with pytest.raises(RecordFormatError):
-        Record.decode(raw[:-1])
-    with pytest.raises(RecordFormatError):
-        Record.decode(raw + b"extra")
-
-
-def test_decode_rejects_corrupt_payload() -> None:
-    record = _record(b"hello world")
-    raw = bytearray(record.encode())
-    raw[-1] ^= 0xFF
-    with pytest.raises(CorruptObjectError):
-        Record.decode(bytes(raw))
-
-
-def test_decode_rejects_corrupt_id_segment() -> None:
-    record = _record(b"hello world")
-    raw = bytearray(record.encode())
-    raw[CARRIER_HEADER_BYTES + 8] ^= 0xFF  # 落在 ID 段里
-    with pytest.raises(RecordFormatError):
-        Record.decode(bytes(raw))
-
-
-def test_decode_rejects_checksum_field_corruption() -> None:
-    raw = bytearray(_record(b"hello world").encode())
-    raw[4] = ord("z")  # 摘要字段第一位
-    with pytest.raises(RecordFormatError):
-        Record.decode(bytes(raw))
-
-
-# ---- 载体读写 ----
-
-
-def test_append_returns_span_for_actual_position(tmp_path: Path) -> None:
-    carrier = _carrier(tmp_path)
-    first = _record(b"a" * 10)
-    second = _record(b"b" * 10)
-    first_span = carrier.append(first)
-    second_span = carrier.append(second)
-    assert first_span == SlotRange(0, slots_for(first.total_len, SLOT), 0)
-    # 第二条紧接前一条：起点落在同一条记录的末尾（同槽或次槽），槽内偏移非零
-    expected_start, expected_head = divmod(first.total_len, SLOT)
-    assert (second_span.start, second_span.head) == (expected_start, expected_head)
-    assert second_span.head != 0  # 若丢掉 head，两条记录的起点就会撞在一起
-
-
-def test_read_returns_exactly_one_record(tmp_path: Path) -> None:
-    carrier = _carrier(tmp_path)
-    records = [_record(payload) for payload in (b"one", b"two-two", b"three")]
-    spans = [carrier.append(record) for record in records]
-    for record, span in zip(records, spans, strict=True):
-        assert Record.decode(carrier.read(span), carrier.layout) == record
-
-
-def test_used_bytes_and_slot_count_track_writes(tmp_path: Path) -> None:
-    carrier = _carrier(tmp_path)
-    assert carrier.used_bytes == 0
-    assert carrier.slot_count == 0
-    record = _record(b"x" * 100)
-    carrier.append(record)
-    assert carrier.used_bytes == record.total_len
-    assert carrier.slot_count == slots_for(record.total_len, SLOT)
-
-
-def test_read_rejects_span_beyond_file(tmp_path: Path) -> None:
-    carrier = _carrier(tmp_path)
-    carrier.append(_record(b"x"))
-    with pytest.raises(RecordFormatError):
-        carrier.read(SlotRange(carrier.slot_count + 5, 1))
-
-
-def test_read_rejects_zero_count() -> None:
-    with pytest.raises(ValueError, match="槽区间"):
-        SlotRange(0, 0)
-
-
-# ---- 顺扫重建 ----
-
-
-def test_scan_rebuilds_every_record_in_order(tmp_path: Path) -> None:
-    carrier = _carrier(tmp_path)
-    records = [_record(payload) for payload in (b"first", b"", b"x" * 300, b"last")]
-    spans = [carrier.append(record) for record in records]
-    scanned = list(carrier.scan())
-    assert [record for _span, record in scanned] == records
-    # 顺扫给出的位置必须与写入时算出的那个一致：重建正是靠这一条把索引接回去。
-    assert [span for span, _record in scanned] == spans
-    assert [item.payload for _span, item in scanned] == [item.payload for item in records]
-
-
-def test_scan_of_empty_carrier_is_empty(tmp_path: Path) -> None:
-    assert list(_carrier(tmp_path).scan()) == []
-
-
-def test_scan_rejects_truncated_tail(tmp_path: Path) -> None:
-    carrier = _carrier(tmp_path)
-    carrier.append(_record(b"first"))
-    second = _record(b"second")
-    carrier.append(second)
-    raw = carrier.path.read_bytes()
-    carrier.path.write_bytes(raw[: len(raw) - 3])
-    with pytest.raises(RecordFormatError):
-        list(CarrierFile.open(carrier.path).scan())
-
-
-def test_scan_rejects_corrupt_payload(tmp_path: Path) -> None:
-    carrier = _carrier(tmp_path)
-    record = _record(b"important")
-    span = carrier.append(record)
-    start = carrier.layout.offset_of_span(span)
-    raw = bytearray(carrier.path.read_bytes())
-    raw[start + record.total_len - 1] ^= 0xFF
-    carrier.path.write_bytes(bytes(raw))
-    with pytest.raises(CorruptObjectError):
-        list(CarrierFile.open(carrier.path).scan())
+def test_context_manager_closes_handle(tmp_path: Path):
+    """退出 with 即关闭句柄。"""
+    with Carrier(tmp_path / "p20", slot_bytes=_SLOT) as carrier:
+        carrier.append(_record(b"a"))
+    with pytest.raises(ValueError, match="closed"):
+        _ = carrier.size

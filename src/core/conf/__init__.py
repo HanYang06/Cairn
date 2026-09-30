@@ -1,54 +1,37 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
+"""配置引擎包。
 
-"""配置：**声明即事实，两个投影落在磁盘上**。
+用法就一句：``from core.conf import conf``，然后哪儿都能用——
 
-    config/settings/<包树>/<file_name>.<config_file_type>   ← 值（软配置）
-    schema/settings/<包树>/<file_name>.json                 ← 词表（永远 json）
+    conf("storage.pack.slot_bytes", 65536, type=int, doc="槽长")  # 声明
+    slot = conf("storage.pack.slot_bytes")                        # 取值
 
-（``settings`` 是默认 hub；换 hub 即换一组投影，见 `core.conf.engine`。）
-
-声明用 ``core.types.cfg.Cfg`` 写在各模块自己的声明模块里（**各管各的**；可叫 ``conf.py``，
-但 ``core/conf`` 自己那个得叫 ``params.py``——包名与同名子模块会互相覆盖），绑上即报到；
-引擎把声明展开成上面两个文件，并按「文件 → 默认值 → 报错」取用。细则见 `core.conf.engine`。
+形状与注意事项见 :mod:`core.conf.registry` 的模块说明。
 """
 
 from __future__ import annotations
 
-from .engine import (
-    CONFIG_FILE_TYPE,
-    CONFIG_HUB,
-    CONFIG_PATH,
-    SCHEMA_FILE_TYPE,
-    SETTINGS_SCHEMA_ID,
-    ConfEngine,
-    Folder,
+from core.conf.registry import (
+    CONFIG_DIRNAME,
+    ROOT_ENV,
+    SCHEMA_DIRNAME,
+    VALUE_FILENAME,
+    CallSite,
+    Config,
+    Declared,
+    SyncResult,
     conf,
-    find_root,
-    source_path,
-)
-from .errors import (
-    ConfigConflictError,
-    ConfigError,
-    ConfigFileError,
-    ConfigKeyError,
-    ConfigValueError,
 )
 
 __all__ = [
-    "CONFIG_FILE_TYPE",
-    "CONFIG_HUB",
-    "CONFIG_PATH",
-    "SCHEMA_FILE_TYPE",
-    "SETTINGS_SCHEMA_ID",
-    "ConfEngine",
-    "ConfigConflictError",
-    "ConfigError",
-    "ConfigFileError",
-    "ConfigKeyError",
-    "ConfigValueError",
-    "Folder",
+    "CONFIG_DIRNAME",
+    "ROOT_ENV",
+    "SCHEMA_DIRNAME",
+    "VALUE_FILENAME",
+    "CallSite",
+    "Config",
+    "Declared",
+    "SyncResult",
     "conf",
-    "find_root",
-    "source_path",
 ]

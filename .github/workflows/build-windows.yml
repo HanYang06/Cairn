@@ -3,11 +3,12 @@
 
 name: build-windows
 
+# **暂挂**：打包链路（`tools/build.py` + `packaging/cairn.spec`）依赖已被删除的应用入口
+# `src/app`，而 UI 外壳待重建（见 `.agents/skills/memory/progress.md`「内核重建」）。
+# 故这里只留手动触发——打标签不再触发它，否则一次发布就会卡在一个注定失败的作业上。
+# UI 外壳回来、打包脚本修回之后，把 `push: tags` 一并恢复。
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
 
 jobs:
   package:

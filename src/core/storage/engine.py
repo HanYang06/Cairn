@@ -1,248 +1,241 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
+"""存储引擎：块落成记录、按身份读回、摘块、落盘后发事件。
 
-"""存储侧的**引擎角色**：对象进 / 出 / 删（表一里的固定件），坐在新底座上。
+引擎视角下只有一块盘（设计篇 §7）：写入按 hub 名分组，读取按行里的 hub 名开 hub；
+**读路径不建 hub**（目录不在即报错），写路径按需建立 hub（`Hub.create` 幂等）。
 
-分层交代清楚——这一层只是**适配**，不承载任何存储语义：
+一次 :meth:`Storage.store` 落**两条记录**（§3.2.1）：
 
-    引擎（`Signal`）→ 本模块 `Storage` → `BlockStore`（块 ⇄ 记录）→ `Vault`（记录 → 桶 → 载体）
+- **内容记录**：载荷就是 body 字节本身，身份由内容签发，故**同内容只存一份**
+  （先按地址反查，已在就不重复写）；
+- **块记录**：载荷是指向 body 的**两套凭证**，身份是块自己的；`kind`（类型标号，程序给出）
+  写在块那一行的索引里。
 
-内核的 `Core.put/get/drop` 组出事件包，引擎按 ``role_name="storage"`` 找到它，
-调用 :meth:`Storage.store` / :meth:`Storage.fetch` / :meth:`Storage.drop`。
-它**不认识领域语义**（不知道什么是笔记、什么是项目），只认识块与库。
+两条记录、两行定位、各自提交——**一次写入不是一次事务**。中途崩溃会留下一条没人指向的
+内容记录，它无害（既读不出来也没人引用），压实回收是未来项（§12）。这个取舍是刻意的：
+把两条记录绑成一次事务要引入跨行事务与崩溃恢复，而当前阶段"孤儿内容"的代价只是空间。
 
-与旧实现的三处不同（旧层已退役，见设计篇 §11）：
-
-1. 载体与目录换成了 :class:`~core.storage.vault.Vault` + :class:`~core.storage.blocks.BlockStore`：
-   去重键、类型、时间全部由新底座给出，这里不再碰 sqlite 表结构；
-2. **没有 mount / bind_tables**：那套"块自描述建表"无人覆写，随旧层一并去掉；
-   领域表走 :meth:`Storage.table`（显式拿句柄），或进表声明（`tables.yaml`）；
-3. 库级入口从 ``.catalog`` 改成 :attr:`Storage.vault`——巡检、重建、声明对账都从那儿走。
+事件在**落盘之后**发出：订阅者看到的永远是已提交状态；通知失败不影响写入
+（`Bus.emit` 自己隔离异常并把失败清单交回，引擎不抛）。
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from core.types import ObjectInfo, ObjectNotFoundError, type_name
+from core.clock import now_ms
+from core.event.catalog import OBJECT_DELETED, OBJECT_PUT
+from core.event.events import Event
+from core.exc import ObjectNotFoundError
 
-from .block import Block
-from .blocks import BlockStore, block_fields
-from .table import Table, create_table
+from .format.block import BodyRef, encode_block_payload
+from .format.id import ID, digest
+from .format.record import decode, encode
+from .hub import Hub, PackPolicy, Placement
+from .rows import BlockRow, BodyRow
 
 if TYPE_CHECKING:
-    import sqlite3
-    from collections.abc import Iterator
-    from pathlib import Path
+    from core.event.bus import Bus
 
-    from .vault import Vault
+    from .carrier import SlotRange
+    from .index import Index
+
+ENGINE_SOURCE = "core.storage"
+"""事件来源标识：存储引擎发出的通知都带它。"""
 
 
 class Storage:
-    """引擎调用它完成对象进 / 出 / 删；其余能力一律转交底层库。"""
+    """存储引擎：把 body 落成记录，把身份读回 body。
 
-    name = "storage"
+    它持有一个已对齐的索引库与一个 vault 根目录：hub 按名字在这个根下开，
+    故"多 hub"对上层只是**一次分组**（§7）。
+    """
 
-    def __init__(self, blocks: BlockStore) -> None:
-        self.id = "storage"
-        self.blocks = blocks
-        self._tables: set[str] = set()
-        """本实例已经确认存在的领域表（免得每次取句柄都重跑一遍建表）。"""
+    def __init__(
+        self,
+        index: Index,
+        root: str | Path,
+        *,
+        default_hub: str = "main",
+        policy: PackPolicy | None = None,
+        bus: Bus | None = None,
+    ) -> None:
+        """接上索引库与库根。
 
-    # ---- 生命周期 ----
-    @classmethod
-    def open(cls, path: Path | str) -> Storage:
-        """开库（不存在即建）；**开库即对齐声明**，失败向外传播，不掩盖。"""
-        return cls(BlockStore.open(path))
+        Args:
+            index: 已对齐的索引库（引擎不负责开库与对齐）。
+            root: vault 根目录；hub 就是它下面的子目录。
+            default_hub: 不指定 hub 时写进哪个 hub。
+            policy: 写载体的策略（槽长与封口线）；不给即用默认。
+            bus: 事件总线；不给则不发事件（测试与批处理常常不需要）。
+        """
+        self._index = index
+        self._root = Path(root)
+        self._default_hub = default_hub
+        self._policy = PackPolicy() if policy is None else policy
+        self._bus = bus
 
-    def close(self) -> None:
-        """关库（释放索引库连接）。"""
-        self.blocks.close()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
-
-    # ---- 引擎调用的动作面 ----
-    def store(self, obj: Block) -> Block:
-        """**存**一个对象（写内容记录 ＋ 块记录；去重发生在内容面）。"""
-        return self.blocks.store(obj)
-
-    def get[T: Block](self, cls: type[T], oid: str) -> T:
-        """**取**一个对象（按类型还原）——与旧调用点对齐的入口。"""
-        return self.blocks.get(cls, str(oid))
-
-    def fetch(self, oid: str) -> Block:
-        """**取**一个对象（未知类型时按基类还原）。"""
-        return self.blocks.fetch(str(oid))
-
-    def drop(self, oid: str) -> bool:
-        """**删**一个对象；返回它此前是否存在。"""
-        return self.blocks.drop(str(oid))
-
-    # ---- 库级视图 ----
     @property
-    def vault(self) -> Vault:
-        """底层库。
+    def index(self) -> Index:
+        """接上的索引库。"""
+        return self._index
 
-        巡检（:meth:`Vault.patrol`）、重建（:meth:`Vault.repair`）、声明对账
-        （:meth:`Vault.verify`）与表声明都从这儿进。
+    @property
+    def root(self) -> Path:
+        """Vault 根目录。"""
+        return self._root
+
+    @property
+    def default_hub(self) -> str:
+        """默认 hub 名。"""
+        return self._default_hub
+
+    def store(self, data: bytes, *, hub: str | None = None, kind: str = "") -> ID:
+        """把一个 body 落盘，返回**块身份**。
+
+        `data` 是**已经规范化过的字节**：引擎不理解载荷结构，只负责落成记录
+        （规范化属编码与领域，见 §4.3）。`kind` 是类型标号，程序给出、不落进记录头。
+
+        Returns:
+            块身份：分配形态凭证新建，摘要形态凭证是块记录载荷的摘要。
         """
-        return self.blocks.vault
+        target = self._hub(self._default_hub if hub is None else hub, create=True)
+        content = ID.of(data)
+        existing = self._index.rows.bodies_by_hash(content.value_hash)
+        if existing:
+            # 同内容只存一份：复用已落盘那份 body 的身份，块指针因此指向它
+            body_id = ID(
+                value_uuid=existing[0].value_uuid,
+                value_hash=existing[0].value_hash,
+                birth_time=existing[0].birth_time,
+            )
+        else:
+            self._write_body(target, content, data)
+            body_id = content
+        pointer = encode_block_payload(
+            BodyRef(value_uuid=body_id.value_uuid, value_hash=body_id.value_hash)
+        )
+        block = ID.of(pointer)
+        self._write_block(target, block, pointer, kind=kind, body=body_id)
+        self._emit(OBJECT_PUT, block.value_uuid, {"body": body_id.value_hash, "kind": kind})
+        return block
 
-    def commit(self) -> None:
-        """提交当前变更（领域表写入后由调用方收口，见 `feature/shared/relation.py`）。"""
-        self.vault.index.commit()
+    def load(self, value_uuid: str) -> bytes:
+        """按身份读回 body：**块身份与内容身份都收**。
 
-    def ids(self) -> Iterator[str]:
-        """遍历全部**对象**身份（内容记录不是对象，不在此列）。
+        块身份顺着行里的指针跳一跳；内容身份本身就是 body。判据是"这张表里有没有这一行"，
+        不靠载荷猜（§3.2.1）。
 
-        **并不省正文的读**：判别"这一行是不是块记录"必须读该行载荷，而内容记录的载荷
-        就是正文本身，故本方法会把全库正文读进来再丢掉——与
-        :meth:`BlockStore.iter_block_records` 同一代价。要免掉它，得先把"块记录判据
-        落成索引里的一列"（设计篇 §12 的字段裁定）。
+        Raises:
+            ObjectNotFoundError: 两张表里都没有这一行，或它指向的内容读不出来。
         """
-        for row, _record in self.blocks.iter_block_records():
-            yield str(row["value_uuid"])
+        block = self._index.rows.block(value_uuid)
+        if block is not None:
+            return self.body(block.body_value_hash)
+        body = self._index.rows.body(value_uuid)
+        if body is None:
+            raise ObjectNotFoundError(f"对象不在索引里: {value_uuid}")
+        return self._read_payload(body.hub, body.pack, body.span)
 
-    def info_of(self, oid: str) -> ObjectInfo:
-        """取对象的中立视图（类型 / 标题 / 标签 / 时间）——只读该对象的块记录载荷，不含正文。"""
-        row = self.vault.index.record_row(str(oid))
-        if row is None:
-            raise ObjectNotFoundError(str(oid))
-        return self._info_of_row(row)
+    def body(self, address: str) -> bytes:
+        """按内容地址读回 body。
 
-    def infos(self) -> list[ObjectInfo]:
-        """**批量**取中立视图。
+        找到行之后还要**当场核对摘要**：行指向的位置上若是另一份内容，说明这份地址对应的
+        字节已经没了——宁可报"内容不在"，也不能把错的内容当成对的返回。
 
-        ``attrs`` / ``author`` 在块记录载荷里、``kind`` 与时间在定位行里，故**属性**不必碰正文；
-        正文长度随块记录存了一份（`body_size`）也是为这件事。但逐行判别"是不是块记录"要读
-        该行载荷，而内容记录的载荷就是正文本身——故本方法仍会把全库正文读进来再丢掉
-        （见 :meth:`BlockStore.iter_block_records`）。**要正文请走** :meth:`fetch`。
-        排序按身份：身份是时间有序的，故这一序就是创建顺序（旧实现的表也是这么排的）。
+        Raises:
+            ObjectNotFoundError: 没有哪一行指向这份内容。
         """
-        return [self._info_of_row(row) for row, _record in self.blocks.iter_block_records()]
+        for row in self._index.rows.bodies_by_hash(address):
+            payload = self._read_payload(row.hub, row.pack, row.span)
+            if digest(payload) == address:
+                return payload
+        raise ObjectNotFoundError(f"内容不在: {address}")
 
-    def _info_of_row(self, row: sqlite3.Row) -> ObjectInfo:
-        """定位行 ＋ 块记录载荷 → 中立视图。
+    def drop(self, value_uuid: str) -> bool:
+        """摘掉块那一行，返回是否确实摘掉了一行。
 
-        载荷里**没有** `body_size`（本次改动之前写下的块）时退回到读一次块——
-        宁可慢这一条，也不把"长度未知"伪造成 0。
+        **内容面不动**（等压实回收，§12）：同内容可能还有别的块在用，删内容要判引用。
         """
-        record = self.vault.get(str(row["value_uuid"]))
-        blob = block_fields(record)
-        size = blob.get("body_size")
-        if not isinstance(size, int):
-            return _info_of(self.blocks.fetch(str(row["value_uuid"])))
-        return _info_of_parts(
-            oid=str(row["value_uuid"]),
-            kind=str(row["kind"]),
-            attrs=dict(blob.get("attrs") or {}),
-            author=str(blob.get("author") or ""),
-            size=size,
-            created=int(row["created"]),
-            updated=int(row["updated"]),
+        if not self._index.rows.drop_block(value_uuid):
+            return False
+        self._emit(OBJECT_DELETED, value_uuid)
+        return True
+
+    def locate(self, value_uuid: str) -> BlockRow | None:
+        """按身份取块那一行（诊断用；读数据走 :meth:`load`）。"""
+        return self._index.rows.block(value_uuid)
+
+    def _hub(self, name: str, *, create: bool) -> Hub:
+        """按名开 hub：写路径按需建立**并登记**，读路径一律不建。
+
+        建了就登记：目录是 hub 的存在证明，登记是它的投影（§6）。写路径留下的 hub 若不登记，
+        巡检每次都要报一处"登记缺"——那不是发现，是引擎自己欠的账。登记只认第一次，故这句幂等。
+        """
+        directory = self._root / name
+        if not create:
+            return Hub(
+                directory, slot_bytes=self._policy.slot_bytes, max_bytes=self._policy.max_bytes
+            )
+        created = Hub.create(
+            directory, slot_bytes=self._policy.slot_bytes, max_bytes=self._policy.max_bytes
+        )
+        self._index.rows.register_hub(name)
+        return created
+
+    def _write_body(self, target: Hub, body: ID, data: bytes) -> None:
+        """写内容记录，并把它落成一条内容行。"""
+        raw = encode(body, data)
+        placement: Placement = target.append(raw)
+        stamp = now_ms()
+        self._index.rows.put_body(
+            BodyRow(
+                value_uuid=body.value_uuid,
+                value_hash=body.value_hash,
+                hub=target.name,
+                pack=placement.pack,
+                span=placement.span,
+                size=len(raw),
+                birth_time=body.birth_time,
+                created=stamp,
+                updated=stamp,
+            )
         )
 
-    # ---- 逃生口：上层不 import sqlite ----
-    def table(self, name: str, **columns: str) -> Table:
-        """按需建一张**领域表**并返回句柄：``storage.table("relation", id="TEXT PRIMARY KEY")``。
+    def _write_block(self, target: Hub, block: ID, payload: bytes, *, kind: str, body: ID) -> None:
+        """写块记录，并把它落成一条块行（指针落成两列）。"""
+        raw = encode(block, payload)
+        placement: Placement = target.append(raw)
+        stamp = now_ms()
+        self._index.rows.put_block(
+            BlockRow(
+                value_uuid=block.value_uuid,
+                value_hash=block.value_hash,
+                body_value_uuid=body.value_uuid,
+                body_value_hash=body.value_hash,
+                hub=target.name,
+                pack=placement.pack,
+                span=placement.span,
+                size=len(raw),
+                kind=kind,
+                birth_time=block.birth_time,
+                created=stamp,
+                updated=stamp,
+            )
+        )
 
-        两条纪律（评审指出的两条都在这）：
+    def _read_payload(self, hub: str, pack: str, span: SlotRange) -> bytes:
+        """按位置读回记录载荷（槽长从载体文件头读）。"""
+        target = self._hub(hub, create=False)
+        return decode(target.read(Placement(pack=pack, span=span))).payload
 
-        - **建表只在本实例第一次取这张表时发生**，之后取句柄是纯读操作——
-          调用方（如 `feature/shared/relation.py`）每次读写都传 ``columns``，
-          若每次都建表 + 提交，就等于把 DDL 与提交放回了读写路径（§8.4 明令不许）；
-        - **不额外提交**：只有真建了表才提交一次。否则调用方尚未提交的写入会被旁路提交，
-          回滚就救不回来了。
-        列的声明以第一次为准：同一实例里再传一套不同的列不会改结构（改结构是显式动作）。
-        """
-        if columns and name not in self._tables:
-            existed = _table_exists(self.vault.index.conn, name)
-            if not existed:
-                create_table(self.vault.index.conn, name, columns)
-                self.commit()
-            self._tables.add(name)
-        return Table(self.vault.index.conn, name)
-
-    def query(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> list[sqlite3.Row]:
-        """只读查询（应急口：内核自己的表有具名入口，复杂排查才用它）。"""
-        return list(self.vault.index.conn.execute(sql, list(params)).fetchall())
-
-    def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> int:
-        """写语句（应急口，口径同 :meth:`query`）。
-
-        **不隐式提交**——与 :meth:`table` 同一纪律：存储的写入口都由调用方
-        `commit()` 收口；一条语句一个提交点，会让"回滚"在不同调用路径上表现不一。
-        """
-        cursor = self.vault.index.conn.execute(sql, list(params))
-        return int(cursor.rowcount)
-
-    def __repr__(self) -> str:
-        return f"Storage({self.vault.root})"
+    def _emit(self, event_type: str, subject: str, data: object = None) -> None:
+        """落盘之后发通知；不是通知就什么都不做。"""
+        if self._bus is None:
+            return
+        self._bus.emit(Event(type=event_type, source=ENGINE_SOURCE, subject=subject, data=data))
 
 
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    """库里有没有这张表（`sqlite_master` 是唯一权威）。"""
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
-    ).fetchone()
-    return row is not None
-
-
-def _info_of(block: Block) -> ObjectInfo:
-    """块 → 中立视图。
-
-    ``author`` 是块的**顶层字段**（不在 ``attrs`` 里），故这里读块字段；
-    ``title`` / ``tags`` / ``mime`` 是属性，从 ``attrs`` 取。
-    """
-    return _info_of_parts(
-        oid=block.id,
-        kind=block.type,
-        attrs=block.attrs,
-        author=str(block.author or ""),
-        size=block.size,
-        created=block.created,
-        updated=block.updated,
-    )
-
-
-def _info_of_parts(  # noqa: PLR0913 — 视图字段本就这么多，收成一个对象只是换个壳
-    *,
-    oid: str,
-    kind: Any,
-    attrs: dict[str, Any],
-    author: str,
-    size: int,
-    created: int,
-    updated: int,
-) -> ObjectInfo:
-    """中立视图的装配（单件与列举共用一处，免得两条路径给出不同形状的视图）。"""
-    return ObjectInfo(
-        oid=oid,
-        type=type_name(kind),
-        mime=attrs.get("mime"),
-        size=size,
-        created=created,
-        updated=updated,
-        title=attrs.get("title"),
-        tags=_tags_of(attrs.get("tags")),
-        seq=1,
-        author=author,
-    )
-
-
-def _tags_of(raw: Any) -> dict[str, Any]:
-    """标签归一：映射原样（键转字符串）、裸字符串算单标签、序列算一组按键存在。"""
-    if not raw:
-        return {}
-    if isinstance(raw, dict):
-        return {str(key): value for key, value in raw.items()}
-    if isinstance(raw, str):
-        return {raw: None}
-    return {str(tag): None for tag in raw}
-
-
-__all__ = ["Storage"]
+__all__ = ["ENGINE_SOURCE", "Storage"]

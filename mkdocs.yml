@@ -79,7 +79,6 @@ nav:
       - contributing/index.md
       - 怎么改文档: contributing/docs.md
       - 许可与署名: contributing/license.md
-  - 评审记录: review/ocr-2026-09-22.md
   - 博客:
       - 滚轮选择器与物理引擎: blog/wheel-picker-physics-engine.md
 

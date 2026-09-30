@@ -77,6 +77,8 @@ _NAMED_STYLES: dict[str, str] = {
     ".gitattributes": _HASH,
     "Makefile": _HASH,
     "Dockerfile": _HASH,
+    # 停用态的 workflow（靠非 `.yml` 后缀让 GitHub 不自动跑），内容仍是 yml
+    "ocr-review.yml.on-run": _HASH,
 }
 
 
@@ -125,7 +127,9 @@ def _tracked() -> list[str]:
     if git is None:
         raise SystemExit("找不到 git：本工具用 `git ls-files` 取文件清单")
     done = subprocess.run(
-        [git, "ls-files"],
+        # core.quotepath=false：否则中文路径会被转义成 `"\345..."` 带引号，
+        # 下游按扩展名认注释风格时会认不出 `.md`
+        [git, "-c", "core.quotepath=false", "ls-files"],
         cwd=ROOT,
         capture_output=True,
         text=True,

@@ -1,35 +1,17 @@
 <!-- SPDX-FileCopyrightText: 2026 HanYang06 -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# feature（领域）
+# feature（领域）· 待重建
 
-> L3：**域**（Note / Project）+ **共享件**（`shared/`）。
-> 只依赖 `core` 的公共 API；**域之间互不依赖**，跨域协作归 App。
+> **这一层在 2026-09-29 的内核重建里被整条删除**（见
+> `.agents/skills/memory/progress.md`「内核重建」）：`src/feature/` 已不存在，
+> 故本页暂时没有可抽取的代码。
 
-## 包入口
+原定位（重建后照这个方向回来）：
 
-域与共享件从 `feature` 一处可导入：
+- **域**（note / project）+ **共享件**（`shared/`）；
+- 只依赖 `core` 的公共 API；**域之间互不依赖**，跨域协作归 App；
+- 领域结构直接继承 `Block`，扩展只走子类字段、新 `type` 或新关系 `kind`；
+- 正文模型（行序列 + 行内区间样式）见 [`note-model.md`](../architecture/note-model.md)。
 
-::: feature
-    options:
-      members: false
-
-## 笔记域
-
-数据（`NoteData`）+ 域服务（`Note`）：创建 / 读写 / 落盘 / 编辑操作。
-正文模型（行序列 + 行内区间样式）见 [`note-model.md`](../architecture/note-model.md)。
-
-::: feature.note
-
-## 项目域
-
-成员的具名容器（走 `contains` 关系）。
-
-::: feature.project
-
-## 共享件
-
-非域的跨域内容：asset / canvas / group / signature / relation / provenance / base / kinds。
-**它们都是 `Block` 子类或工具单元，不是域。**
-
-::: feature.shared
+代码回来之后，把这一页改回 mkdocstrings 抽取（`::: feature` / `::: feature.note` …）。

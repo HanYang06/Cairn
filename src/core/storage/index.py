@@ -1,550 +1,610 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
+"""索引库：一处 `catalog.db`，开库时把声明与实际结构对齐。
 
-"""索引库：**对比 → 分类 → 处置**，建表语句由表声明编译（源码内无建表 SQL）。
+设计篇 §8 的规矩落在这里：
 
-设计见 `docs/architecture/storage-design.md` §8.4。四步：
+- **入口不是中枢**（§8.1）：库内只放"能被快速筛出来"的东西，正文与资产一律不进库；
+- **结构由声明编译**（§8.4）：建表与建索引语句都来自 `tables.py`，本模块只做**看、比、处置**，
+  一句建表 SQL 都不写；
+- **比对不只看列型**：主键 / 非空 / 默认值同样比，漂移即"容器级不兼容"；
+- **破坏性动作必须显式授权**：重建默认拒绝并列出待重建的表，调用方给出 :class:`RebuildPlan`
+  才执行；且**重建不丢数据**——旧表改名隔离为 `<表>__dropped_<时刻>`，隔离表随后按"多出的表"
+  只告警、不删除；
+- **多出的东西只告警**：未声明的表 / 列 / 索引一概不静默删除。
 
-1. **对比**：把实际结构读回来（`sqlite_master` / `PRAGMA table_info`），与声明逐项比；
-2. **分类**：差异分三种——**可原位补齐**（缺表 / 缺列 / 缺索引 / 多出未声明列，只告警）、
-   **须重建搬运**（列的型或约束变了：SQLite 改不了）、**拒绝启动**（库比声明新）；
-3. **处置**：原位补齐由 :meth:`Index.align` 直接执行；重建搬运是**破坏性**动作，
-   必须显式传入 :class:`RebuildPlan` 才执行——默认拒绝，不静默重建；
-4. **一致**：处置完成后再比一次，不一致即报错（不假装成功）。
-
-**建表只在开库 / 挂载时发生**，不在读写路径上：热路径反复执行 DDL 与提交是设计事故（§8.4）。
+处置分三类：缺失即建、缺列即补（补不上的按破坏性处置）、索引不符即建或拆掉重建。
+开库流程是幂等的：对齐一次之后，再开不会产生新的差异。
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
+import time
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
-from core.types import RecordFormatError, ValueHash, now_ms
-from core.types.errors import IndexSchemaError
+from core.exc import IndexNotFoundError, IndexSchemaError
 
-from .tables import Column, TableSpec, declared_tables, default_literal, index_name, sql_type_name
+from .rows import Rows
+from .tables import (
+    META_TABLE_SPEC,
+    Column,
+    Declaration,
+    TableSpec,
+    quote_identifier,
+    sql_type,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from types import TracebackType
 
-_logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger("cairn.storage")
 
-INDEX_NAME = "catalog.db"
-"""索引库文件名（**一个 vault 一个库**，桶名是库里的一列）。"""
+META_TABLE = META_TABLE_SPEC.name
+"""库级登记表的名字：索引库自用，由开库流程保证存在（建表语句仍由声明编译）。"""
 
-_META_KEY = "schema.declared"
-"""`meta` 里存的那份声明投影（用来发现"库里记的"与"程序认的"不一致）。"""
+DECLARATION_KEY = "declaration"
+"""登记项：声明的规范化描述。"""
 
+DROPPED_SUFFIX = "__dropped_"
+"""隔离表的后缀：重建时旧表改名到这个名字下，不删除。"""
 
-def _column_drift(column: Column, actual: ColumnState) -> str:
-    """已存在的列与声明的不符之处（空串 = 一致）。
+_Plan = tuple[list["Difference"], list[str], list[str]]
+"""一份比对结果：差异、待执行语句、只告警事项。"""
 
-    比四项：类型、主键、非空、默认值。列级 ``UNIQUE`` 不在 ``PRAGMA table_info`` 里，
-    由声明的**索引**那一侧比（`differences` 的索引分支）——那是唯一性的实际载体。
-    默认值比的是 SQL 文本：用 `TableSpec` 编译器**同一处**的字面量写法，
-    免得"声明写 0、库里存 '0'"这种假差异。
-    """
-    if actual.type != sql_type_name(column.type):
-        return f"{column.name}: 实际类型 {actual.type} ≠ 声明 {sql_type_name(column.type)}"
-    if actual.primary_key != column.primary_key:
-        return f"{column.name}: 主键 实际 {actual.primary_key} ≠ 声明 {column.primary_key}"
-    if actual.not_null != column.not_null:
-        return f"{column.name}: 非空 实际 {actual.not_null} ≠ 声明 {column.not_null}"
-    wanted = None if column.default is None else default_literal(column.default)
-    if actual.default != wanted:
-        return f"{column.name}: 默认值 实际 {actual.default} ≠ 声明 {wanted}"
-    return ""
+_Rebuild = tuple[list[str], list[str], list[str]]
+"""一次重建的结果：被重建的表、待执行语句、只告警事项。"""
 
 
-@dataclass(frozen=True, slots=True)
-class ColumnState:
-    """库里一列的实际样子：类型 ＋ 约束（比对声明用）。"""
+class DiffKind(Enum):
+    """一处差异的种类：既是报告，也是处置依据。"""
 
-    type: str
-    """方言类型名（大写）。"""
-
-    not_null: bool = False
-    """是否 NOT NULL。"""
-
-    primary_key: bool = False
-    """是否主键。"""
-
-    default: str | None = None
-    """默认值的 **SQL 文本**（``PRAGMA`` 原样给出，如 ``'main'`` / ``0``）；没有即 ``None``。"""
+    MISSING_TABLE = "missing_table"
+    MISSING_COLUMN = "missing_column"
+    CHANGED_COLUMN = "changed_column"
+    MISSING_UNIQUE = "missing_unique"
+    MISSING_INDEX = "missing_index"
+    CHANGED_INDEX = "changed_index"
+    EXTRA_TABLE = "extra_table"
+    EXTRA_COLUMN = "extra_column"
+    EXTRA_INDEX = "extra_index"
+    DECLARATION_DRIFT = "declaration_drift"
 
 
 @dataclass(frozen=True, slots=True)
 class Difference:
-    """一处差异：分类 + 处置所需的最小信息。"""
+    """声明与实际的一处差异。
 
-    table: str
-    kind: str
-    """差异种类：``missing_table`` / ``missing_column`` / ``extra_column`` /
-    ``missing_index`` / ``index_mismatch`` / ``column_mismatch`` / ``extra_table``。"""
+    ``table`` 与 ``subject`` 都是结构化的：处置不去 ``detail`` 的散文里反解对象名。
 
-    detail: str = ""
-    """人读的说明（进日志与计划）；**机器判据一律走 :attr:`subject`**，不从这段文本反解。"""
-
-    subject: str = ""
-    """这一处差异针对的对象：**索引名或列名**（机器判据用它）。
-
-    与 `detail` 分开的理由：`detail` 是给人读的话，措辞随时可改；处置动作
-    （``DROP INDEX`` / ``ALTER TABLE … ADD COLUMN``）若从它反解对象名，
-    改一次文案就会动错索引。
+    Attributes:
+        kind: 差异种类。
+        table: 涉及的表。
+        subject: 涉及的对象名（列名 / 索引名 / 表名）。
+        detail: 人读的说明。
+        destructive: 是否属于"改不动、须重建"的容器级差异。
     """
 
-    @property
-    def fixable(self) -> bool:
-        """可否原位补齐（**不必重建**）。"""
-        return self.kind in {
-            "missing_table",
-            "missing_column",
-            "missing_index",
-            "index_mismatch",
-            "extra_column",
-            "extra_table",
-        }
-
-    @property
-    def destructive(self) -> bool:
-        """是否必须重建表并搬运数据（SQLite 改不了列型 / 约束）。"""
-        return self.kind == "column_mismatch"
-
-    @property
-    def warning(self) -> bool:
-        """是否只是**告警**（多出的列 / 多出的表）。
-
-        这两类**不删不拦**：库里的东西不是我们建的，就不动它（§8.4）。
-        它们与"缺表 / 缺列 / 列型不符"性质不同——后者开库必须处置或拒绝，
-        故开库时只对非告警的剩余差异报错。
-        """
-        return self.kind in {"extra_column", "extra_table"}
+    kind: DiffKind
+    table: str
+    subject: str
+    detail: str
+    destructive: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class RebuildPlan:
-    """重建授权：**破坏性动作必须显式给**（不给则拒绝执行）。"""
+    """重建授权：明确列出允许重建的表与理由。
+
+    Attributes:
+        tables: 允许重建的表名；未覆盖到的表一律拒绝。
+        reason: 为什么重建——授权是要签字的东西，不是开关。
+    """
 
     tables: tuple[str, ...]
-    """要重建的表名。旧表**改名隔离**（``<表>__dropped_<时刻>``）而不删：
-    字节留在库里可查可搬，表内容由调用方按声明重建，或从备份恢复。"""
-
-    reason: str = ""
-    """为什么重建（进日志，便于回溯）。"""
+    reason: str
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
+class Alignment:
+    """一次开库对齐的结果。
+
+    Attributes:
+        differences: 全部差异（含只告警的那些）。
+        applied: 实际执行的语句。
+        warnings: 只告警不处置的事项。
+        rebuilt: 被重建（改名隔离后重建）的表。
+        declaration_changed: 库内登记的声明与当前声明不同。
+    """
+
+    differences: tuple[Difference, ...] = ()
+    applied: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    rebuilt: tuple[str, ...] = ()
+    declaration_changed: bool = False
+
+    @property
+    def clean(self) -> bool:
+        """没有任何差异（开库即对齐，什么都不用做）。"""
+        return not self.differences
+
+
+@dataclass(slots=True)
+class _ActualColumn:
+    """从库里读到的列的样子。"""
+
+    type: str
+    not_null: bool
+    primary_key: bool
+    default: str | None
+
+
+@dataclass(slots=True)
+class _ActualIndex:
+    """从库里读到的索引的样子。"""
+
+    unique: bool
+    origin: str
+    columns: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class _ActualTable:
+    """从库里读到的一张表：列与索引。"""
+
+    columns: dict[str, _ActualColumn] = field(default_factory=dict)
+    indexes: dict[str, _ActualIndex] = field(default_factory=dict)
+
+
 class Index:
-    """索引库：一个 sqlite 连接 + 一组表声明。"""
+    """一个索引库连接：开库即对齐声明，附带可检视的对齐报告。
 
-    path: Path
-    conn: sqlite3.Connection
-    declarations: tuple[TableSpec, ...] = field(default_factory=declared_tables)
+    本层不做行读写（那是存储引擎与巡检的事）；它只负责"库里长什么样"与"该改成什么样"。
+    """
 
-    # ---- 生命周期 ----
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        declaration: Declaration,
+        alignment: Alignment,
+    ) -> None:
+        """由 :meth:`open` 使用；不留公开构造。"""
+        self._connection = connection
+        self._declaration = declaration
+        self._alignment = alignment
+
     @classmethod
-    def open(cls, path: Path | str) -> Index:
-        """打开（不存在即建）索引库；只建 ``meta``，其余表由 :meth:`align` 按声明处置。
+    def open(
+        cls,
+        path: str | Path,
+        declaration: Declaration,
+        *,
+        create: bool = False,
+        rebuild: RebuildPlan | None = None,
+    ) -> Index:
+        """打开（或显式建立）索引库，并把结构与声明对齐。
 
-        **不接管别人的 SQLite 文件**：库里已有表，却**一张都不是本程序声明的**，
-        就说明它不是本程序建的——旧格式的目录也落在这一条上。此时拒开，而不是往里建表：
-        与配置端的口径一致，绝不覆盖别人的文件；也免得老库被当成"空库"静默读过去。
+        Args:
+            path: 索引库文件（`vault/catalog.db`）。
+            declaration: 当前声明集。
+            create: 文件不存在时是否建立。**读路径不建库**，故默认 ``False``。
+            rebuild: 破坏性差异的授权；不给则遇到容器级漂移即拒绝。
+
+        Raises:
+            IndexNotFoundError: 文件不存在且未要求建立。
+            IndexSchemaError: 这不是本程序的索引库，或存在未授权的破坏性差异。
         """
-        target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        declarations = declared_tables()  # 先解析声明：它抛错时还没有连接需要关
-        conn = sqlite3.connect(str(target))
-        conn.row_factory = sqlite3.Row
+        database = Path(path)
+        existed = database.is_file()
+        if not existed and not create:
+            raise IndexNotFoundError(f"索引库不存在: {database}")
+        connection = sqlite3.connect(database)
+        connection.row_factory = sqlite3.Row
         try:
-            strangers = _stranger_tables(conn, declarations)
-        except Exception:
-            conn.close()  # 库坏掉时认表这一步就会抛：抛之前先关，不得漏连接
+            alignment = _align(connection, declaration, existed=existed, rebuild=rebuild)
+        except BaseException:
+            connection.close()
             raise
-        if strangers:
-            conn.close()
-            raise IndexSchemaError(
-                f"库里已有的表 {strangers} 一张都不是本程序声明的，不接管：{target}"
-                "（旧格式的库不予读取；换目录或人工处置）"
-            )
-        try:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-            )
-        except Exception:
-            conn.close()
-            raise
-        return cls(path=target, conn=conn, declarations=declarations)
+        return cls(connection, declaration, alignment)
+
+    @property
+    def declaration(self) -> Declaration:
+        """当前声明集。"""
+        return self._declaration
+
+    @property
+    def alignment(self) -> Alignment:
+        """本次开库的对齐报告。"""
+        return self._alignment
+
+    @property
+    def rows(self) -> Rows:
+        """本库的行层：定位行 / hub 登记 / 关系边的读写（共用这条连接）。"""
+        return Rows(self._connection)
+
+    def tables(self) -> tuple[str, ...]:
+        """库内实际的表名（按名排序）。"""
+        return tuple(sorted(_introspect(self._connection)))
 
     def close(self) -> None:
         """关闭连接。"""
-        self.conn.close()
+        self._connection.close()
 
-    def commit(self) -> None:
-        """提交当前事务。"""
-        self.conn.commit()
+    def __enter__(self) -> Self:
+        """进入 ``with``：库可用。"""
+        return self
 
-    # ---- 对比 ----
-    def actual_tables(self) -> dict[str, dict[str, ColumnState]]:
-        """实际表结构：``{表名: {列名: 列的实际样子}}``（不含 ``meta`` 与 sqlite 内部表）。"""
-        found: dict[str, dict[str, ColumnState]] = {}
-        rows = self.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall()
-        for row in rows:
-            name = str(row["name"])
-            if name == "meta":
-                continue
-            found[name] = self._columns_of(name)
-        return found
-
-    def _columns_of(self, name: str) -> dict[str, ColumnState]:
-        """按 ``PRAGMA table_info`` 取列的**类型与约束**（引号内是表名，来自声明，已校验标识符）。
-
-        只比类型是不够的：``not_null`` / ``default`` / 主键的漂移同样是"库里与声明不符"，
-        静默放过就等于库结构悄悄跑偏（声明改了一列的非空或默认值，开库却一路绿灯）。
-        """
-        quoted = '"' + name.replace('"', '""') + '"'
-        return {
-            str(row["name"]): ColumnState(
-                type=str(row["type"]).upper(),
-                not_null=bool(row["notnull"]),
-                primary_key=bool(row["pk"]),
-                default=None if row["dflt_value"] is None else str(row["dflt_value"]),
-            )
-            for row in self.conn.execute(f"PRAGMA table_info({quoted})")
-        }
-
-    def actual_indexes(self, table: str) -> set[tuple[tuple[str, ...], bool]]:
-        """实际索引：``{(列组合, 是否唯一)}``。"""
-        return set(self.actual_index_defs(table).values())
-
-    def actual_index_defs(self, table: str) -> dict[str, tuple[tuple[str, ...], bool]]:
-        """实际索引：``{索引名: (列组合, 是否唯一)}``（按**名字**索引，比对同名不同定义用）。"""
-        quoted = '"' + table.replace('"', '""') + '"'
-        found: dict[str, tuple[tuple[str, ...], bool]] = {}
-        for row in self.conn.execute(f"PRAGMA index_list({quoted})"):
-            index_name = str(row["name"])
-            if index_name.startswith("sqlite_autoindex"):
-                continue
-            columns = tuple(
-                str(item["name"])
-                for item in self.conn.execute(f'PRAGMA index_info("{index_name}")')
-            )
-            found[index_name] = (columns, bool(row["unique"]))
-        return found
-
-    def differences(self) -> list[Difference]:
-        """把实际结构与声明逐项比，返回差异清单（空 = 一致）。"""
-        found: list[Difference] = []
-        declared = {table.name: table for table in self.declarations}
-        actual = self.actual_tables()
-        for name, table in declared.items():
-            if name not in actual:
-                found.append(Difference(name, "missing_table", "声明有、库里没有"))
-                continue
-            columns = actual[name]
-            wanted = {column.name: column for column in table.columns}
-            for column in table.columns:
-                if column.name not in columns:
-                    # 缺列分两种：**能原地补**的（ALTER TABLE ADD COLUMN）与**补不上**的
-                    # （主键 / UNIQUE / NOT NULL 无默认值）。后者只能重建，故按破坏性差异报，
-                    # 免得落在"可原位补齐"里、对齐时却补不上而卡在"仍有差异"。
-                    statement = table.add_column_ddl(column)
-                    if statement is None:
-                        found.append(
-                            Difference(
-                                name,
-                                "column_mismatch",
-                                f"{column.name}: 缺列且无法原地补"
-                                "（主键 / UNIQUE / NOT NULL 无默认值），须重建",
-                            )
-                        )
-                    else:
-                        found.append(
-                            Difference(name, "missing_column", column.name, subject=column.name)
-                        )
-                else:
-                    drifted = _column_drift(column, columns[column.name])
-                    if drifted:
-                        found.append(Difference(name, "column_mismatch", drifted))
-            found.extend(
-                Difference(name, "extra_column", extra, subject=extra)
-                for extra in sorted(set(columns) - set(wanted))
-            )
-            defs = self.actual_index_defs(name)
-            for index in table.indexes:
-                label = index_name(name, index.columns)
-                defined = defs.get(label)
-                if defined is None:
-                    found.append(Difference(name, "missing_index", label, subject=label))
-                elif defined != (index.columns, index.unique):
-                    # 同名、不同定义（索引名只由表名与列推出，故**唯一性变化**正好落在这里）。
-                    # 得先 DROP 再建：`CREATE INDEX IF NOT EXISTS` 见到同名会跳过，
-                    # 光靠它永远改不过来，差异就卡在"对齐后仍有"。
-                    found.append(
-                        Difference(
-                            name,
-                            "index_mismatch",
-                            f"{label}: 实际 {defined} ≠ 声明 {(index.columns, index.unique)}",
-                            subject=label,
-                        )
-                    )
-        found.extend(
-            Difference(extra_table, "extra_table", "库里有、声明没有")
-            for extra_table in sorted(set(actual) - set(declared))
-        )
-        return found
-
-    def repair_plan(self) -> dict[str, object]:
-        """按分类给出处置计划（**只出计划，不动库**）：补齐、重建、拒绝三类。"""
-        differences = self.differences()
-        fixable = [item for item in differences if item.fixable]
-        destructive = [item for item in differences if item.destructive]
-        return {
-            "fixable": sorted({item.table for item in fixable}),
-            "rebuild": sorted({item.table for item in destructive}),
-            "details": [
-                {"table": item.table, "kind": item.kind, "detail": item.detail}
-                for item in differences
-            ],
-        }
-
-    # ---- 处置 ----
-    def align(self, *, rebuild: RebuildPlan | None = None) -> list[Difference]:
-        """对齐声明：原位补齐照做（缺表建表、**缺列补列**、缺索引建索引）；破坏性差异无授权即拒绝。
-
-        "缺列补列"由 :meth:`TableSpec.add_column_ddl` 生成 ``ALTER TABLE … ADD COLUMN``：
-        ``ddl()`` 里那句 ``CREATE TABLE IF NOT EXISTS`` 对**已存在的表**是空操作，
-        只靠它补不上列——那会让"声明加一列"变成"库打不开"。
-
-        返回处置后仍存在的差异（应为空）；非空即抛错——不静默放过。
-        """
-        differences = self.differences()
-        destructive = self._authorize(differences, rebuild)
-        for table in self.declarations:
-            self._align_table(table, differences, destructive)
-        self.conn.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-            (_META_KEY, json.dumps(_canonical_declarations(), ensure_ascii=False, sort_keys=True)),
-        )
-        self.conn.commit()
-        return self.differences()
-
-    def _authorize(self, differences: list[Difference], rebuild: RebuildPlan | None) -> set[str]:
-        """破坏性差异的授权检查（**没授权就不动库**）；返回获准重建的表名集合。"""
-        destructive = {item.table for item in differences if item.destructive}
-        if destructive and rebuild is None:
-            raise IndexSchemaError(
-                f"以下表的列型或约束与声明不符（或缺列且补不上），SQLite 无法原地修改，"
-                f"需重建并搬运：{sorted(destructive)}（调用方须显式给出 RebuildPlan）"
-            )
-        allowed = set(rebuild.tables) if rebuild is not None else set()
-        unauthorized = destructive - allowed
-        if unauthorized:
-            raise IndexSchemaError(
-                f"重建授权未覆盖：{sorted(unauthorized)}（授权 {sorted(allowed)}）"
-            )
-        if rebuild is not None and rebuild.tables:
-            _logger.warning(
-                "按授权重建表（旧表改名隔离、不删；内容须按声明重建或从备份恢复）：%s；原因：%s",
-                rebuild.tables,
-                rebuild.reason,
-            )
-        return destructive
-
-    def _align_table(
-        self, table: TableSpec, differences: list[Difference], destructive: set[str]
-    ) -> None:
-        """处置一张表：按授权重建（整表按声明重来），否则**先建表、再补列、最后建索引**。
-
-        三步的顺序不能反：``ddl()`` 把建表与建索引混在一起返回，若整段先跑，
-        "这次新增一列、并且给它建了索引"就会先执行 ``CREATE INDEX … ("新列")``——
-        那时列还没补上，SQLite 报 ``no such column``，库随即打不开。
-        """
-        statements = table.ddl()
-        if table.name in destructive:
-            self._quarantine(table.name)
-            for statement in statements:
-                self.conn.execute(statement)
-            return  # 重建已按声明建好整张表，缺列随之补齐
-        self.conn.execute(statements[0])  # 建表
-        for column in self._missing_columns(table, differences):
-            alter = table.add_column_ddl(column)
-            if alter is not None:  # 补不上的那些已在 differences() 里按破坏性报出
-                self.conn.execute(alter)
-        for stale in self._stale_indexes(table, differences):
-            self.conn.execute(f'DROP INDEX IF EXISTS "{stale}"')  # 同名不同定义 → 拆掉重建
-        for statement in statements[1:]:  # 建索引（必须在补列之后）
-            self.conn.execute(statement)
-
-    def _quarantine(self, table: str) -> None:
-        """把待重建的表**改名隔离**，而不是 ``DROP``。
-
-        ``DROP TABLE`` 会让整张表的行当场消失，而"数据由调用方搬运"这句承诺在实现里
-        没有落点：调用方拿不到旧行，`Vault.open` 也不代搬；对档三（真源在库内、
-        只能靠备份）的表更是不可恢复的丢失。改名则字节一行不丢：人工可查、可搬、可删。
-
-        隔离表按"库里有、声明没有"处置，即 `extra_table` **只告警不删**（§8.4），
-        与全库口径一致。它名下的索引**先拆掉**：索引名整库唯一，留着会与新建的同名
-        索引相撞，让新表的索引被静默跳过、差异卡在"对齐后仍有"。
-        """
-        for stale in self.actual_index_defs(table):
-            self.conn.execute(f'DROP INDEX IF EXISTS "{stale}"')
-        quoted = '"' + table.replace('"', '""') + '"'
-        self.conn.execute(f'ALTER TABLE {quoted} RENAME TO "{table}__dropped_{now_ms()}"')
-
-    @staticmethod
-    def _stale_indexes(table: TableSpec, differences: list[Difference]) -> list[str]:
-        """同名、定义已变的索引（先拆掉，随后按声明重建）；名字取自差异的结构化字段。"""
-        return [
-            item.subject
-            for item in differences
-            if item.kind == "index_mismatch" and item.table == table.name
-        ]
-
-    @staticmethod
-    def _missing_columns(table: TableSpec, differences: list[Difference]) -> list[Column]:
-        """这张表里"缺、且能原地补"的列（顺序即声明顺序）；名字取自差异的结构化字段。"""
-        missing = {
-            item.subject
-            for item in differences
-            if item.kind == "missing_column" and item.table == table.name
-        }
-        return [column for column in table.columns if column.name in missing]
-
-    def verify_declarations(self) -> None:
-        """校验库里记的声明投影与程序当前声明一致；不一致即报错。
-
-        这是"表声明走配置"的落点之一：配置里那份是**投影**，
-        它一旦与声明不符，说明有人手改了生成物或代码与库脱节。
-        """
-        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (_META_KEY,)).fetchone()
-        if row is None:
-            return
-        stored = json.loads(str(row["value"]))
-        if stored != _canonical_declarations():
-            raise IndexSchemaError("库内记录的声明投影与当前声明不一致（先跑对齐或迁移）")
-
-    def recorded_declarations(self) -> dict[str, object]:
-        """库里记录的那份声明投影（供巡检 / 排查）。"""
-        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (_META_KEY,)).fetchone()
-        if row is None:
-            return {}
-        parsed: object = json.loads(str(row["value"]))
-        if not isinstance(parsed, dict):
-            raise RecordFormatError("库内声明投影不是映射")
-        return {str(key): value for key, value in parsed.items()}
-
-    # ---- 入口四件事（§8.1）：筛 / 计数 / 地址反查 / 边 ----
-    def record_row(self, value_uuid: str) -> sqlite3.Row | None:
-        """按身份取定位行。"""
-        row: sqlite3.Row | None = self.conn.execute(
-            "SELECT * FROM record WHERE value_uuid = ?", (value_uuid,)
-        ).fetchone()
-        return row
-
-    def find_by_hash(self, value_hash: str) -> list[sqlite3.Row]:
-        """地址反查：哪些记录的内容是这一份（去重命中时用）。"""
-        return list(
-            self.conn.execute("SELECT * FROM record WHERE value_hash = ?", (value_hash,)).fetchall()
-        )
-
-    def count(self, *, kind: str | None = None) -> int:
-        """计数（可按类型）；不扫载体。"""
-        if kind is None:
-            row = self.conn.execute("SELECT COUNT(*) AS n FROM record").fetchone()
-        else:
-            row = self.conn.execute(
-                "SELECT COUNT(*) AS n FROM record WHERE kind = ?", (kind,)
-            ).fetchone()
-        return int(row["n"])
-
-    def upsert_record(self, row: Mapping[str, object]) -> None:
-        """写入 / 更新一条定位行（位置永远由载体的实际写入结果给出）。"""
-        columns = list(row)
-        names = ", ".join(f'"{name}"' for name in columns)
-        placeholders = ", ".join("?" for _ in columns)
-        updates = ", ".join(f'"{name}" = excluded."{name}"' for name in columns)
-        self.conn.execute(
-            f"INSERT INTO record ({names}) VALUES({placeholders}) "
-            f"ON CONFLICT(value_uuid) DO UPDATE SET {updates}",
-            [row[name] for name in columns],
-        )
-
-    def remove_record(self, value_uuid: str) -> bool:
-        """摘掉一条定位行；返回它此前是否存在。
-
-        **只摘行**：载体里的字节留着，等压实回收——物理坐标是投影，删投影不动事实（§5.2）。
-        """
-        cursor = self.conn.execute("DELETE FROM record WHERE value_uuid = ?", (value_uuid,))
-        return cursor.rowcount > 0
-
-    def edges(self, *, src: str = "", dst: str = "", kind: str = "") -> list[sqlite3.Row]:
-        """按来源 / 目标 / 种类查边（拓扑遍历的入口）。"""
-        clauses: list[str] = []
-        values: list[object] = []
-        for name, value in (("src", src), ("dst", dst), ("kind", kind)):
-            if value:
-                clauses.append(f'"{name}" = ?')
-                values.append(value)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        # 子句由固定列名与占位符拼成，值全部走参数；唯一动态部分是 AND 的个数。
-        sql = f"SELECT * FROM edge{where}"  # noqa: S608
-        return list(self.conn.execute(sql, values).fetchall())
-
-    def put_edge(
+    def __exit__(
         self,
-        *,
-        src: str,
-        dst: str,
-        kind: str,
-        domain: str = "",
-        edge_id: str = "",
-    ) -> str:
-        """写一条边（一等行）；``edge_id`` 不给即按内容算，故同一关系重复写不产生第二行。"""
-        identifier = edge_id or _edge_id(src, dst, kind, domain)
-        self.conn.execute(
-            "INSERT OR REPLACE INTO edge(id, src, dst, kind, domain, created)"
-            " VALUES(?, ?, ?, ?, ?, ?)",
-            (identifier, src, dst, kind, domain, now_ms()),
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """退出 ``with``：无论是否异常都关闭连接。"""
+        self.close()
+
+
+def _align(
+    connection: sqlite3.Connection,
+    declaration: Declaration,
+    *,
+    existed: bool,
+    rebuild: RebuildPlan | None,
+) -> Alignment:
+    """比对声明与实际，按差异分类处置，最后更新库内登记的声明。"""
+    actual = _introspect(connection)
+    declared = {table.name for table in declaration.tables}
+    if existed and not _looks_like_ours(actual, declared):
+        raise IndexSchemaError(
+            f"这个 sqlite 文件不是本程序的索引库：既没有 {META_TABLE}，也没有任何声明过的表"
         )
-        return identifier
+
+    differences, statements, warnings = _plan(declaration, actual, declared)
+    if META_TABLE not in actual:
+        # meta 是索引库自用表：不在任何声明集里，但建表语句同样由声明编译
+        statements.extend(META_TABLE_SPEC.ddl())
+        differences.append(
+            Difference(DiffKind.MISSING_TABLE, META_TABLE, META_TABLE, "库级登记表未建")
+        )
+    rebuilt, rebuild_statements, rebuild_warnings = _plan_rebuild(
+        declaration, actual, differences, rebuild
+    )
+    statements.extend(rebuild_statements)
+    warnings.extend(rebuild_warnings)
+
+    stored = _stored_signature(connection) if META_TABLE in actual else None
+    signature = declaration.signature()
+    declaration_changed = stored is not None and stored != signature
+    if declaration_changed:
+        differences.append(
+            Difference(
+                DiffKind.DECLARATION_DRIFT,
+                META_TABLE,
+                META_TABLE,
+                "库内登记的声明与当前声明不同",
+            )
+        )
+
+    applied: list[str] = []
+    for statement in statements:
+        connection.execute(statement)
+        applied.append(statement)
+    if stored != signature:
+        _write_signature(connection, signature)
+        applied.append(f"登记声明: {DECLARATION_KEY}")
+    connection.commit()
+
+    return Alignment(
+        differences=tuple(differences),
+        applied=tuple(applied),
+        warnings=tuple(warnings),
+        rebuilt=tuple(rebuilt),
+        declaration_changed=declaration_changed,
+    )
 
 
-def _stranger_tables(conn: sqlite3.Connection, declarations: tuple[TableSpec, ...]) -> list[str]:
-    """已有的表里，哪些说明"这不是我们的库"。
+def _plan(
+    declaration: Declaration,
+    actual: dict[str, _ActualTable],
+    declared: set[str],
+) -> _Plan:
+    """逐表比对，并把"多出来的表"记成告警。"""
+    differences: list[Difference] = []
+    statements: list[str] = []
+    warnings: list[str] = []
 
-    判据：库中已有表（`meta` 除外），却**一张都不是本程序声明的**——那不是我们的库
-    （旧格式的目录同样撞在这一条上：它有自己的 packs / contents / blocks）。
-    只建过 `meta` 的库**不拦**：那是刚 `open`、还没对齐的样子。
+    for spec in declaration.tables:
+        found = actual.get(spec.name)
+        if found is None:
+            differences.append(
+                Difference(DiffKind.MISSING_TABLE, spec.name, spec.name, "库内缺这张表")
+            )
+            statements.extend(spec.ddl())
+            continue
+        table_diffs, table_statements, table_warnings = _compare_table(spec, found)
+        differences.extend(table_diffs)
+        statements.extend(table_statements)
+        warnings.extend(table_warnings)
 
-    声明由调用方传入（而不是在这里现读）：读声明会抛错，而那时连接已经建立，
-    在 `open` 里就得为它单独兜一遍关连接；先解析、后连接则没有这个窗口。
+    for name in sorted(actual):
+        if name == META_TABLE or name in declared:
+            continue
+        differences.append(Difference(DiffKind.EXTRA_TABLE, name, name, "库里有、声明里没有"))
+        warnings.append(f"多出的表: {name}")
+
+    return differences, statements, warnings
+
+
+def _plan_rebuild(
+    declaration: Declaration,
+    actual: dict[str, _ActualTable],
+    differences: list[Difference],
+    rebuild: RebuildPlan | None,
+) -> _Rebuild:
+    """破坏性差异的处置：**授权后**才改名隔离并重建。"""
+    targets = tuple(dict.fromkeys(item.table for item in differences if item.destructive))
+    if not targets:
+        return [], [], []
+    _authorize(rebuild, targets)
+
+    statements: list[str] = []
+    warnings: list[str] = []
+    stamp = int(time.time() * 1000)
+    for name in targets:
+        spec = declaration.table(name)
+        if spec is None:  # 破坏性差异只可能来自声明过的表
+            raise IndexSchemaError(f"待重建的表不在声明里: {name}")
+        found = actual.get(name)
+        if found is None:  # 破坏性差异只可能来自库里确实存在的表
+            raise IndexSchemaError(f"待重建的表不在库里: {name}")
+        # 先拆掉旧表的索引：索引名**整库唯一**，而 RENAME 只改表名、不动索引名，
+        # 留着同名索引会让随后的 CREATE INDEX IF NOT EXISTS 被静默跳过。
+        # 名字取自 PRAGMA index_list 的读回结果（`actual`），不是声明推出来的那套。
+        for index_name, index in sorted(found.indexes.items()):
+            if index.origin == "c":  # 隐式唯一索引（origin='u'）随表改名走，DROP 不掉
+                statements.append(f"DROP INDEX IF EXISTS {quote_identifier(index_name)}")
+        isolated = _free_name(f"{name}{DROPPED_SUFFIX}{stamp}", actual)
+        statements.append(
+            f"ALTER TABLE {quote_identifier(name)} RENAME TO {quote_identifier(isolated)}"
+        )
+        statements.extend(spec.ddl())
+        warnings.append(f"隔离表: {isolated}（只告警，不删）")
+    return list(targets), statements, warnings
+
+
+def _compare_table(spec: TableSpec, found: _ActualTable) -> _Plan:
+    """比一张表：列（含列级唯一）与索引。"""
+    column_diffs, column_statements, column_warnings = _compare_columns(spec, found)
+    index_diffs, index_statements, index_warnings = _compare_indexes(spec, found)
+    return (
+        [*column_diffs, *index_diffs],
+        [*column_statements, *index_statements],
+        [*column_warnings, *index_warnings],
+    )
+
+
+def _compare_columns(spec: TableSpec, found: _ActualTable) -> _Plan:
+    """比列：缺失即建或补、漂移即破坏性、多出的只告警；列级唯一另算。"""
+    differences: list[Difference] = []
+    statements: list[str] = []
+    warnings: list[str] = []
+
+    for column in spec.columns:
+        actual_column = found.columns.get(column.sql_name)
+        if actual_column is None:
+            differences.append(_missing_column(spec, column, statements))
+            continue
+        drift = _column_drift(column, actual_column, key=column.sql_name in spec.primary_key)
+        if drift is not None:
+            differences.append(
+                Difference(
+                    DiffKind.CHANGED_COLUMN, spec.name, column.sql_name, drift, destructive=True
+                )
+            )
+
+    declared_columns = {column.sql_name for column in spec.columns}
+    for name in sorted(found.columns):
+        if name not in declared_columns:
+            differences.append(
+                Difference(DiffKind.EXTRA_COLUMN, spec.name, name, "库里有、声明里没有")
+            )
+            warnings.append(f"多出的列: {spec.name}.{name}")
+
+    differences.extend(
+        Difference(
+            DiffKind.MISSING_UNIQUE,
+            spec.name,
+            column.sql_name,
+            "声明为唯一，库内没有对应的唯一索引",
+            destructive=True,
+        )
+        for column in spec.columns
+        if column.unique and not _has_unique_on(found, column.sql_name)
+    )
+
+    return differences, statements, warnings
+
+
+def _missing_column(spec: TableSpec, column: Column, statements: list[str]) -> Difference:
+    """缺一列：补得上就补，补不上按破坏性处置（改列型不是补列）。"""
+    if column.can_be_added():
+        statements.append(spec.add_column_ddl(column.name))
+        return Difference(DiffKind.MISSING_COLUMN, spec.name, column.name, "库内缺这一列")
+    return Difference(
+        DiffKind.MISSING_COLUMN,
+        spec.name,
+        column.name,
+        "缺列且补不上（主键 / 唯一 / 非空无默认值）",
+        destructive=True,
+    )
+
+
+def _compare_indexes(spec: TableSpec, found: _ActualTable) -> _Plan:
+    """比索引：缺失即建、同名不同定义即拆掉重建、多出的只告警。"""
+    differences: list[Difference] = []
+    statements: list[str] = []
+    warnings: list[str] = []
+
+    declared_indexes = {spec.index_name(index): index for index in spec.resolved_indexes()}
+    for name, index in declared_indexes.items():
+        actual_index = found.indexes.get(name)
+        if actual_index is None:
+            differences.append(
+                Difference(DiffKind.MISSING_INDEX, spec.name, name, "库内缺这个索引")
+            )
+            statements.append(spec.index_ddl(index))
+            continue
+        if actual_index.unique != index.unique or actual_index.columns != index.columns:
+            differences.append(
+                Difference(
+                    DiffKind.CHANGED_INDEX,
+                    spec.name,
+                    name,
+                    "同名索引的定义变了（唯一性或列组合）",
+                )
+            )
+            statements.append(f"DROP INDEX {quote_identifier(name)}")
+            statements.append(spec.index_ddl(index))
+
+    for name, actual_index in sorted(found.indexes.items()):
+        if name in declared_indexes or actual_index.origin != "c":
+            continue
+        differences.append(Difference(DiffKind.EXTRA_INDEX, spec.name, name, "库里有、声明里没有"))
+        warnings.append(f"多出的索引: {name}")
+
+    return differences, statements, warnings
+
+
+def _column_drift(column: Column, found: _ActualColumn, *, key: bool) -> str | None:
+    """列级漂移：类型、非空、主键、默认值任一项不同即算容器级不兼容。
+
+    `key` 由调用方按**表级主键**算出：主键挪到表级之后，列上的 `primary_key` 一律为假，
+    再读它会把每张有主键的表都判成"主键变了"。
     """
-    declared = {table.name for table in declarations}
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-    ).fetchall()
-    names = {str(row["name"]) for row in rows}
-    if names - {"meta"} and not names & declared:
-        return sorted(names)
-    return []
+    problems: list[str] = []
+    expected_type = sql_type(column.type)
+    if found.type.upper() != expected_type.upper():
+        problems.append(f"类型 {found.type or '（空）'} → {expected_type}")
+    if found.not_null != column.not_null:
+        problems.append("非空约束变了")
+    if found.primary_key != key:
+        problems.append("主键变了")
+    if found.default != column.default_sql():
+        problems.append(f"默认值 {found.default!r} → {column.default_sql()!r}")
+    return "；".join(problems) or None
 
 
-def _canonical_declarations() -> dict[str, object]:
-    """当前声明的规范化投影：按表名归拢的 :meth:`TableSpec.signature`（列与索引有序，摘要稳定）。"""
-    return {table.name: table.signature() for table in declared_tables()}
+def _has_unique_on(table: _ActualTable, column: str) -> bool:
+    """列级唯一在库里由唯一索引承载（SQLite 给 UNIQUE 列建 origin='u' 的隐式索引）。"""
+    return any(
+        index.origin == "u" and index.columns == (column,) for index in table.indexes.values()
+    )
 
 
-def _edge_id(src: str, dst: str, kind: str, domain: str) -> str:
-    """边的身份：由四元组算摘要，故同一关系天然幂等。"""
-    payload = f"{src}\x1f{dst}\x1f{kind}\x1f{domain}".encode()
-    return str(ValueHash.of(payload, context=b"edge"))
+def _authorize(rebuild: RebuildPlan | None, targets: tuple[str, ...]) -> None:
+    """破坏性动作必须显式授权，且授权要覆盖到每一张待重建的表。"""
+    if rebuild is None:
+        raise IndexSchemaError(
+            "结构漂移须显式授权重建: " + ", ".join(targets) + "（开库时给出 RebuildPlan 才执行）"
+        )
+    missing = [name for name in targets if name not in rebuild.tables]
+    if missing:
+        raise IndexSchemaError("授权未覆盖这些表: " + ", ".join(missing))
+    LOGGER.warning("授权重建: %s（理由: %s）", ", ".join(targets), rebuild.reason)
 
 
-__all__ = ["INDEX_NAME", "Difference", "Index", "RebuildPlan"]
+def _looks_like_ours(actual: dict[str, _ActualTable], declared: set[str]) -> bool:
+    """是不是本程序的索引库：有 meta，或至少有一张声明过的表。"""
+    if META_TABLE in actual:
+        return True
+    return bool(declared & set(actual))
+
+
+def _introspect(connection: sqlite3.Connection) -> dict[str, _ActualTable]:
+    """读一遍库里的表、列与索引。"""
+    tables: dict[str, _ActualTable] = {}
+    for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'"):
+        name = str(row["name"])
+        if name.startswith("sqlite_"):
+            continue
+        tables[name] = _read_table(connection, name)
+    return tables
+
+
+def _read_table(connection: sqlite3.Connection, name: str) -> _ActualTable:
+    """读一张表的列与索引。"""
+    table = _ActualTable()
+    columns = connection.execute(f"PRAGMA table_info({quote_identifier(name)})").fetchall()
+    for row in columns:
+        default = row["dflt_value"]
+        table.columns[str(row["name"])] = _ActualColumn(
+            type=str(row["type"]),
+            not_null=bool(row["notnull"]),
+            primary_key=bool(row["pk"]),
+            default=None if default is None else str(default),
+        )
+    indexes = connection.execute(f"PRAGMA index_list({quote_identifier(name)})").fetchall()
+    for row in indexes:
+        index_name = str(row["name"])
+        table.indexes[index_name] = _ActualIndex(
+            unique=bool(row["unique"]),
+            origin=str(row["origin"]),
+            columns=_index_columns(connection, index_name),
+        )
+    return table
+
+
+def _index_columns(connection: sqlite3.Connection, name: str) -> tuple[str, ...]:
+    """读一个索引的列，顺序即索引定义里的顺序。"""
+    rows = connection.execute(f"PRAGMA index_info({quote_identifier(name)})").fetchall()
+    return tuple(str(row["name"]) for row in rows)
+
+
+def _free_name(wanted: str, actual: dict[str, _ActualTable]) -> str:
+    """隔离表名：与库内已有的表重名就逐个追加下划线，直到腾出这个名字。
+
+    时刻戳只精确到毫秒，同一毫秒内对同一张表重建两次、或与上次运行留下的隔离表撞名，
+    ``ALTER TABLE … RENAME TO`` 都会因目标表已存在而失败，开库因此中断。
+    """
+    candidate = wanted
+    while candidate in actual:
+        candidate += "_"
+    return candidate
+
+
+def _stored_signature(connection: sqlite3.Connection) -> str | None:
+    """读库内登记的声明签名；没登记过（或表不在）即 ``None``。"""
+    try:
+        row = connection.execute(
+            # 表名是本模块的常量，且经 quote_identifier 加引号；值全部参数化
+            f"SELECT value FROM {quote_identifier(META_TABLE)} WHERE name = ?",
+            (DECLARATION_KEY,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return None if row is None else str(row["value"])
+
+
+def _write_signature(connection: sqlite3.Connection, signature: str) -> None:
+    """把当前声明的签名登记进 `meta`（开库对齐后即更新，供下次比对）。"""
+    connection.execute(
+        f"INSERT INTO {quote_identifier(META_TABLE)} (name, value) VALUES (?, ?) "
+        f"ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+        (DECLARATION_KEY, signature),
+    )
+
+
+__all__ = [
+    "DECLARATION_KEY",
+    "DROPPED_SUFFIX",
+    "META_TABLE",
+    "Alignment",
+    "DiffKind",
+    "Difference",
+    "Index",
+    "RebuildPlan",
+]

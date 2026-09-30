@@ -233,7 +233,7 @@ ui  ✗  存储内部（body / attrs / checksum / 载体 / 索引库 …）
   （`bind.add(岛.信号, 域信号)`）；Facet 作者无需知晓其为 QML。
 
 > 与已废弃的 `decl` 的关系：问题域相同，取舍继承（单向编译、translator、Raw、不造响应式）；
-> 实现另行立项。旧记录见 `.agents/skills/memory/references/decisions.md`。
+> 实现另行立项。旧记录见 `.agents/skills/memory/references/decisions/`。
 
 ### 4.4 多页面（`Facet` 内的 `Page`）
 
@@ -394,6 +394,6 @@ class NoteFacet(Facet):
 
 - `rules/references/ui-boundary.md`：技术路线、直通机制、绑定约定重写。
 - `docs/architecture/ui-theme.md`：由 QML 时代改写为 Config 规范。
-- `AGENTS.md` / `decisions.md`：UI 边界表述与已废弃路线归档。
+- `AGENTS.md` / `references/decisions/`：UI 边界表述与已废弃路线归档。
 
 > 冲突时以本设计为准，逐条修订规则。

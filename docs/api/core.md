@@ -3,44 +3,75 @@
 
 # core（底座）
 
-> L0：内核（配置引擎 + 信号引擎 + 存储 + 类型地基）。
+> L0：内核——**事件引擎 + 存储引擎 + 异常层**，以及把它们装在一起的 `Kernel`。
 > **必须 Qt-free、传输无关** —— 这条是硬红线。
 
 ## 包入口
-
-对外只有这几样（`core/__init__.py` 的 `__all__`）：
 
 ::: core
     options:
       members: false
 
-## 内核本体
+## 内核装配
 
-两张对象表 + 引擎挂载点 + 最短调用面。
+一个库根加两个引擎：库的开关、引擎挂载与维护入口（`patrol` / `repair`）。
 
-::: core.core
+::: core.init
 
-## 信号引擎
+## 事件引擎
 
-解析 `Event` 包，按包内字段解析到实际角色，形成有效动作。
+事件是**瞬时通知**：不进存储、不承载业务流转；总线只做扇出，不做决策。
 
-::: core.signal
+::: core.event
+    options:
+      members: false
 
-## 存储
+::: core.event.events
 
-块 / 桶 / 载体 / 索引库，以及它的引擎角色（不认识领域语义）。
-**实现细节按 `_` 前缀过滤；`storage-design.md` 是这一层的唯一事实来源。**
+::: core.event.bus
+
+::: core.event.catalog
+
+## 存储引擎
+
+块落成记录、按身份读回、摘块，落盘后发事件；hub 是载体所在的那一层目录。
 
 ::: core.storage
+    options:
+      members: false
 
-## 配置引擎
+::: core.storage.engine
 
-声明即事实：`Cfg` 写在声明模块的类体里，绑上即报到，展开出「值」与「词表」两个投影落盘。
+::: core.storage.index
 
-::: core.conf
+::: core.storage.hub
 
-## 类型地基
+::: core.storage.carrier
 
-错误、标识符、类型表、标注（`Attr` / `Data` / `Cfg`）、事件数据结构。
+::: core.storage.rows
 
-::: core.types
+::: core.storage.tables
+
+::: core.storage.patrol
+
+## 字节格式
+
+身份、块载荷与载体记录：落盘字节的定义处，改它们就是改格式。
+
+::: core.storage.format
+    options:
+      members: false
+
+::: core.storage.format.id
+
+::: core.storage.format.block
+
+::: core.storage.format.record
+
+## 异常与时间
+
+异常是一层声明（调用方按类型分流）；时间是全库统一的口径。
+
+::: core.exc
+
+::: core.clock
