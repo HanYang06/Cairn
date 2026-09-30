@@ -27,12 +27,15 @@ import sys
 from typing import TYPE_CHECKING
 
 from core.api import Api
+from core.event.catalog import ALL as ALL_EVENTS
 from core.exc import CairnError
 from core.init import Kernel
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from typing import BinaryIO
+
+    from core.event.events import Event
 
 FRAME_HEADER = "Content-Length"
 """帧头的字段名：与 LSP 同款。"""
@@ -92,13 +95,18 @@ def write_frame(stream: BinaryIO, payload: object) -> None:
     stream.flush()
 
 
-def serve(api: Api, *, stdin: BinaryIO, stdout: BinaryIO) -> int:
+def serve(api: Api, *, stdin: BinaryIO, stdout: BinaryIO, notify: bool = True) -> int:
     """读帧 → 派发 → 回帧，直到流尾；返回处理过多少帧。
 
     每一帧都回一条 `{"id": …, "ok": …}`，**失败也回**（带异常类名）——让边车为一个参数
     错误当场崩掉，对使用者更糟。但**帧本身读不出来**时不回：那时流已经没法保证对齐，
     再写只会让对面更困惑，直接收工更诚实。
+
+    `notify` 为真（默认）时把内核事件接成通知帧——那是这条链的**另一个方向**：请求 → 回答
+    是配对的，内核 → 壳是单向推送，对面按"有没有 `id`"把两者分开。
     """
+    if notify:
+        _subscribe(api, stdout)
     count = 0
     while True:
         try:
@@ -110,6 +118,32 @@ def serve(api: Api, *, stdin: BinaryIO, stdout: BinaryIO) -> int:
             return count
         write_frame(stdout, answer(api, request))
         count += 1
+
+
+def _subscribe(api: Api, stdout: BinaryIO) -> None:
+    """把内核的事件接成通知帧。
+
+    订阅的是目录里**全部**类型：目录本身就是"有哪些事件"的唯一清单，新加的事件自动跟上。
+
+    事件在写路径里**同步**触发，而这一层是单线程的一问一答，故一条通知只会排在"它引发的那条
+    回答"**之前**，不会与别的帧交错——这是"不引异步"换来的一个便宜。
+    """
+    for event_type in ALL_EVENTS:
+        api.kernel.bus.subscribe(event_type, _notifier(stdout))
+
+
+def _notifier(stdout: BinaryIO) -> Callable[[Event], None]:
+    """造一个只认这条流的通知处理器。"""
+
+    def notify(event: Event) -> None:
+        write_frame(stdout, _notification(event))
+
+    return notify
+
+
+def _notification(event: Event) -> dict[str, object]:
+    """一条通知帧：**没有 `id`**，对面按这一条与"回答"区分开。"""
+    return {"event": {"type": event.type, "subject": event.subject, "data": event.data}}
 
 
 def answer(api: Api, request: Mapping[str, object]) -> dict[str, object]:

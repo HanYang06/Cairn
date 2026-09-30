@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 from typing import TYPE_CHECKING
@@ -35,6 +36,11 @@ def _frame(payload: object) -> bytes:
     stream = io.BytesIO()
     write_frame(stream, payload)
     return stream.getvalue()
+
+
+def _b64(text: str) -> str:
+    """把一段文本编成 base64（命令面里二进制的写法）。"""
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 # ---- 帧的读写 ----
@@ -182,6 +188,39 @@ def test_main_needs_exactly_one_argument(capsys: pytest.CaptureFixture[str]):
     assert main([]) == 2
     assert main(["a", "b"]) == 2
     assert "用法" in capsys.readouterr().err
+
+
+def test_serve_pushes_events_as_notification_frames(api: Api):
+    """存一条会触发事件：**回答之前**先来一条通知帧，而且它没有 `id`。"""
+    request = _frame({"id": 1, "method": "store", "params": {"data": _b64("x")}})
+    stdout = io.BytesIO()
+
+    serve(api, stdin=io.BytesIO(request), stdout=stdout)
+
+    frames = _replies(stdout.getvalue())
+    notices = [frame for frame in frames if "event" in frame]
+    replies = [frame for frame in frames if "id" in frame]
+
+    assert [_event_type(notice) for notice in notices] == ["object.put"]
+    assert len(replies) == 1
+    assert replies[0]["ok"] is True
+
+
+def test_notifications_can_be_turned_off(api: Api):
+    """关掉推送就只剩回答：给"只想一问一答"的调用方留个口子。"""
+    request = _frame({"id": 1, "method": "store", "params": {"data": _b64("x")}})
+    stdout = io.BytesIO()
+
+    serve(api, stdin=io.BytesIO(request), stdout=stdout, notify=False)
+
+    assert all("event" not in frame for frame in _replies(stdout.getvalue()))
+
+
+def _event_type(frame: Mapping[str, object]) -> object:
+    """取一条通知帧里的类型名。"""
+    event = frame["event"]
+    assert isinstance(event, dict)
+    return event["type"]
 
 
 def _replies(raw: bytes) -> list[Mapping[str, object]]:

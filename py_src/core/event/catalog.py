@@ -25,4 +25,10 @@ BUDGET_EXHAUSTED = "budget.exhausted"
 不归它管。
 """
 
-__all__ = ["BUDGET_EXHAUSTED", "OBJECT_DELETED", "OBJECT_PUT"]
+ALL: tuple[str, ...] = (OBJECT_PUT, OBJECT_DELETED, BUDGET_EXHAUSTED)
+"""目录里**全部**事件类型。
+
+订阅"全都要"的一方用它，而不是自己列一串：加事件时只改目录这一处，漏不掉。
+"""
+
+__all__ = ["ALL", "BUDGET_EXHAUSTED", "OBJECT_DELETED", "OBJECT_PUT"]

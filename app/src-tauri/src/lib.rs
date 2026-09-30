@@ -11,21 +11,28 @@
 //! 与边车之间的协议是 stdio 上的长度头分帧 JSON（与 LSP 同款），与
 //! `py_src/app/sidecar.py` 那一侧严格对称：**长度按字节算**，故中文不会算错。
 //!
+//! **两个方向不一样**：
+//!
+//! - **请求 → 回答**：前端 `invoke("kernel_call", …)`，壳带 `id` 发过去、等那条回答；
+//! - **通知**：内核主动推（没有 `id` 的那一形），壳把它转成 Tauri 事件
+//!   （[`EVENT_CHANNEL`]）交给前端 `listen`。
+//!
+//! 两个方向共用同一根 stdout，所以**读由一个后台线程独占**：它把回答丢进通道、把通知
+//! 直接派出去。写则是壳这边独占的，一问一答串行，不会交错。
+//!
 //! 现状：
 //!
-//! - **请求 → 回答已接线**（本文件）；
-//! - **通知（内核 → 前端）尚未接线**——事件总线那条扇出还没接到这儿，
-//!   故此处不假装它存在；
+//! - 请求 → 回答、通知两个方向都已接线；
 //! - 边车的解释器与模块路径目前靠 `CAIRN_PYTHON` / `CAIRN_PYTHONPATH` 两个环境变量给，
 //!   **打包后的落法待定**。
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver};
 
 use serde_json::{Value, json};
-use tauri::Manager;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// 库根的环境变量名：不给就用工作目录下的 `vault/`（开发期的默认位置）。
 const VAULT_ENV: &str = "CAIRN_VAULT";
@@ -36,11 +43,14 @@ const PYTHON_ENV: &str = "CAIRN_PYTHON";
 /// 边车模块搜索路径的环境变量名（开发期指向 `py_src/`）。
 const PYTHONPATH_ENV: &str = "CAIRN_PYTHONPATH";
 
-/// 一条跑着的边车：子进程加它的两根管道。
+/// 通知经哪个事件名交给前端。
+pub const EVENT_CHANNEL: &str = "kernel://event";
+
+/// 一条跑着的边车：子进程、它的写端，以及后台读线程递回来的回答。
 struct Sidecar {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    replies: Receiver<Value>,
     next_id: u64,
 }
 
@@ -49,7 +59,9 @@ impl Sidecar {
     ///
     /// 边车的日志走它的 stderr，这里选择**继承**——壳的控制台直接看得见，
     /// 而 stdout 那条流留给帧、一个字都不许掺。
-    fn start(vault: &str) -> Result<Self, String> {
+    ///
+    /// `app` 给了就把通知转成 [`EVENT_CHANNEL`] 事件；不给（测试）就只丢回答。
+    fn start(vault: &str, app: Option<AppHandle>) -> Result<Self, String> {
         let python = std::env::var(PYTHON_ENV).unwrap_or_else(|_| "python".to_string());
         let mut command = Command::new(python);
         command.args(["-m", "app.sidecar", vault]);
@@ -64,10 +76,11 @@ impl Sidecar {
             .map_err(|error| format!("起边车失败: {error}"))?;
         let stdin = child.stdin.take().ok_or("拿不到边车的 stdin")?;
         let stdout = child.stdout.take().ok_or("拿不到边车的 stdout")?;
+        let replies = spawn_reader(stdout, app);
         Ok(Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            replies,
             next_id: 1,
         })
     }
@@ -77,7 +90,10 @@ impl Sidecar {
         let id = self.next_id;
         self.next_id += 1;
         self.write_frame(&json!({ "id": id, "method": method, "params": params }))?;
-        let reply = self.read_frame()?;
+        let reply = self
+            .replies
+            .recv()
+            .map_err(|_| "边车没了：读线程已经收工".to_string())?;
         if reply.get("ok").and_then(Value::as_bool) == Some(true) {
             return Ok(reply.get("result").cloned().unwrap_or(Value::Null));
         }
@@ -104,41 +120,6 @@ impl Sidecar {
             .flush()
             .map_err(|error| format!("刷帧失败: {error}"))
     }
-
-    /// 读一帧。头读到空行为止，再按声明的**字节数**精确读正文。
-    fn read_frame(&mut self) -> Result<Value, String> {
-        let mut length: Option<usize> = None;
-        loop {
-            let mut line = String::new();
-            let read = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|error| format!("读帧头失败: {error}"))?;
-            if read == 0 {
-                return Err("边车关了管道".to_string());
-            }
-            let header = line.trim_end_matches(['\r', '\n']);
-            if header.is_empty() {
-                break;
-            }
-            if let Some((name, value)) = header.split_once(':') {
-                if name.trim().eq_ignore_ascii_case("content-length") {
-                    length = Some(
-                        value
-                            .trim()
-                            .parse()
-                            .map_err(|error| format!("帧头的长度不是整数: {error}"))?,
-                    );
-                }
-            }
-        }
-        let size = length.ok_or("帧头里没有 Content-Length")?;
-        let mut body = vec![0u8; size];
-        self.stdout
-            .read_exact(&mut body)
-            .map_err(|error| format!("正文读不满: {error}"))?;
-        serde_json::from_slice(&body).map_err(|error| format!("正文不是 JSON: {error}"))
-    }
 }
 
 impl Drop for Sidecar {
@@ -147,6 +128,62 @@ impl Drop for Sidecar {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// 起一条读线程独占到边车的 stdout：**回答进通道，通知转事件**。
+///
+/// 读必须独占——两个方向共用同一根管道，谁抢谁都会把帧切坏。
+fn spawn_reader(stdout: ChildStdout, app: Option<AppHandle>) -> Receiver<Value> {
+    let (sender, replies) = mpsc::channel();
+    let mut reader = BufReader::new(stdout);
+    std::thread::spawn(move || {
+        while let Ok(frame) = read_frame(&mut reader) {
+            if frame.get("event").is_some() {
+                if let Some(app) = &app {
+                    let _ = app.emit(EVENT_CHANNEL, &frame);
+                }
+                continue;
+            }
+            if sender.send(frame).is_err() {
+                break;
+            }
+        }
+    });
+    replies
+}
+
+/// 读一帧。头读到空行为止，再按声明的**字节数**精确读正文。
+fn read_frame(reader: &mut impl BufRead) -> Result<Value, String> {
+    let mut length: Option<usize> = None;
+    loop {
+        let mut line = String::new();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|error| format!("读帧头失败: {error}"))?;
+        if read == 0 {
+            return Err("边车关了管道".to_string());
+        }
+        let header = line.trim_end_matches(['\r', '\n']);
+        if header.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                length = Some(
+                    value
+                        .trim()
+                        .parse()
+                        .map_err(|error| format!("帧头的长度不是整数: {error}"))?,
+                );
+            }
+        }
+    }
+    let size = length.ok_or("帧头里没有 Content-Length")?;
+    let mut body = vec![0u8; size];
+    reader
+        .read_exact(&mut body)
+        .map_err(|error| format!("正文读不满: {error}"))?;
+    serde_json::from_slice(&body).map_err(|error| format!("正文不是 JSON: {error}"))
 }
 
 /// 边车的共享状态：一把锁，保证一问一答串行。
@@ -175,8 +212,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            let sidecar =
-                Sidecar::start(&vault).map_err(|error| std::io::Error::other(error))?;
+            let sidecar = Sidecar::start(&vault, Some(app.handle().clone()))
+                .map_err(std::io::Error::other)?;
             app.manage(SidecarState(Mutex::new(sidecar)));
             Ok(())
         })
@@ -203,7 +240,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&vault);
         let path = vault.to_str().expect("临时路径不是 UTF-8");
 
-        let mut sidecar = Sidecar::start(path).expect("起边车失败");
+        let mut sidecar = Sidecar::start(path, None).expect("起边车失败");
         let stored = sidecar
             .call("store", json!({ "data": "aGVsbG8=", "kind": "notedata" }))
             .expect("store 失败");
@@ -212,7 +249,9 @@ mod tests {
         let listed = sidecar.call("blocks", json!({})).expect("blocks 失败");
         assert_eq!(listed["blocks"].as_array().map(Vec::len), Some(1));
 
-        let loaded = sidecar.call("load", json!({ "uuid": stored["uuid"] })).expect("load 失败");
+        let loaded = sidecar
+            .call("load", json!({ "uuid": stored["uuid"] }))
+            .expect("load 失败");
         assert_eq!(loaded["data"], json!("aGVsbG8="));
 
         let _ = std::fs::remove_dir_all(&vault);
