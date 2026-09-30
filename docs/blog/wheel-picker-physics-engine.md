@@ -283,4 +283,4 @@ const onItemClick = (value: string, vi: number) => {
 
 ---
 
-*本文配套源码见 `webui/src/components/ui/ArWheelPicker.vue`，基于 Vue 3 + TypeScript，可直接使用。*
+*文中代码示例基于 Vue 3 + TypeScript，可直接改造使用。*

@@ -89,7 +89,7 @@ uv run mkdocs serve                # 本地预览文档站
 
 提交前顺序：一条命令跑完 `uv run pre-commit run --all-files`（钩子需先装，见
 [参与开发](docs/guides/development.md)）。完整说明见 [参与开发](docs/guides/development.md)
-与 [怎么改文档](docs/contributing/docs.md)。
+与 [怎么改文档](docs/contributing.md#怎么改文档)。
 
 ### 打包（Windows）
 
