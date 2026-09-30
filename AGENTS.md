@@ -32,12 +32,17 @@ uv run mkdocs build --strict              # 文档站构建门禁（坏链接/�
 uv run python tools/docgen.py --check     # 生成页防漂移（配置参考 vs 声明现算的词表）
 uv run python tools/docgen.py --write     # 重新生成配置参考页（改了配置声明后跑）
 uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的公共成员会从 API 页消失）
+
+pnpm --dir app check                      # 前端门禁（类型/lint/样式/架构/令牌/单测，六道合一）
+pnpm --dir app gen:tokens                 # 由 config/theme/tokens.json 重新生成令牌 CSS
+pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 ```
 
-> 桌面外壳（Tauri 壳 + Web 前端）已在 `app/` 立项（脚手架已生成），但**功能未落地**；
+> 桌面外壳（Tauri 壳 + Web 前端）已在 `app/` 立项（脚手架已生成、图标与名字已换成 Cairn），
+> 但**功能未落地**：Python 内核的边车与 IPC 转发口尚未实现。
 > 旧打包脚本（`tools/build.py` 与 `build-windows.yml`）依赖 Qt 时代已删除的层级，**待重做**。
-> 前端工具链已定（pnpm + Biome + TypeScript + Vitest），但**门禁尚未接线到 CI**——
-> 见 `.agents/skills/rules/references/ui-boundary.md` §六。
+> **前端门禁已接线**（`pnpm --dir app check`，六道合一；pre-commit 只在 `app/` 变动时跑，
+> CI 走 `web` job）——规矩与门禁的对照表见 `rules/references/frontend.md` §四。
 >
 > 配置投影**没有生成脚本**：跑一遍程序即可（值文件与词表在退出时落盘），
 > 入库产物与声明是否分叉由 `tests/core/test_conf_projection.py` 拦。

@@ -40,3 +40,13 @@ repos:
         language: system
         pass_filenames: false
         types_or: [python, pyi]
+
+      # 前端门禁：只在 app/ 下的文件被改动时跑，故纯 Python 的提交不受影响。
+      # 入口与规矩的对照表见 `.agents/skills/rules/references/frontend.md` §四。
+      - id: frontend
+        name: frontend (pnpm check)
+        entry: pnpm --dir app check
+        language: system
+        files: ^app/
+        pass_filenames: false
+        require_serial: true

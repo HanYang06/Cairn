@@ -13,9 +13,6 @@ permissions:
 jobs:
   quality:
     runs-on: windows-latest
-    env:
-      QT_QPA_PLATFORM: offscreen
-      QSG_RHI_BACKEND: software
     steps:
       - uses: actions/checkout@v4
 
@@ -58,3 +55,29 @@ jobs:
 
       - name: Tests with coverage gate
         run: uv run pytest --cov-fail-under=80
+
+  # 前端门禁：与上面那组（Python 七道）同等地位。规矩与门禁的对照表见
+  # `.agents/skills/rules/references/frontend.md` §四；入口只有一个 `pnpm check`。
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Install (lockfile 即事实源)
+        run: pnpm install --frozen-lockfile
+
+      - name: Checks (类型 / lint / 样式 / 架构 / 令牌 / 单测)
+        run: pnpm check

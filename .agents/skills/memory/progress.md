@@ -8,15 +8,22 @@
 
 ## 一、界面：Tauri + Web 前端（主线）
 
-- [ ] **三项前置未定，未定之前不得写界面代码**：契约的 Python ↔ TS 类型同步、
-  外观令牌落地机制、前端工程宪法的落点（下一条）。
-- [ ] **写 `rules/references/frontend.md`**：组件与样式规矩，**每条必须对应一道门禁**
-  （判不了的规矩不写）。含"页面层禁止原生标签与样式属性"这条硬规矩（待拍板）。
-- [ ] **前端门禁接线**（与 Python 七道同等地位，接进 pre-commit 与 CI）：
-  `tsc --noEmit` / `biome check` / `vitest run` / `pnpm install --frozen-lockfile`，
-  另加架构校验（`dependency-cruiser` 或 `eslint-plugin-boundaries`，**二选一**）、
-  `stylelint` 的 `declaration-property-value-disallowed-list`、`jscpd`、`knip`、
-  自写令牌防漂移检查。**命令名在壳第一次落地时写进 `package.json` 与规则文件。**
+- [x] **外观令牌的落地机制**（2026-09-30 定 + 已落）：`config/theme/tokens.json` 唯一手写处 →
+  `app/scripts/gen-tokens.mjs` 生成 `app/src/styles/tokens.css`（入库、防漂移）；
+  组件只引用 `var(--…)`，由 stylelint 拦字面量。**只剩"页面层禁原生标签"那条待拍板。**
+- [ ] **待作者裁定 · 契约的类型同步**：领域契约必须同时是 Python 与 TS 的类型。
+  倾向"单一事实源 + 生成"（仓内先例：`tools/docgen.py`）；事实源放 **Python** 还是 **中立 schema**。
+  **生成器要有真领域类才有对象可生成**，而 `feature` 层当前为空，故本项**不预先实现**
+  （没有调用方的生成器就是脚手架）。
+- [x] **前端门禁接线**（2026-09-30 定 + 已落）：`app/` 里一条 `pnpm check` 跑完六道——
+  类型（tsc）/ lint 与格式（Biome）/ 样式（stylelint）/ 架构（dependency-cruiser）/
+  令牌防漂移 / 单测（Vitest）。**已接进** pre-commit（只在 `app/` 变动时跑）与
+  CI 的 `web` job。**已实测会拦**：页面里直接 import Tauri API 被 `ipc-single-chokepoint` 拦下。
+- [ ] **待作者裁定 ·"页面层禁止原生标签与样式属性"**：这条最狠也最有效
+  （让"边距圆角阴影一个都不写"从自觉变成没有位置可写）。认了我就写检查脚本接进门禁。
+- [ ] **待作者裁定 · `jscpd`（重复代码）与 `knip`（未用导出与依赖）要不要接。**
+- [ ] **规则扩展的触发条件**：`src/` 真的分出原子 / 组合 / 页面三层之后，
+  再把"依赖只能向下"那条 dependency-cruiser 规则打开（**没有代码的规矩先不立**）。
 - [ ] **许可证核对**：Tauri 及其插件、React 全链与后续每个前端依赖，核对后写进 `NOTICE`。
   目前**只确认 Tauri 是宽松型**（未取到 LICENSE 原文）；画布 / 富文本 / 表格是 AGPL 高发区。
 - [ ] **壳与前端骨架**（作者自办环境；落地顺序草案）：窗口 + 三栏 + 一条真实数据 →
