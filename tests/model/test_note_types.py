@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 
 import pytest
 
@@ -23,7 +23,6 @@ from model.note.types import (
     ListItem,
     NoteBody,
     NoteLine,
-    NoteStyle,
     Ref,
     Span,
     SpanStyle,
@@ -80,16 +79,12 @@ def test_an_empty_style_is_falsy_and_all_empty_forms_agree():
     assert SpanStyle.of({"a": ""}) == SpanStyle()
 
 
-def test_the_two_style_scopes_are_never_equal():
-    """两个作用域就算内容一样也不相等：混用必须当场可见。
+def test_the_body_carries_lines_and_nothing_else():
+    """正文里只有行：笔记级样式与标题一类小字段都是**属性**，跟着块走，故不在这里。
 
-    左边按 `object` 拿着——静态检查知道两者类型不相交，而这里要钉的正是**运行期**那条。
+    这条不是形式主义——放进来就等于"改一次背景把整篇重存一遍"，而正文按内容地址去重。
     """
-    span = SpanStyle.of({"a": "1"})
-    note: object = NoteStyle.of({"a": "1"})
-    assert note != span
-    assert not isinstance(NoteStyle(), SpanStyle)
-    assert not isinstance(SpanStyle(), NoteStyle)
+    assert {item.name for item in fields(NoteBody)} == {"lines"}
 
 
 # ---- 区间 ----
@@ -199,10 +194,10 @@ def test_note_body_keeps_line_order_and_counts_lines():
     assert len(body) == 3
 
 
-def test_an_empty_body_is_empty_and_styled_by_default_off():
-    """空正文合法（新建的笔记还没写），缺省样式是空样式。"""
+def test_an_empty_body_is_empty():
+    """空正文合法：新建的笔记还没有行。"""
     assert len(NoteBody()) == 0
-    assert not NoteBody().style
+    assert NoteBody().lines == ()
 
 
 def test_note_body_is_immutable():

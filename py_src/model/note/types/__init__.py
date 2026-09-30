@@ -30,7 +30,7 @@ from model.note.types.line import (
     Todo,
 )
 from model.note.types.note import NoteData
-from model.note.types.style import NoteStyle, SpanStyle
+from model.note.types.style import SpanStyle
 from model.note.types.tag import NoteTag, NoteTagTable
 
 __all__ = [
@@ -57,7 +57,6 @@ __all__ = [
     "NoteGroup",
     "NoteGroupBody",
     "NoteLine",
-    "NoteStyle",
     "NoteTag",
     "NoteTagTable",
     "PlacedShape",

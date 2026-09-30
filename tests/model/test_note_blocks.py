@@ -58,6 +58,7 @@ def test_note_data_declares_exactly_its_own_attributes():
     assert [name for name, _ in decl.attrs] == [
         "title",
         "subtitle",
+        "style",
         "tags",
         "created",
         "updated",
@@ -102,6 +103,7 @@ def test_block_attrs_takes_exactly_the_declared_fields():
     assert set(block_attrs(NoteData())) == {
         "title",
         "subtitle",
+        "style",
         "tags",
         "created",
         "updated",
@@ -111,13 +113,20 @@ def test_block_attrs_takes_exactly_the_declared_fields():
 
 def test_attributes_ride_on_the_block_record_and_come_back_unchanged(tmp_path: Path):
     """存一条带属性的笔记，读回来一个不少，且值原样。"""
-    note = NoteData(title="标题", subtitle="副题", tags=["#想法"], todo=True)
+    note = NoteData(
+        title="标题",
+        subtitle="副题",
+        style={"background": "var(--color-bg)"},
+        tags=["#想法"],
+        todo=True,
+    )
     with Kernel.create(tmp_path / "vault") as kernel:
         identity = kernel.store(b"body", kind="notedata", attrs=block_attrs(note))
         payload = kernel.storage.block_payload(identity.value_uuid)
     assert payload is not None
     assert payload.attrs["title"] == "标题"
     assert payload.attrs["subtitle"] == "副题"
+    assert payload.attrs["style"] == {"background": "var(--color-bg)"}
     assert payload.attrs["tags"] == ["#想法"]
     assert payload.attrs["todo"] is True
     assert payload.attrs["created"] == note.created

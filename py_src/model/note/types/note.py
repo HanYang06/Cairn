@@ -38,6 +38,14 @@ class NoteData(Block[NoteBody]):
     subtitle: attr[str] = ""
     """副标题。"""
 
+    style: attr[dict[str, str]] = field(default_factory=dict)
+    """**笔记级**样式：整篇的观感（背景一类）。
+
+    它是**属性**，不是正文的一部分。理由与所有属性同一条：正文按内容地址去重，
+    把"改一次背景"写进正文，等于每改一次外观就把整篇重存一遍。
+    值域就是 `conf` 那套——这里只有字符串键值对。
+    """
+
     tags: attr[list[str]] = field(default_factory=list)
     """标签名。
 
