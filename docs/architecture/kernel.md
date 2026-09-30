@@ -32,7 +32,8 @@
 | `root` / `catalog_path` | 库根与索引库路径 |
 | `policy` / `logger` | 载体策略（格长与封口线）、内核日志器 |
 
-短面：`store` / `load` / `drop` / `locate`；维护：`patrol()` / `repair(report)`。
+短面：`store`（可带块自己声明的 `attrs`）/ `load` / `drop` / `locate`；
+维护：`patrol()` / `repair(report)`。
 
 ## 2. 事件引擎
 
@@ -53,6 +54,8 @@
 `Storage`（`core/storage/engine.py`）把块落成**两条记录**：内容记录（载荷即 body，身份按内容签发，
 故同内容只存一份）与块记录（载荷是指向 body 的**两套凭证**的指针，身份是块自己的）。
 读回是"两条一拼"：块身份 → 读块记录 → 取指针 → 按地址读内容记录。
+**块自己声明的属性跟着块记录走**（同一载荷里的另一个保留键）：不进 body、也不落库列，
+故它随块的身份一起变，且顺扫可还原。
 两条记录各进**各自的表**（`body` / `block`），行层读写见 `storage/rows.py`；
 表的形状由类型登记现算（`storage/registry.py` / `tablegen.py`），
 细节（格模型、记录头、索引库、巡检）全在 [`storage-design.md`](./storage-design.md)。

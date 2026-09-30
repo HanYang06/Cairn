@@ -25,17 +25,27 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.event.catalog import OBJECT_DELETED, OBJECT_PUT
+from core.event.catalog import BUDGET_EXHAUSTED, OBJECT_DELETED, OBJECT_PUT
 from core.event.events import Event
-from core.exc import ObjectNotFoundError
+from core.exc import BlockTooLargeError, ObjectNotFoundError
 
-from .format.block import BodyRef, encode_block_payload
+from .format.block import (
+    BlockPayload,
+    BodyRef,
+    Tombstone,
+    block_payload_of,
+    encode_block_payload,
+    encode_tombstone,
+)
 from .format.id import ID, digest
 from .format.record import decode, encode
 from .hub import Hub, PackPolicy, Placement
+from .registry import REGISTRY, OverBudget, TypeDecl
 from .rows import BlockRow, BodyRow
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from core.event.bus import Bus
 
     from .carrier import SlotRange
@@ -54,6 +64,18 @@ def _place(identity: ID, hub: str, placement: Placement) -> None:
     identity.in_hub = hub
     identity.in_hub_pack = placement.pack
     identity.in_pack_slot = (placement.span.first, placement.span.last)
+
+
+def _check_block_size(decl: TypeDecl | None, size: int) -> None:
+    """块体积上限的判据：按**载荷**长度判，不把记录头的开销算进去。
+
+    Raises:
+        BlockTooLargeError: 载荷超过这个类型声明的上限。**分片尚未接线**，故此刻是拒写。
+    """
+    if decl is not None and decl.max_block_bytes is not None and size > decl.max_block_bytes:
+        raise BlockTooLargeError(
+            f"块超出体积上限: 载荷 {size} 字节 > {decl.max_block_bytes}（类型 {decl.table}）"
+        )
 
 
 class Storage:
@@ -102,16 +124,37 @@ class Storage:
         """默认 hub 名。"""
         return self._default_hub
 
-    def store(self, data: bytes, *, hub: str | None = None, kind: str = "") -> ID:
+    def store(
+        self,
+        data: bytes,
+        *,
+        hub: str | None = None,
+        kind: str = "",
+        attrs: Mapping[str, object] | None = None,
+    ) -> ID:
         """把一个 body 落盘，返回**块身份**。
 
         `data` 是**已经规范化过的字节**：引擎不理解载荷结构，只负责落成记录
-        （规范化属编码与领域，见 §4.3）。`kind` 是类型标号，程序给出、不落进记录头。
+        （规范化属编码与领域，见 §4.3）。`kind` 是类型标号，程序给出、不落进记录头；
+        `attrs` 是块自己的属性，编进**块记录载荷**——不进 body（那是大头内容、按地址
+        去重），也不靠库里的列承载（库只是索引）。
+
+        **写进哪个 hub、受不受配额约束，都看类型声明**：`kind` 就是表名，拿它反查
+        `TypeDecl`（`__own_hub__` / `__hub__` / `__pack_budget__` / `__over_budget__` /
+        `__max_block_*__`）。`hub` 参数是调用方的显式点名，优先于声明。
+
+        **块身份随载荷**：同一份 body 配上不同的属性就是两个块；body 那侧仍按内容去重，
+        故"同内容不同属性"只多一条块记录，内容面还是那一份。
+
+        Raises:
+            BlockTooLargeError: 载荷超过该类型声明的单块上限。
+            BudgetExhaustedError: 配额用完，且该类型的档位声明为 `deny`。
 
         Returns:
             块身份：分配形态凭证新建，摘要形态凭证是块记录载荷的摘要。
         """
-        target = self._hub(self._default_hub if hub is None else hub, create=True)
+        decl = REGISTRY.table(kind) if kind else None
+        target = self._hub(self._hub_name(decl, hub), create=True)
         content = ID.of(data)
         existing = self._index.rows.bodies_by_hash(content.value_hash)
         if existing:
@@ -122,13 +165,13 @@ class Storage:
                 birth_time=existing[0].birth_time,
             )
         else:
-            self._write_body(target, content, data)
+            self._write_body(target, content, data, decl=decl)
             body_id = content
         pointer = encode_block_payload(
-            BodyRef(value_uuid=body_id.value_uuid, value_hash=body_id.value_hash)
+            BodyRef(value_uuid=body_id.value_uuid, value_hash=body_id.value_hash), attrs
         )
         block = ID.of(pointer)
-        self._write_block(target, block, pointer, kind=kind, body=body_id)
+        self._write_block(target, block, pointer, kind=kind, body=body_id, decl=decl)
         self._emit(OBJECT_PUT, block.value_uuid, {"body": body_id.value_hash, "kind": kind})
         return block
 
@@ -165,18 +208,61 @@ class Storage:
         raise ObjectNotFoundError(f"内容不在: {address}")
 
     def drop(self, value_uuid: str) -> bool:
-        """摘掉块那一行，返回是否确实摘掉了一行。
+        """删掉一个块：**先留墓碑，再摘索引行**；返回是否确实删掉了一个。
 
-        **内容面不动**（等压实回收，§12）：同内容可能还有别的块在用，删内容要判引用。
+        载体是追加写，旧字节删不掉，所以删除的落法是一条**墓碑记录**（指向被删记录的位置）。
+        巡检认识墓碑，不会再把被删的那条记录报成"盘上有、库里没行"。
+
+        顺序不能反：先摘行、后写墓碑的话，中途失败就留下一条盘上有、库里没行的块，
+        巡检会把它当缺行补回来（等于撤销这次删除）。先写墓碑，中途失败最多多一条指着
+        空处的墓碑——无害，也不影响任何一次巡检。
+
+        **内容面不动**（等压实回收）：同内容可能还有别的块在用，删内容要判引用。
         """
+        block = self._index.rows.block(value_uuid)
+        if block is None:
+            return False
+        self._write_tombstone(block)
         if not self._index.rows.drop_block(value_uuid):
             return False
         self._emit(OBJECT_DELETED, value_uuid)
         return True
 
+    def _write_tombstone(self, block: BlockRow) -> None:
+        """在被删记录所在的 hub 里追加一条墓碑。
+
+        墓碑**不带归属**：它是内核自己的机制，不占任何类型的配额——否则"删得多"会挤掉
+        "写得多"的额度，两件事不该互相牵连。
+
+        它**不进索引**：索引里不该有它的行（它在盘上，顺扫即得），故位置段也不写回它。
+        """
+        payload = encode_tombstone(
+            Tombstone(
+                value_uuid=block.value_uuid,
+                value_hash=block.value_hash,
+                hub=block.in_hub,
+                pack=block.in_hub_pack,
+                span=(block.in_pack_slot[0], block.in_pack_slot[1]),
+            )
+        )
+        hub = self._hub(block.in_hub, create=False)
+        hub.append(encode(ID.of(payload), payload))
+
     def locate(self, value_uuid: str) -> BlockRow | None:
         """按身份取块那一行（诊断用；读数据走 :meth:`load`）。"""
         return self._index.rows.block(value_uuid)
+
+    def block_payload(self, value_uuid: str) -> BlockPayload | None:
+        """按**块身份**取块记录的两部分（body 指针与属性）；没有这一块即 ``None``。
+
+        读数据走 :meth:`load`、读位置走 :meth:`locate`，读块自己声明的属性走这里。
+        属性与指针同处一层载荷，故顺扫可还原——库里没有它的列，也不需要有。
+        """
+        block = self._index.rows.block(value_uuid)
+        if block is None:
+            return None
+        payload = self._read_payload(block.in_hub, block.in_hub_pack, block.span)
+        return block_payload_of(payload)
 
     def _hub(self, name: str, *, create: bool) -> Hub:
         """按名开 hub：写路径按需建立**并登记**，读路径一律不建。
@@ -195,10 +281,46 @@ class Storage:
         self._index.rows.register_hub(name)
         return created
 
-    def _write_body(self, target: Hub, body: ID, data: bytes) -> None:
+    def _hub_name(self, decl: TypeDecl | None, explicit: str | None) -> str:
+        """这一次写进哪个 hub：调用方点名 > 类型声明（独占 / 指定）> 默认。"""
+        if explicit is not None:
+            return explicit
+        if decl is None:
+            return self._default_hub
+        return decl.hub_name(self._default_hub)
+
+    def _append_record(
+        self, target: Hub, raw: bytes, *, owner: str, decl: TypeDecl | None
+    ) -> Placement:
+        """把一条记录落到载体上：先判配额，再交给 hub 挑位置。
+
+        配额只管"**还许不许再开一份载体**"（`allow_new_pack`）：还有地方写就照写，
+        真到了要新开一份时才按档位处置。
+        """
+        allow_new_pack = True
+        if decl is not None and decl.pack_budget is not None:
+            used = len(target.packs_by_owner(owner))
+            if used >= decl.pack_budget:
+                allow_new_pack = self._over_budget(decl, owner)
+        return target.append(raw, owner=owner, allow_new_pack=allow_new_pack)
+
+    def _over_budget(self, decl: TypeDecl, owner: str) -> bool:
+        """配额用满之后怎么办：返回"还许不许再开一份载体"。
+
+        `deny` 不许（真到要新开时由载体层抛错）、`notify` 先发一条通知再放行、`extend` 静默放行。
+        """
+        if decl.over_budget is OverBudget.DENY:
+            return False
+        if decl.over_budget is OverBudget.NOTIFY:
+            self._emit(BUDGET_EXHAUSTED, owner, {"budget": decl.pack_budget})
+        return True
+
+    def _write_body(self, target: Hub, body: ID, data: bytes, *, decl: TypeDecl | None) -> None:
         """写内容记录，并把它落成一条内容行。"""
+        owner = "" if decl is None else decl.table
+        _check_block_size(decl, len(data))
         raw = encode(body, data)
-        placement: Placement = target.append(raw)
+        placement: Placement = self._append_record(target, raw, owner=owner, decl=decl)
         _place(body, target.name, placement)
         self._index.rows.put_body(
             BodyRow(
@@ -212,14 +334,25 @@ class Storage:
             )
         )
 
-    def _write_block(self, target: Hub, block: ID, payload: bytes, *, kind: str, body: ID) -> None:
+    def _write_block(  # noqa: PLR0913 — 一条记录要的那些东西，散开比收成结构体直白
+        self,
+        target: Hub,
+        block: ID,
+        payload: bytes,
+        *,
+        kind: str,
+        body: ID,
+        decl: TypeDecl | None,
+    ) -> None:
         """写块记录，并把它落成一条块行（指针落成两列）。
 
         类型标号**写进记录本身**（`encode(..., kind=…)`），索引那一列是它的投影：
         否则索引一重扫，全库的块就不知道自己是什么类型。
         """
+        owner = "" if decl is None else decl.table
+        _check_block_size(decl, len(payload))
         raw = encode(block, payload, kind=kind)
-        placement: Placement = target.append(raw)
+        placement: Placement = self._append_record(target, raw, owner=owner, decl=decl)
         _place(block, target.name, placement)
         self._index.rows.put_block(
             BlockRow(

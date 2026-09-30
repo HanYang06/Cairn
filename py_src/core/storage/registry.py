@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING
 
 from core.exc import TableDeclarationError
@@ -27,6 +28,8 @@ from .format.id import ID_FIELDS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from core.conf.types import TypeSpec
 
 #: ID 上能绑成列的字段 = `ID` 的**全部**字段（`ID_FIELDS`）。
 #: 表里的身份列照它逐列搬，故"哪个字段进不去库"这个问题在代码上没有第二种答案。
@@ -43,6 +46,32 @@ BLOCK_TABLE = "block"
 TABLES_FILENAME = "tables.yaml"
 
 
+class Tier(Enum):
+    """重建档：判据是"写不写得出重建来源"（§8.5）。
+
+    它既是**表**的档位也是**类型**的档位：类型的档位由声明给出，再流进它那张表的声明。
+    """
+
+    DERIVED = "derived"
+    """档一：由真源（载体、目录）派生，可重建。**必须**写明重建来源。"""
+
+    SOURCE = "source"
+    """档三：真源就在库里，重建不成立，只能靠备份。**禁止**写重建来源。"""
+
+
+class OverBudget(Enum):
+    """配额用满之后怎么办。"""
+
+    DENY = "deny"
+    """拒绝写入，抛 `BudgetExhaustedError`：宁可写不进去，也不让查询面变宽。"""
+
+    NOTIFY = "notify"
+    """续一份，并发一条 `budget.exhausted` 通知。"""
+
+    EXTEND = "extend"
+    """续一份，不吭声。**默认**——它等同于"没有配额"，也就是既有那条写入纪律。"""
+
+
 @dataclass(frozen=True, slots=True)
 class TypeDecl:
     """一个有 ID 的类型：它的名字即表名，它持有的 ID 字段即列。
@@ -53,6 +82,27 @@ class TypeDecl:
         doc: 说明文本；随表声明落进文件，**不进开库比对的签名**。
         ids: 本行主语的 ID 字段名，与 `ID` 的字段同名（`ID_FIELDS` 的全部）。
         refs: 指向别处的引用，字段名 → 目标表。
+        attrs: 本类型声明的属性，字段名 → 类型判据，顺序即类里书写的顺序。
+            属性**不是列**：它跟着块记录走，这里登记只为了让「哪些字段该落盘、
+            各是什么类型」有确定答案。判据与配置共用（`core.conf.types`）。
+
+    以下是**类型级声明**：它们描述"这个类型的块怎么被存储、被怎么对待"，
+    与表的列形状无关，故**不进声明文件**（`tables.yaml` 只描述库的形状）。
+
+    Attributes:
+        owner: 归属（领域名 / `core`）；写进它那张表的声明。
+        tier: 重建档；流进它那张表的声明。
+        backup: 是否纳入备份。**当前只登记**，备份动作尚未实现。
+        own_hub: 独占一个 hub，名字取 `table`；与 `hub` 互斥。
+        hub: 指定写进哪个 hub（不存在则由写路径建立）；与 `own_hub` 互斥。
+        slot_budget: 单个载体内的格配额。**当前只登记**——载体还没有"区段保留"
+            这个概念，执行它要新机制（见 `progress.md`）。
+        pack_budget: 载体份数配额；用满之后的处置见 `over_budget`。
+        max_block_bytes: 单块体积上限（字节，已把分档位相加归一）；超限即拒写。
+        over_budget: 配额用满之后的行为。
+        indexed: 这个类型里**要建速查**的属性名。速查是倒排（值 → 块身份），
+            它**不落盘**：从块整份重算即可，故领域只在这里声明"哪些可查"。
+            只收标量属性——容器值不可哈希，按它查只能是"包含"式，不值当。
     """
 
     name: str
@@ -60,9 +110,24 @@ class TypeDecl:
     doc: str = ""
     ids: tuple[str, ...] = ID_FIELDS
     refs: Mapping[str, str] = field(default_factory=dict)
+    attrs: tuple[tuple[str, TypeSpec], ...] = ()
+    owner: str = "core"
+    tier: Tier = Tier.DERIVED
+    backup: bool = False
+    own_hub: bool = False
+    hub: str = ""
+    slot_budget: int | None = None
+    pack_budget: int | None = None
+    max_block_bytes: int | None = None
+    over_budget: OverBudget = OverBudget.EXTEND
+    indexed: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """校验登记的字段名：能绑的只有落盘子集，指针能带的只有两套凭证。"""
+        """校验登记的字段名：能绑的只有落盘子集，指针只带两套凭证。
+
+        属性不在这里校验：它只有 `register_type` 一个来源（受控的注解扫描），
+        而同一个名字在注解里只会出现一次，不存在"两处写同一张表"的可能。
+        """
         unknown = [name for name in self.ids if name not in BINDABLE_FIELDS]
         if unknown:
             raise TableDeclarationError(
@@ -78,10 +143,41 @@ class TypeDecl:
             raise TableDeclarationError(f"类型 {self.name} 的引用没有说指向哪张表: {dangling}")
         object.__setattr__(self, "ids", tuple(dict.fromkeys(self.ids)))
         object.__setattr__(self, "refs", dict(self.refs or {}))
+        if self.own_hub and self.hub:
+            raise TableDeclarationError(
+                f"类型 {self.name} 同时声明了 own_hub 与 hub：只能给一个——"
+                "独占时 hub 名取表名，指定时是写进别人的地盘，两者互斥"
+            )
+        for label, value in (
+            ("slot_budget", self.slot_budget),
+            ("pack_budget", self.pack_budget),
+            ("max_block_bytes", self.max_block_bytes),
+        ):
+            if value is not None and value < 1:
+                raise TableDeclarationError(f"类型 {self.name} 的 {label} 必须为正: {value}")
+        known = dict(self.attrs)
+        unknown = [name for name in self.indexed if name not in known]
+        if unknown:
+            raise TableDeclarationError(
+                f"类型 {self.name} 声明要建速查的属性 {unknown} 不是它的属性："
+                f"它有的是 {sorted(known)}"
+            )
+        bulky = [name for name in self.indexed if known[name].scalar in {list, dict}]
+        if bulky:
+            raise TableDeclarationError(
+                f"类型 {self.name} 的 {bulky} 是容器：容器值不可哈希，按它查只能是"
+                "「包含」式，不值当——要查就拆成标量属性"
+            )
 
     def referenced_tables(self) -> tuple[str, ...]:
         """本类型引用到的表名（去重、按出现顺序）。"""
         return tuple(dict.fromkeys(self.refs.values()))
+
+    def hub_name(self, default: str) -> str:
+        """这个类型的块写进哪个 hub：独占取表名、指定取 :attr:`hub`、都没有则用默认。"""
+        if self.own_hub:
+            return self.table
+        return self.hub or default
 
 
 class Registry:
@@ -196,7 +292,9 @@ __all__ = [
     "POINTER_FIELDS",
     "REGISTRY",
     "TABLES_FILENAME",
+    "OverBudget",
     "Registry",
+    "Tier",
     "TypeDecl",
     "register",
     "table_of",

@@ -333,6 +333,16 @@ class Rows:
         self._commit()
         return cursor.rowcount > 0
 
+    def drop_body(self, value_uuid: str) -> bool:
+        """摘掉一条内容行；返回是否确实摘掉了一行。
+
+        整理（`storage/compact.py`）用它：一份内容没有块再引用它时，回收记录与摘掉这一行
+        是同一件事的两面——只回收记录会留下一条读不出来的行，巡检会照报。
+        """
+        cursor = self._connection.execute(_DELETE_BODY, (value_uuid,))
+        self._commit()
+        return cursor.rowcount > 0
+
     # ---- 两张表合起来看 ----
 
     def blocks(self) -> tuple[BlockRow, ...]:

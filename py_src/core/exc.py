@@ -17,6 +17,13 @@ class InvalidIdError(CairnError, ValueError):
     """标识符格式非法：唯一标识凭证或内容摘要凭证不满足各自的形态约束。"""
 
 
+class AttrTypeError(CairnError, ValueError):
+    """属性声明非法：写了 `attr` 却没写类型实参，或实参不在类型词表里。
+
+    判据与配置共用（`core.conf.types`），异常分开只为报错时说得准是哪一侧。
+    """
+
+
 class StorageError(CairnError):
     """存储侧异常的基类：调用方按它兜住整层，再按子类分流。"""
 
@@ -53,6 +60,21 @@ class ObjectNotFoundError(StorageError):
     """对象不在存储里：索引没有这一行，或行指向的字节已经读不出来。"""
 
 
+class BlockTooLargeError(StorageError):
+    """块超出它声明的体积上限。
+
+    上限由类型声明给出（`__max_block_*__`）。**分片尚未接线**，故此刻的处置是拒绝写入，
+    而不是切开——切分是存储的活，落地时这条异常会变成"切完再写"。
+    """
+
+
+class BudgetExhaustedError(StorageError):
+    """配额用完，且该类型的档位声明为拒绝（`over_budget = deny`）。
+
+    声明为 `notify` 或 `extend` 的类型不会抛它：那两档都自动续一份，前者另发一条通知。
+    """
+
+
 class ConfigError(CairnError, ValueError):
     """配置侧异常的基类：调用方按它兜住整层，再按子类分流。"""
 
@@ -80,8 +102,24 @@ class ConfigReferenceError(ConfigError):
     """文件引用不成立：引用名指向仓根之外，或被引用的文件不存在。"""
 
 
+class CallError(CairnError, ValueError):
+    """命令面异常：方法名不认识，或参数缺了 / 多了 / 类型不对。"""
+
+
+class UnknownMethodError(CallError):
+    """方法名不在命令面那张表里——错的是调用方，不是内核。"""
+
+
+class InvalidParamsError(CallError):
+    """参数不合规：缺了必需的、不是要的类型，或值本身解不出来。"""
+
+
 __all__ = [
+    "AttrTypeError",
+    "BlockTooLargeError",
+    "BudgetExhaustedError",
     "CairnError",
+    "CallError",
     "ConfigDuplicateError",
     "ConfigError",
     "ConfigFileError",
@@ -93,9 +131,11 @@ __all__ = [
     "IndexNotFoundError",
     "IndexSchemaError",
     "InvalidIdError",
+    "InvalidParamsError",
     "ObjectNotFoundError",
     "RecordFormatError",
     "SlotError",
     "StorageError",
     "TableDeclarationError",
+    "UnknownMethodError",
 ]

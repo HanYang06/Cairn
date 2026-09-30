@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 from core.exc import HubShapeError, InvalidIdError, RecordFormatError, SlotError
 
-from .format.block import BodyRef, body_ref_of
+from .format.block import BodyRef, body_ref_of, tombstone_of
 from .format.record import decode
 from .hub import Hub, PackPolicy, find_hubs
 from .rows import BlockRow, BodyRow
@@ -135,6 +135,10 @@ class RepairReport:
     skipped: tuple[Find, ...] = ()
 
 
+_DeletedSpot = tuple[str, str, int, int]
+"""墓碑指向的位置：hub、载体、头格、末格。比对时按它放行，不再当成"缺行"。"""
+
+
 @dataclass(frozen=True, slots=True)
 class _Occurrence:
     """盘上一次出现：哪个身份、在哪儿、摘要是什么、它是不是块记录、自报什么类型。"""
@@ -164,7 +168,7 @@ def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) 
     rows = index.rows
     on_disk = {hub.name: hub for hub in find_hubs(root, policy=policy)}
     registered = {item.name for item in rows.hubs()}
-    finds, occurrences, records_scanned, corrupt_packs = _scan_disk(on_disk, registered)
+    finds, occurrences, deleted, records_scanned, corrupt_packs = _scan_disk(on_disk, registered)
 
     blocks = rows.blocks()
     bodies = rows.bodies()
@@ -176,7 +180,7 @@ def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) 
         for name in sorted(missing)
     )
     finds.extend(_row_finds(blocks, bodies, missing, occurrences, corrupt_packs))
-    finds.extend(_missing_row_finds(blocks, bodies, occurrences))
+    finds.extend(_missing_row_finds(blocks, bodies, occurrences, deleted))
 
     ordered = tuple(sorted(finds, key=lambda item: (item.kind.value, item.hub, item.subject)))
     return PatrolReport(
@@ -188,13 +192,20 @@ def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) 
 
 def _scan_disk(
     on_disk: dict[str, Hub], registered: set[str]
-) -> tuple[list[Find], dict[str, list[_Occurrence]], int, set[tuple[str, str]]]:
-    """盘 → 库：登记缺的 hub、坏载体，以及各身份在盘上的出现。
+) -> tuple[
+    list[Find],
+    dict[str, list[_Occurrence]],
+    set[_DeletedSpot],
+    int,
+    set[tuple[str, str]],
+]:
+    """盘 → 库：登记缺的 hub、坏载体、各身份在盘上的出现，以及墓碑指过的位置。
 
     坏载体**按载体捕捉**（`_scan` 一次只扫一个），故一个坏了不影响其余的照扫。
     """
     finds: list[Find] = []
     occurrences: dict[str, list[_Occurrence]] = {}
+    deleted: set[_DeletedSpot] = set()
     records_scanned = 0
     corrupt_packs: set[tuple[str, str]] = set()
     for name, hub in on_disk.items():
@@ -202,11 +213,11 @@ def _scan_disk(
             finds.append(Find(FindKind.UNREGISTERED_HUB, name, name, "hub 目录在、登记缺"))
         for pack in hub.pack_names():
             try:
-                records_scanned += _scan(hub, pack, occurrences)
+                records_scanned += _scan(hub, pack, occurrences, deleted)
             except (InvalidIdError, RecordFormatError, SlotError, HubShapeError) as error:
                 finds.append(Find(FindKind.CORRUPT_CARRIER, name, pack, f"载体读不到底: {error}"))
                 corrupt_packs.add((name, pack))
-    return finds, occurrences, records_scanned, corrupt_packs
+    return finds, occurrences, deleted, records_scanned, corrupt_packs
 
 
 def _row_finds(
@@ -237,14 +248,26 @@ def _missing_row_finds(
     blocks: tuple[BlockRow, ...],
     bodies: tuple[BodyRow, ...],
     occurrences: dict[str, list[_Occurrence]],
+    deleted: set[_DeletedSpot],
 ) -> tuple[Find, ...]:
-    """盘上有、库里没有的身份：补行的那一列（进哪张表由载荷定）。"""
+    """盘上有、库里没有的身份：补行的那一列（进哪张表由载荷定）。
+
+    **墓碑指过的那些出现不算**：它们是被删掉的东西，不该再有行。
+    同一身份可能有多份副本，故逐份判——只跳过被删的那些，活着的照报。
+    """
     known = {row.value_uuid for row in blocks} | {row.value_uuid for row in bodies}
     finds: list[Find] = []
     for value_uuid in sorted(occurrences):
         if value_uuid in known:
             continue
-        occurrence = occurrences[value_uuid][0]
+        alive = [
+            item
+            for item in occurrences[value_uuid]
+            if (item.hub, item.pack, item.span.first, item.span.last) not in deleted
+        ]
+        if not alive:
+            continue
+        occurrence = alive[0]
         finds.append(
             Find(
                 FindKind.MISSING_ROW,
@@ -302,15 +325,25 @@ def _move_row(rows: Rows, find: Find) -> None:
         rows.move_body(find.body)
 
 
-def _scan(hub: Hub, pack: str, occurrences: dict[str, list[_Occurrence]]) -> int:
+def _scan(
+    hub: Hub, pack: str, occurrences: dict[str, list[_Occurrence]], deleted: set[_DeletedSpot]
+) -> int:
     """扫**一个**载体，把记录登记进 `occurrences`；返回读到的条数。
 
     只扫一个：坏载体由调用方捕捉，其余照扫——这是"坏点不即停"的落点。
+
+    **墓碑不登记**：它在索引里本就不该有行，进比对只会被判成"缺行"。它只往
+    `deleted` 记一笔"哪份载体上的哪几格已被删除"，供比对时放行。
     """
     count = 0
     with hub.carrier(pack) as carrier:
         for span, raw in carrier.scan():
             record = decode(raw)
+            mark = tombstone_of(record.payload)
+            if mark is not None:
+                deleted.add((mark.hub, mark.pack, mark.span[0], mark.span[1]))
+                count += 1
+                continue
             occurrences.setdefault(record.id.value_uuid, []).append(
                 _Occurrence(
                     value_uuid=record.id.value_uuid,

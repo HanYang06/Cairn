@@ -31,7 +31,7 @@ import yaml
 
 from core.exc import TableDeclarationError
 
-from .registry import BINDABLE_FIELDS, POINTER_FIELDS, TABLES_FILENAME
+from .registry import BINDABLE_FIELDS, POINTER_FIELDS, TABLES_FILENAME, Tier
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -47,16 +47,6 @@ class ColumnType(Enum):
     REAL = "real"
     BLOB = "blob"
     BOOLEAN = "boolean"
-
-
-class Tier(Enum):
-    """重建档：判据是"写不写得出重建来源"（§8.5）。"""
-
-    DERIVED = "derived"
-    """档一：由真源（载体、目录）派生，可重建。**必须**写明重建来源。"""
-
-    SOURCE = "source"
-    """档三：真源就在库里，重建不成立，只能靠备份。**禁止**写重建来源。"""
 
 
 class ColumnSource(Enum):
