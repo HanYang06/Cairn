@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 HanYang06
+# SPDX-License-Identifier: Apache-2.0
+#
+# 静态安全分析（CodeQL）：语义级、跨文件的数据流分析。
+#
+# 为什么单独一个 workflow 而不是塞进 `ci.yml` 的一个作业：
+# 它需要 `security-events: write` 才能把结果写进 Security 标签页，而 `ci.yml` 顶部
+# 声明的是最小权限 `contents: read`；把提权写在作业级也可以，但那会让"这个工作流能改
+# 安全事件"这件事藏在一堆无关步骤里。**权限特殊的东西单独一个文件**，一眼看得出谁拿了什么。
+#
+# 与 ruff 的关系：ruff 的 `S` 规则族（类 bandit）查的是**单文件里的危险写法**；
+# CodeQL 查的是**跨文件的污点传播**（如"用户输入 → SQL / 路径 / 子进程"），两者不重叠。
+#
+# 语言矩阵：Python（`py_src`）与 JavaScript/TypeScript（`app/src`）。
+# **Rust 不在矩阵里**——CodeQL 目前不支持 Rust（`app/src-tauri` 的壳另由
+# `cargo` 自身的校验与依赖审计覆盖；Rust 侧依赖审计已在 `ci.yml` 的 security-scan 里规划）。
+
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # 每周一 03:17 UTC 跑一次：查询集与依赖库会更新，代码没动也可能出新发现。
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # 上传分析结果到 Security 标签页所必需。
+      security-events: write
+      # 私有仓库拉取 CodeQL 查询包时需要；公有仓库可省，留着不影响。
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.28.10
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.28.10
+        with:
+          category: "/language:${{ matrix.language }}"

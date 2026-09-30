@@ -85,6 +85,15 @@
 
 ## 五、工程债
 
+- [ ] **仓库设置里要手动打开的两项**（文件里做不到，安全口径见 `SECURITY.md`）：
+  ① **Secret scanning + Push protection**（公开仓库免费；gitleaks 是推送后扫，它是推送时就挡）；
+  ② **Dependabot alerts + security updates**（`dependabot.yml` 管版本更新，这两项管漏洞告警）。
+- [ ] **`ocr-review` 待改名与去除显式 `pr_number`**：现停在 `.on-run` 后缀（= 停用）。
+  它是 `pull_request_target` + secret：**它自己不执行 PR 代码**这条保证只成立在 action 内部，
+  故**启用前**要先把保证写进注释并锁住 action 版本（红线见 `rules/references/quality.md`）。
+- [ ] **`uv` 在本机可用，`fastcdc==1.7.0` 构建失败**（已知环境问题）：工作树没有 `.venv` 时，
+  `commit-msg` 钩子会自建环境并因此失败；故工作树里的提交需 `--no-verify`，
+  或先给工作树建 `.venv`。与改动无关，不阻塞主线。
 - [ ] **待裁 · 入库词表被部分进程整份覆盖**：`core/conf/registry.py` 的 `_flush` 只在
   "一个键都没有"时不动词表；只导入 `core` 的进程退出会把 `config/schema/settings.json`
   改写成只有 `core.*` 那三条。**2026-09-30 实测发生**，已还原；触发命令未定位。

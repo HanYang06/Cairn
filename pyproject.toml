@@ -46,6 +46,9 @@ dev = [
     "types-pyyaml>=6.0.12",
     "deptry>=0.25.1",
     "import-linter>=2.15",
+    # 依赖 CVE 扫描（CI 的 security-scan 用）。与 import-linter 同类：
+    # 只是"跑一次看看"的命令行工具，不由代码 import。
+    "pip-audit>=2.10.1",
 ]
 
 [build-system]
