@@ -17,6 +17,13 @@ class InvalidIdError(CairnError, ValueError):
     """标识符格式非法：唯一标识凭证或内容摘要凭证不满足各自的形态约束。"""
 
 
+class AttrTypeError(CairnError, ValueError):
+    """属性声明非法：写了 `attr` 却没写类型实参，或实参不在类型词表里。
+
+    判据与配置共用（`core.conf.types`），异常分开只为报错时说得准是哪一侧。
+    """
+
+
 class StorageError(CairnError):
     """存储侧异常的基类：调用方按它兜住整层，再按子类分流。"""
 
@@ -81,6 +88,7 @@ class ConfigReferenceError(ConfigError):
 
 
 __all__ = [
+    "AttrTypeError",
     "CairnError",
     "ConfigDuplicateError",
     "ConfigError",

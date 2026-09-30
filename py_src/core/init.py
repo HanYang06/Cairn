@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Self
 
 from core.conf import conf
 from core.event.bus import Bus
+from core.storage import tables as _tables
 from core.storage.conf import PACK_MAX_BYTES, SLOT_BYTES
 from core.storage.engine import Storage
 from core.storage.hub import PackPolicy
@@ -34,9 +35,10 @@ from core.storage.index import Index, RebuildPlan
 from core.storage.patrol import patrol as _patrol
 from core.storage.patrol import repair as _repair
 from core.storage.tablegen import sync as _sync_tables
-from core.storage.tables import Declaration, kernel_tables, tables_path
+from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from types import TracebackType
 
     from core.event.events import Event
@@ -89,7 +91,10 @@ def kernel_declaration(extra: Declaration | None = None) -> Declaration:
     Args:
         extra: 调用方另外要声明进来的表；不给即只有内核默认那几张。
     """
-    _sync_tables(tables_path(), replace=SUPERSEDED_TABLES)
+    # 路径**按模块属性取**，不把这个函数直接绑进本模块：测试夹具拦的是
+    # `core.storage.tables.tables_path`，直接导入会让那句 monkeypatch 落空，
+    # 于是跑一次用例就把仓根那份入库声明改写掉（已实测发生）。
+    _sync_tables(_tables.tables_path(), replace=SUPERSEDED_TABLES)
     base = kernel_tables()
     if extra is None:
         return Declaration(base)
@@ -238,13 +243,22 @@ class Kernel:
         """内核日志记录器。"""
         return self._logger
 
-    def store(self, data: bytes, *, hub: str | None = None, kind: str = "") -> ID:
+    def store(
+        self,
+        data: bytes,
+        *,
+        hub: str | None = None,
+        kind: str = "",
+        attrs: Mapping[str, object] | None = None,
+    ) -> ID:
         """存一个 body，返回**块身份**。
 
         内核给的是这一个短面：上层要的多半只是"存进去、拿到身份"。更细的（按地址取内容、
-        按身份取位置）走 :attr:`storage`。
+        按身份取位置、按块身份取属性）走 :attr:`storage`。
+
+        `attrs` 是块自己声明的属性（`block_attrs(block)` 的产物），编进块记录载荷。
         """
-        return self._storage.store(data, hub=hub, kind=kind)
+        return self._storage.store(data, hub=hub, kind=kind, attrs=attrs)
 
     def load(self, value_uuid: str) -> bytes:
         """按身份把 body 读回来。"""

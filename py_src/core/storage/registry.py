@@ -28,6 +28,8 @@ from .format.id import ID_FIELDS
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from core.conf.types import TypeSpec
+
 #: ID 上能绑成列的字段 = `ID` 的**全部**字段（`ID_FIELDS`）。
 #: 表里的身份列照它逐列搬，故"哪个字段进不去库"这个问题在代码上没有第二种答案。
 BINDABLE_FIELDS: frozenset[str] = frozenset(ID_FIELDS)
@@ -53,6 +55,9 @@ class TypeDecl:
         doc: 说明文本；随表声明落进文件，**不进开库比对的签名**。
         ids: 本行主语的 ID 字段名，与 `ID` 的字段同名（`ID_FIELDS` 的全部）。
         refs: 指向别处的引用，字段名 → 目标表。
+        attrs: 本类型声明的属性，字段名 → 类型判据，顺序即类里书写的顺序。
+            属性**不是列**：它跟着块记录走，这里登记只为了让「哪些字段该落盘、
+            各是什么类型」有确定答案。判据与配置共用（`core.conf.types`）。
     """
 
     name: str
@@ -60,9 +65,14 @@ class TypeDecl:
     doc: str = ""
     ids: tuple[str, ...] = ID_FIELDS
     refs: Mapping[str, str] = field(default_factory=dict)
+    attrs: tuple[tuple[str, TypeSpec], ...] = ()
 
     def __post_init__(self) -> None:
-        """校验登记的字段名：能绑的只有落盘子集，指针能带的只有两套凭证。"""
+        """校验登记的字段名：能绑的只有落盘子集，指针只带两套凭证。
+
+        属性不在这里校验：它只有 `register_type` 一个来源（受控的注解扫描），
+        而同一个名字在注解里只会出现一次，不存在"两处写同一张表"的可能。
+        """
         unknown = [name for name in self.ids if name not in BINDABLE_FIELDS]
         if unknown:
             raise TableDeclarationError(

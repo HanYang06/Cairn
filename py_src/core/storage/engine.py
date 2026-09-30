@@ -29,13 +29,15 @@ from core.event.catalog import OBJECT_DELETED, OBJECT_PUT
 from core.event.events import Event
 from core.exc import ObjectNotFoundError
 
-from .format.block import BodyRef, encode_block_payload
+from .format.block import BlockPayload, BodyRef, block_payload_of, encode_block_payload
 from .format.id import ID, digest
 from .format.record import decode, encode
 from .hub import Hub, PackPolicy, Placement
 from .rows import BlockRow, BodyRow
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from core.event.bus import Bus
 
     from .carrier import SlotRange
@@ -102,11 +104,23 @@ class Storage:
         """默认 hub 名。"""
         return self._default_hub
 
-    def store(self, data: bytes, *, hub: str | None = None, kind: str = "") -> ID:
+    def store(
+        self,
+        data: bytes,
+        *,
+        hub: str | None = None,
+        kind: str = "",
+        attrs: Mapping[str, object] | None = None,
+    ) -> ID:
         """把一个 body 落盘，返回**块身份**。
 
         `data` 是**已经规范化过的字节**：引擎不理解载荷结构，只负责落成记录
-        （规范化属编码与领域，见 §4.3）。`kind` 是类型标号，程序给出、不落进记录头。
+        （规范化属编码与领域，见 §4.3）。`kind` 是类型标号，程序给出、不落进记录头；
+        `attrs` 是块自己的属性，编进**块记录载荷**——不进 body（那是大头内容、按地址
+        去重），也不靠库里的列承载（库只是索引）。
+
+        **块身份随载荷**：同一份 body 配上不同的属性就是两个块；body 那侧仍按内容去重，
+        故"同内容不同属性"只多一条块记录，内容面还是那一份。
 
         Returns:
             块身份：分配形态凭证新建，摘要形态凭证是块记录载荷的摘要。
@@ -125,7 +139,7 @@ class Storage:
             self._write_body(target, content, data)
             body_id = content
         pointer = encode_block_payload(
-            BodyRef(value_uuid=body_id.value_uuid, value_hash=body_id.value_hash)
+            BodyRef(value_uuid=body_id.value_uuid, value_hash=body_id.value_hash), attrs
         )
         block = ID.of(pointer)
         self._write_block(target, block, pointer, kind=kind, body=body_id)
@@ -177,6 +191,18 @@ class Storage:
     def locate(self, value_uuid: str) -> BlockRow | None:
         """按身份取块那一行（诊断用；读数据走 :meth:`load`）。"""
         return self._index.rows.block(value_uuid)
+
+    def block_payload(self, value_uuid: str) -> BlockPayload | None:
+        """按**块身份**取块记录的两部分（body 指针与属性）；没有这一块即 ``None``。
+
+        读数据走 :meth:`load`、读位置走 :meth:`locate`，读块自己声明的属性走这里。
+        属性与指针同处一层载荷，故顺扫可还原——库里没有它的列，也不需要有。
+        """
+        block = self._index.rows.block(value_uuid)
+        if block is None:
+            return None
+        payload = self._read_payload(block.in_hub, block.in_hub_pack, block.span)
+        return block_payload_of(payload)
 
     def _hub(self, name: str, *, create: bool) -> Hub:
         """按名开 hub：写路径按需建立**并登记**，读路径一律不建。

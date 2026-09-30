@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cairn 的 mypy 插件：把 ``field: Attr[T] = 值`` 的字段可见类型识别为 ``T``。
+"""Cairn 的 mypy 插件：把 ``field: attr[T] = 值`` 的字段可见类型识别为 ``T``。
 
-框架在运行时把裸值自动包成 ``Attr`` 描述符（见 ``core/storage/block.py`` 的
-``__init_subclass__``；``Attr`` 本体在 ``core/types/attr.py``），但 mypy 看不到这层包装，
-于是会把 ``str`` 赋给 ``Attr[str]`` 判为类型错误（`assignment`）。本插件在类的语义分析阶段
-把这类字段的**可见类型**改写成类型参数 ``T``：于是 ``note.title`` 是 ``str``、赋值也合法——
-与 dataclasses / attrs 官方插件是同一条路数。
+``attr`` 是本项目的一层**声明标记**（``core/attr/__init__.py``）：右侧写的是真实默认值，
+运行时不再包装，故字段取出来就是那个值。mypy 看不到这层意思，会把 ``str`` 赋给
+``attr[str]`` 判为类型错误（`assignment`）。本插件在类的语义分析阶段把这类字段的**可见类型**
+改写成类型参数 ``T``：于是 ``note.title`` 是 ``str``、赋值也合法——与 dataclasses / attrs
+官方插件是同一条路数。
 
 范围与约定：
-- **简单形式**：``field: Attr[T] = 值`` → 插件把可见类型改写为 ``T``。
-- **复杂形式**：``field: Attr[T] = Attr(...)``（需要 ``coerce`` / ``item`` 等特殊处理）→
-  插件**不改写**，可见类型保持 ``Attr[T]``（描述符实例）。
+- **简单形式**：``field: attr[T] = 值`` → 插件把可见类型改写为 ``T``。
+- **复杂形式**：``field: attr[T] = attr(...)``（需要 ``coerce`` 等特殊处理）→
+  尚未实现；插件**不改写**，可见类型保持 ``attr[T]``。
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from mypy.types import Instance
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-BLOCK_FULLNAME = "core.storage.block.Block"
-ATTR_FULLNAME = "core.types.attr.Attr"
+BLOCK_FULLNAME = "core.storage.format.block.Block"
+ATTR_FULLNAME = "core.attr.attr"
 
 
 def _is_descriptor_rhs(expr: object) -> bool:
