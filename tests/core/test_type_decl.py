@@ -3,7 +3,7 @@
 """类型级声明契约：类体里那组 `__…__` 怎么进登记、怎么流进表声明、怎么被淘汰掉。
 
 与 `test_tablegen.py` 的分工：那一支钉"类型 → 表"这条链；这一支钉**存储行为**这一层
-（性质、归属、配额、体积上限）。后者**不进声明文件**——流进去的只有档位与归属。
+（归属、配额、体积上限）。后者**不进声明文件**——流进去的只有档位与归属。
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pytest
 from core.exc import TableDeclarationError
 from core.storage import tablegen
 from core.storage.format.block import Block, Body, register_type
-from core.storage.registry import REGISTRY, Nature, OverBudget, Tier, TypeDecl
+from core.storage.registry import REGISTRY, OverBudget, Tier, TypeDecl
 from core.storage.tables import load_tables
 
 if TYPE_CHECKING:
@@ -49,14 +49,13 @@ def clean_registry() -> Iterator[None]:
 
 
 def test_declared_storage_fields_land_in_the_declaration():
-    """类体里那组 `__…__` 各有其位：性质、归属、档位、配额、体积上限。"""
+    """类体里那组 `__…__` 各有其位：归属、档位、配额、体积上限。"""
 
     @dataclass(slots=True)
     class AttrIndex(Block[None]):
-        """测试用的工具型块。"""
+        """测试用的块。"""
 
         __table__ = "attrindex"
-        __nature__ = Nature.TOOL
         __owner__ = "note"
         __tier__ = Tier.SOURCE
         __backup__ = True
@@ -68,7 +67,6 @@ def test_declared_storage_fields_land_in_the_declaration():
 
     decl = _decl("AttrIndex")
 
-    assert decl.nature is Nature.TOOL
     assert decl.owner == "note"
     assert decl.tier is Tier.SOURCE
     assert decl.backup is True
@@ -80,7 +78,7 @@ def test_declared_storage_fields_land_in_the_declaration():
 
 
 def test_storage_fields_default_to_the_quiet_choices():
-    """一档都不写时的默认：业务数据、可重建、不独占、无配额、静默续份。"""
+    """一档都不写时的默认：可重建、不独占、无配额、静默续份。"""
 
     @dataclass(slots=True)
     class Plain(Block[None]):
@@ -88,7 +86,6 @@ def test_storage_fields_default_to_the_quiet_choices():
 
     decl = _decl("Plain")
 
-    assert decl.nature is Nature.DATA
     assert decl.tier is Tier.DERIVED
     assert decl.backup is False
     assert decl.own_hub is False

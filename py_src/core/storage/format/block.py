@@ -31,7 +31,7 @@ import cbor2
 from core.attr import attr_type_of
 from core.exc import AttrTypeError, TableDeclarationError
 
-from ..registry import BINDABLE_FIELDS, REGISTRY, Nature, OverBudget, Tier, TypeDecl
+from ..registry import BINDABLE_FIELDS, REGISTRY, OverBudget, Tier, TypeDecl
 from .id import ID, ID_FIELDS
 
 if TYPE_CHECKING:
@@ -293,7 +293,7 @@ def _decl_of(
     """由类体的注解与那组 `__…__` 拼出一份类型登记。
 
     注解定**列与属性**（`ID` / ID 字段名 / `attr[T]` / 已登记类型）；
-    `__…__` 定**存储行为**（性质、归属、配额、体积上限）。后者**不进声明文件**——
+    `__…__` 定**存储行为**（归属、配额、体积上限）。后者**不进声明文件**——
     那份文件只描述库的形状，而"配额多少"是策略，不是形状。
     """
     return TypeDecl(
@@ -303,7 +303,6 @@ def _decl_of(
         ids=ids,
         refs=refs,
         attrs=attrs,
-        nature=_enum_field(cls, "__nature__", Nature, Nature.DATA),
         owner=_text_field(cls, "__owner__", "core"),
         tier=_enum_field(cls, "__tier__", Tier, Tier.DERIVED),
         backup=_flag_field(cls, "__backup__"),
