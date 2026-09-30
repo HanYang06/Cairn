@@ -102,11 +102,24 @@ class ConfigReferenceError(ConfigError):
     """文件引用不成立：引用名指向仓根之外，或被引用的文件不存在。"""
 
 
+class CallError(CairnError, ValueError):
+    """命令面异常：方法名不认识，或参数缺了 / 多了 / 类型不对。"""
+
+
+class UnknownMethodError(CallError):
+    """方法名不在命令面那张表里——错的是调用方，不是内核。"""
+
+
+class InvalidParamsError(CallError):
+    """参数不合规：缺了必需的、不是要的类型，或值本身解不出来。"""
+
+
 __all__ = [
     "AttrTypeError",
     "BlockTooLargeError",
     "BudgetExhaustedError",
     "CairnError",
+    "CallError",
     "ConfigDuplicateError",
     "ConfigError",
     "ConfigFileError",
@@ -118,9 +131,11 @@ __all__ = [
     "IndexNotFoundError",
     "IndexSchemaError",
     "InvalidIdError",
+    "InvalidParamsError",
     "ObjectNotFoundError",
     "RecordFormatError",
     "SlotError",
     "StorageError",
     "TableDeclarationError",
+    "UnknownMethodError",
 ]
