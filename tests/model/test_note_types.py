@@ -49,10 +49,13 @@ def test_line_kind_values_are_short_names_without_prefix():
 
 
 def test_reference_tables_cover_only_the_kinds_with_one_target():
-    """落点表只收目标唯一的那些：链接两可、内容类无目标，都不进去。"""
+    """落点表只收目标唯一的那些：链接两可、内容类无目标，都不进去。
+
+    表名带 `note` 前缀：领域专属的类型以域名开头，`project` 那边同名也不相干。
+    """
     assert set(REFERENCE_TABLES) == {LineKind.ASSET, LineKind.CANVAS, LineKind.NOTE}
-    assert reference_table(LineKind.ASSET) == "asset"
-    assert reference_table(LineKind.CANVAS) == "canvas"
+    assert reference_table(LineKind.ASSET) == "noteasset"
+    assert reference_table(LineKind.CANVAS) == "notecanvas"
     assert reference_table(LineKind.NOTE) == "notedata"
     assert reference_table(LineKind.LINK) is None
     assert reference_table(LineKind.TEXT) is None

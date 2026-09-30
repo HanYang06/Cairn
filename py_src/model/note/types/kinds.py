@@ -59,8 +59,8 @@ class LineKind(StrEnum):
 
 REFERENCE_TABLES: Mapping[LineKind, str] = MappingProxyType(
     {
-        LineKind.ASSET: "asset",
-        LineKind.CANVAS: "canvas",
+        LineKind.ASSET: "noteasset",
+        LineKind.CANVAS: "notecanvas",
         LineKind.NOTE: "notedata",
     }
 )
@@ -69,6 +69,9 @@ REFERENCE_TABLES: Mapping[LineKind, str] = MappingProxyType(
 **只有目标唯一的那些进来**：`ASSET` / `CANVAS` / `NOTE` 各自指向一张表，故这里是答案；
 `LINK` 的目标两可（站内 ID 或站外地址），由它自己的 `data` 说，不在这张表里；
 内容类的 `data` 就是正文，没有目标可查。
+
+表名带 `note` 前缀是刻意的：领域专属的类型以**域名开头**，于是 `project` 那边可以做出
+同名概念而互不相干（各自一张表、不互相引用），"这是谁的资产"看一眼表名就清楚。
 """
 
 

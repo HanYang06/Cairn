@@ -422,10 +422,13 @@ def test_every_kernel_table_states_its_tier_and_source():
 
 
 def test_shipped_tables_file_loads(shipped_tables_path: Path):
-    """入库的 `config/tables.yaml` 可读，且逐张过解析口。"""
+    """入库的 `config/tables.yaml` 可读，且逐张过解析口。
+
+    文件的表**可以比内核那三张多**：领域层的表走同一条路进这份文件（只增不减）。
+    """
     tables = load_tables(shipped_tables_path)
 
-    assert {table.name for table in tables} == {"block", "body", "hub"}
+    assert {"block", "body", "hub"} <= {table.name for table in tables}
     assert shipped_tables_path.name == "tables.yaml"
 
 
@@ -444,7 +447,7 @@ def test_kernel_tables_come_from_the_registry_not_from_a_file(
     """
     monkeypatch.setattr("core.storage.tables.tables_path", lambda: tmp_path / "nope.yaml")
 
-    assert [table.name for table in kernel_tables()] == ["block", "body", "hub"]
+    assert {"block", "body", "hub"} <= {table.name for table in kernel_tables()}
 
 
 def test_loader_reports_broken_yaml(tmp_path: Path):

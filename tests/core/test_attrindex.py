@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from core.attr import attr  # noqa: TC001 — 注解由 get_type_hints 在运行期解析，必须真导入
+from core.attr import attr
 from core.exc import TableDeclarationError
 from core.init import Kernel
 from core.storage.format.block import Block, Body, register_type

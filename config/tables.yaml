@@ -50,3 +50,57 @@
   columns:
     - { name: name, from: store, type: text, not_null: True, doc: hub 名（目录名） }
   primary_key: [name]
+
+- name: notedata
+  doc: "一篇笔记：正文 + 跟着块走的那几个小字段。"
+  tier: derived
+  owner: note
+  rebuild_from: "载体记录头（设计篇 §8.5 档一）"
+  columns:
+    - id().name
+    - id().value_uuid
+    - id().value_hash
+    - id().birth_time
+    - id().in_hub
+    - id().in_hub_pack
+    - id().in_pack_slot
+    - id(body).value_uuid
+    - id(body).value_hash
+    - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }
+  primary_key: [value_uuid]
+
+- name: notegroup
+  doc: "一个组。"
+  tier: derived
+  owner: note
+  rebuild_from: "载体记录头（设计篇 §8.5 档一）"
+  columns:
+    - id().name
+    - id().value_uuid
+    - id().value_hash
+    - id().birth_time
+    - id().in_hub
+    - id().in_hub_pack
+    - id().in_pack_slot
+    - id(body).value_uuid
+    - id(body).value_hash
+    - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }
+  primary_key: [value_uuid]
+
+- name: notetag
+  doc: "标签表的载体：**一张表一个块**。"
+  tier: derived
+  owner: note
+  rebuild_from: "载体记录头（设计篇 §8.5 档一）"
+  columns:
+    - id().name
+    - id().value_uuid
+    - id().value_hash
+    - id().birth_time
+    - id().in_hub
+    - id().in_hub_pack
+    - id().in_pack_slot
+    - id(body).value_uuid
+    - id(body).value_hash
+    - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }
+  primary_key: [value_uuid]

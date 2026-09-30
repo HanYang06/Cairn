@@ -409,9 +409,13 @@ def test_a_fresh_type_becomes_a_table_in_the_database(tmp_path: Path):
         assert "- name: reported" in target.read_text(encoding="utf-8")
 
 
-def test_the_shipped_file_and_the_registry_agree(shipped_tables_path: Path):
-    """入库的声明文件与登记表现算的结果对得上（防漂移：两边分叉就是错的）。"""
+def test_every_registered_table_is_declared_in_the_shipped_file(shipped_tables_path: Path):
+    """登记表里算出来的每一张表，入库的声明文件里都写到了（防漂移）。
+
+    **方向是单向的**：声明文件只增不减，而登记表只装"本进程 import 到的类型"——
+    只 import `core` 的进程算出来的表比文件少是正常的（领域表不在场），故不能要求两边相等。
+    """
     shipped = {table.name for table in load_tables(shipped_tables_path)}
     computed = {table.name for table in kernel_tables()}
 
-    assert shipped == computed
+    assert computed <= shipped

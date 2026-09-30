@@ -118,6 +118,17 @@ known-first-party = ["app", "core", "model"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.flake8-type-checking]
+# `Block` / `Body` 的子类在**类定义时**就调 `get_type_hints` 做类型登记（"类型定义即登记"），
+# 故它们注解里引用的名字（`attr`、`ID`、别的登记类型）必须是**运行期**可解析的。
+# 挪进 `TYPE_CHECKING` 会让那句 `get_type_hints` 抛 `NameError`，而登记那条路对
+# `NameError` 是**静默跳过**的——属性于是悄悄不落盘。故这两个基底声明为"运行期求值"，
+# 免得 ruff 的 TC001 一步步把它们推成静默数据丢失。
+runtime-evaluated-base-classes = [
+    "core.storage.format.block.Block",
+    "core.storage.format.block.Body",
+]
+
 [tool.ruff.lint.per-file-ignores]
 # 表名/列名来自声明层（tables.py）并经 quote_identifier 加引号，值全部参数化（无注入面）。
 "py_src/core/storage/rows.py" = ["S608"]
