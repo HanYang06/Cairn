@@ -65,9 +65,9 @@ default = true
 
 [tool.hatch.build.targets.wheel]
 # Python 源码根是 `py_src/`（不叫 `src/`：仓里另有 `app/src/` 是 React 前端，两个 `src` 无法区分）。
-# `core` 是内核、`app` 是入口层（边车与命令行）；`feature` 待重建——
+# `core` 是内核、`model` 是领域层、`app` 是入口层（边车与命令行）。
 # 列不存在的目录不会报错（hatch 静默跳过），但配置与事实不符本身就是尾巴。
-packages = ["py_src/core", "py_src/app"]
+packages = ["py_src/core", "py_src/model", "py_src/app"]
 
 [tool.ruff]
 target-version = "py313"
@@ -111,8 +111,9 @@ ignore = [
 notice-rgx = "SPDX-FileCopyrightText: 2026 HanYang06"
 
 [tool.ruff.lint.isort]
-# `core` 是内核、`app` 是入口层；`feature` 随领域层重建加回。
-known-first-party = ["app", "core"]
+# `core` 是内核、`model` 是领域层、`app` 是入口层。三者都是本仓自己的包：
+# 不列进来时 `from model.… import …` 会被当成第三方，与 `core` 分成两段即报 I001。
+known-first-party = ["app", "core", "model"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -160,7 +161,7 @@ disallow_incomplete_defs = false
 [tool.deptry]
 # 本项目的源码根是 `py_src/`（不叫 `src/`），deptry 认不出 `core` 是本仓自己的包；
 # 不指路就会把它当成传递依赖，一次报几十条 DEP003。
-known_first_party = ["core"]
+known_first_party = ["core", "model"]
 # 前端、文档产物、虚拟环境与 vendored 技能不参与 Python 依赖盘点。
 extend_exclude = ["app", "site", "docs", ".agents"]
 
@@ -177,7 +178,7 @@ DEP004 = ["mypy"]
 # 在 Windows（cp936）下遇到中文即解码失败——本文件按 UTF-8 读，没有这个问题。
 # `tools` 也要列进根包：`lint-imports` 是控制台脚本，跑起来时仓根**不在** `sys.path` 上，
 # 只列 `core`（它已装进虚拟环境）时，契约里一写 `tools` 就会报"模块不存在"。
-root_packages = ["app", "core", "tools"]
+root_packages = ["app", "core", "model", "tools"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -206,6 +207,7 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--cov=core",
+    "--cov=model",
     "--cov-branch",
     "--cov-report=term-missing:skip-covered",
 ]
