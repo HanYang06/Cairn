@@ -79,17 +79,19 @@ class Header:
         return self.owner != _NO_OWNER
 
 
-def build_header(slot_bytes: int, owner: str = "") -> bytes:
+def build_header(slot_bytes: int, owner: bytes = _NO_OWNER) -> bytes:
     """生成载体文件头：魔数 ＋ 槽长 ＋ 归属摘要（那段预留）。
 
     归属在**建载体时**写死——"分配预算即生成载体，生成时标注这份文件归谁"。
-    不给名字即全零，读回来是"无归属"：任何类型都可以用它。
+    这里收的是**摘要**（8 字节）：名字到摘要的换算在上层（`Hub` 认名字），
+    因为整理与重建时手上只有摘要、没有名字。不给即全零，读回来是"无归属"。
+
+    Raises:
+        RecordFormatError: 归属摘要不是 8 字节。
     """
-    return (
-        MAGIC
-        + _check_slot_bytes(slot_bytes).to_bytes(_SLOT_FIELD_BYTES, "big")
-        + owner_digest(owner)
-    )
+    if len(owner) != _RESERVED_BYTES:
+        raise RecordFormatError(f"归属摘要必须是 {_RESERVED_BYTES} 字节: {len(owner)}")
+    return MAGIC + _check_slot_bytes(slot_bytes).to_bytes(_SLOT_FIELD_BYTES, "big") + owner
 
 
 def parse_header(raw: bytes) -> Header:
@@ -170,18 +172,20 @@ class Carrier:
     保持打开，作上下文管理器可确保关闭。本层不做并发保护，也不管封口换不换文件。
     """
 
-    def __init__(self, path: str | Path, *, slot_bytes: int | None = None, owner: str = "") -> None:
+    def __init__(
+        self, path: str | Path, *, slot_bytes: int | None = None, owner: bytes = _NO_OWNER
+    ) -> None:
         """打开或新建载体。
 
         Args:
             path: 载体文件路径；父目录须已存在（建目录是 hub 的职责）。
             slot_bytes: 槽长。新建时必需；打开既有文件时若给了，必须与文件头一致。
-            owner: 归属名（表名）。**只在新建时写进文件头**；打开既有文件时以头里那份为准，
-                这里给什么都改不动它——"已落盘的东西不被新参数改写"。
+            owner: 归属**摘要**（8 字节）。**只在新建时写进文件头**；打开既有文件时以头里
+                那份为准，这里给什么都改不动它——"已落盘的东西不被新参数改写"。
 
         Raises:
             SlotError: 新建却没给槽长，或给的槽长与文件头不符。
-            RecordFormatError: 文件头不足或魔数不符。
+            RecordFormatError: 文件头不足、魔数不符，或归属摘要长度不对。
         """
         self._path = Path(path)
         # 槽长的形状先验，再开文件：非法槽长（0 / 负数）在句柄打开之前就报，
@@ -207,7 +211,7 @@ class Carrier:
             if slot_bytes is None:
                 raise SlotError("新建载体必须给出槽长")
             self._slot_bytes = _check_slot_bytes(slot_bytes)
-            self._owner = owner_digest(owner)
+            self._owner = owner
             handle = self._path.open("w+b")
             handle.write(build_header(self._slot_bytes, owner))
             handle.flush()

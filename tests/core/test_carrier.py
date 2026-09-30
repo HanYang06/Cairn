@@ -55,12 +55,18 @@ def test_file_header_roundtrip():
 
 def test_file_header_carries_owner():
     """归属摘要写进预留段：同一个名字恒得同一份摘要，不同的名字不该撞。"""
-    header = parse_header(build_header(_SLOT, "attrindex"))
+    header = parse_header(build_header(_SLOT, owner_digest("attrindex")))
 
     assert header.slot_bytes == _SLOT
     assert header.has_owner
     assert header.owner == owner_digest("attrindex")
     assert header.owner != owner_digest("notedata")
+
+
+def test_header_refuses_a_wrong_sized_owner():
+    """归属摘要必须是 8 字节：长度不对即拒，不写出一个自己都解不开的头。"""
+    with pytest.raises(RecordFormatError, match="8 字节"):
+        build_header(_SLOT, b"short")
 
 
 def test_reserved_bytes_left_zero_read_as_no_owner():

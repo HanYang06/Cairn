@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING, Self
 from core.conf import conf
 from core.event.bus import Bus
 from core.storage import tables as _tables
+from core.storage.compact import compact as _compact
+from core.storage.compact import survey as _survey
 from core.storage.conf import PACK_MAX_BYTES, SLOT_BYTES
 from core.storage.engine import Storage
 from core.storage.hub import PackPolicy
@@ -38,10 +40,11 @@ from core.storage.tablegen import sync as _sync_tables
 from core.storage.tables import Declaration, kernel_tables
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from types import TracebackType
 
     from core.event.events import Event
+    from core.storage.compact import CompactReport, SurveyReport
     from core.storage.format.id import ID
     from core.storage.patrol import PatrolReport, RepairReport
     from core.storage.rows import BlockRow
@@ -265,7 +268,14 @@ class Kernel:
         return self._storage.load(value_uuid)
 
     def drop(self, value_uuid: str) -> bool:
-        """摘掉一个块：只摘块行，内容面等压实回收。"""
+        """删掉一个块。
+
+        载体是追加写：旧字节删不掉，删除的落法是在载体末尾留一条墓碑（巡检据此不再把它
+        报成"缺行"）。空间要等 :meth:`compact` 才真正回收。
+
+        **UI 需求**：删除不可撤销，故**点删除时要确认**；连续删除模式可免确认——
+        那时用户已经在"批量清理"的语境里，逐条确认只是阻力。
+        """
         return self._storage.drop(value_uuid)
 
     def locate(self, value_uuid: str) -> BlockRow | None:
@@ -279,6 +289,47 @@ class Kernel:
     def repair(self, report: PatrolReport) -> RepairReport:
         """按巡检报告处置：**只补不删**。"""
         return _repair(self._index, report)
+
+    def survey(self) -> SurveyReport:
+        """勘察整库：算出整理计划与显示用的全部数字（**只读**，一个字节都不动）。
+
+        **UI 需求**：点"整理"之后先跑它，把「发现多少块、当前比率、预计结果比率、
+        预计耗时」显示出来；用户确认之后再调 :meth:`compact`。预计耗时由界面按
+        `bytes_to_read` / `bytes_to_write` 与自己的实测吞吐换算——内核不猜时间。
+        """
+        return _survey(self._index, self._root, policy=self._policy)
+
+    def compact(
+        self,
+        *,
+        plan: SurveyReport | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> CompactReport:
+        """整理整库：把墓碑、被删记录与没人用的正文真正抹掉，空间回收。
+
+        逐份载体重写，只留活着的东西。它与 :meth:`drop` 是一对：那头留标记，这头清现场。
+
+        Args:
+            plan: :meth:`survey` 的结果；不给就现场勘察一遍。计划只用来挑目标，
+                每一份仍现读现判，所以勘察之后库又变了也不会弄丢活记录。
+            on_progress: 每处理完一份载体报一次，参数是（已完成，总数）。
+            should_stop: 每份载体开始之前问一次；返回真即停下，已处理的那几份保持不变。
+
+        **UI 需求**（整库动作，全份见 `core/storage/compact.py`）：
+
+        - 先 :meth:`survey` 拿数字给用户看，确认之后再跑这个；
+        - 由上层放进**后台线程**（内核同步；文件 IO 本质阻塞，`asyncio` 帮不上）；
+        - 用 `on_progress` 显示进度、用 `should_stop` 支持取消；取消不影响数据完整性。
+        """
+        return _compact(
+            self._index,
+            self._root,
+            plan=plan,
+            policy=self._policy,
+            on_progress=on_progress,
+            should_stop=should_stop,
+        )
 
     def close(self) -> None:
         """关掉索引库连接。"""

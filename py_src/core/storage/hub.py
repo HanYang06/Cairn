@@ -168,6 +168,18 @@ class Hub:
                     names.append(name)
         return tuple(names)
 
+    def new_pack(self, *, owner: bytes = owner_digest("")) -> tuple[str, Carrier]:
+        """新开一份载体并把它打开（**调用方负责关闭**）；归属随建载体写进文件头。
+
+        整理用得到它：那时要的是一份**空载体**，而不是"最满且有空间的"——后者会把还没整理
+        的记录混进新载体里。故它与 :meth:`append` 分开：这条路不问既有载体。
+
+        归属收的是**摘要**：整理时手上只有旧载体的摘要，没有名字（名字到摘要的换算在
+        :meth:`append` 那一侧做）。
+        """
+        name = self._new_pack_name()
+        return name, Carrier(self._packs / name, slot_bytes=self._slot_bytes, owner=owner)
+
     def append(self, raw: bytes, *, owner: str = "", allow_new_pack: bool = True) -> Placement:
         """写入一条记录，返回它的位置。
 
@@ -194,7 +206,7 @@ class Hub:
             raise BudgetExhaustedError(
                 f"配额用完且档位为拒绝：{owner or '该类型'} 已没有可写的空间，也不许新开载体"
             )
-        return self._append_to_new_pack(raw, owner=owner)
+        return self._append_to_new_pack(raw, owner=owner_digest(owner))
 
     def read(self, placement: Placement) -> bytes:
         """按位置读回一条记录的原始字节（不做解码，解码是记录层的事）。"""
@@ -246,7 +258,7 @@ class Hub:
         sized.sort(key=lambda item: (-item[0], item[1]))
         return tuple((name, carrier) for _size, name, carrier in sized)
 
-    def _append_to_new_pack(self, raw: bytes, *, owner: str = "") -> Placement:
+    def _append_to_new_pack(self, raw: bytes, *, owner: bytes = owner_digest("")) -> Placement:
         """新开一个载体，把记录写进去；归属随建载体写进它的文件头。"""
         name = self._new_pack_name()
         with Carrier(self._packs / name, slot_bytes=self._slot_bytes, owner=owner) as carrier:
