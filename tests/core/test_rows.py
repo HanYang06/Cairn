@@ -12,7 +12,7 @@ import pytest
 from core.storage.carrier import SlotRange
 from core.storage.format.id import ID_FIELDS
 from core.storage.index import Index
-from core.storage.rows import BlockRow, BodyRow, EdgeRow, Rows
+from core.storage.rows import BlockRow, BodyRow, Rows
 from core.storage.tables import ColumnSource, Declaration, kernel_tables
 
 if TYPE_CHECKING:
@@ -250,27 +250,3 @@ def test_hubs_are_listed_in_name_order(rows: Rows):
 
     assert [item.name for item in rows.hubs()] == ["alpha", "zeta"]
     assert rows.hub("nope") is None
-
-
-# ---- 关系边 ----
-
-
-def test_put_edge_is_idempotent(rows: Rows):
-    """边身份即主键：同一关系重复写不产生第二行。"""
-    edge = EdgeRow(id="e1", src="a", dst="b", kind="links", domain="note", created=7)
-
-    assert rows.put_edge(edge) is True
-    assert rows.put_edge(edge) is False
-    assert rows.edges_from("a", "links") == (edge,)
-
-
-def test_edges_are_queried_by_direction_and_kind(rows: Rows):
-    """出边与入边各查各的，且按种类过滤。"""
-    rows.put_edge(EdgeRow(id="e1", src="a", dst="b", kind="links", created=1))
-    rows.put_edge(EdgeRow(id="e2", src="a", dst="c", kind="tags", created=2))
-    rows.put_edge(EdgeRow(id="e3", src="d", dst="b", kind="links", created=3))
-
-    assert [item.id for item in rows.edges_from("a", "links")] == ["e1"]
-    assert [item.id for item in rows.edges_from("a", "tags")] == ["e2"]
-    assert [item.id for item in rows.edges_to("b", "links")] == ["e1", "e3"]
-    assert rows.edges_from("a", "missing") == ()

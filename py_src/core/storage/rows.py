@@ -33,8 +33,6 @@ import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from core.clock import now_ms
-
 from .carrier import SlotRange
 from .format.block import body_ref_of
 from .format.record import decode
@@ -50,16 +48,12 @@ if TYPE_CHECKING:
 HUB_TABLE = "hub"
 """hub 登记所在表。"""
 
-EDGE_TABLE = "edge"
-"""**关系索引**所在表：关系的家不在这里（见存储设计篇 §8.1.2）。"""
-
 #: 身份列的书写顺序 = `ID` 的字段顺序（`ID_FIELDS`）：库里的行是 ID 的镜像，逐列照搬。
 _ID_COLUMNS = "name, value_uuid, value_hash, birth_time, in_hub, in_hub_pack, in_pack_slot"
 
 _BLOCK_COLUMNS = f"{_ID_COLUMNS}, body_value_uuid, body_value_hash, kind"
 _BODY_COLUMNS = _ID_COLUMNS
 _HUB_COLUMNS = "name"
-_EDGE_COLUMNS = "id, src_value_uuid, dst_value_uuid, kind, domain, created"
 
 # 语句一律在这里拼好：表名来自登记表并经 quote_identifier 加引号，值全部参数化。
 # 调用点只传常量，故没有"现场拼 SQL"的地方（也就没有注入面）。
@@ -139,21 +133,6 @@ _INSERT_HUB = (
 
 _SELECT_HUB = f"SELECT {_HUB_COLUMNS} FROM {quote_identifier(HUB_TABLE)} WHERE name = ?"
 _SELECT_HUBS = f"SELECT {_HUB_COLUMNS} FROM {quote_identifier(HUB_TABLE)} ORDER BY name"
-
-_INSERT_EDGE = (
-    f"INSERT INTO {quote_identifier(EDGE_TABLE)} ({_EDGE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?) "
-    "ON CONFLICT(id) DO NOTHING"
-)
-"""边身份即主键：同一关系重复写不产生第二行。"""
-
-_EDGES_FROM = (
-    f"SELECT {_EDGE_COLUMNS} FROM {quote_identifier(EDGE_TABLE)} "
-    "WHERE src_value_uuid = ? AND kind = ? ORDER BY created, id"
-)
-_EDGES_TO = (
-    f"SELECT {_EDGE_COLUMNS} FROM {quote_identifier(EDGE_TABLE)} "
-    "WHERE dst_value_uuid = ? AND kind = ? ORDER BY created, id"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,27 +216,6 @@ class HubRow:
     """
 
     name: str
-
-
-@dataclass(frozen=True, slots=True)
-class EdgeRow:
-    """一条关系边。
-
-    Attributes:
-        id: 边身份摘要（主键，由 ``(src, dst, kind, domain)`` 算出）。
-        src: 起点 ID。
-        dst: 终点 ID。
-        kind: 关系种类。
-        domain: 所属领域。
-        created: 建立时刻（unix 毫秒）。
-    """
-
-    id: str
-    src: str
-    dst: str
-    kind: str
-    domain: str = ""
-    created: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,37 +374,6 @@ class Rows:
     def hubs(self) -> tuple[HubRow, ...]:
         """全部 hub 登记，按名排序。"""
         return tuple(_hub(row) for row in self._connection.execute(_SELECT_HUBS).fetchall())
-
-    # ---- 关系边 ----
-
-    def put_edge(self, edge: EdgeRow) -> bool:
-        """写入一条关系边；同一身份（`id`）重复写不产生第二行。返回是否新写入。"""
-        cursor = self._connection.execute(
-            _INSERT_EDGE,
-            (
-                edge.id,
-                edge.src,
-                edge.dst,
-                edge.kind,
-                edge.domain,
-                now_ms() if edge.created == 0 else edge.created,
-            ),
-        )
-        self._commit()
-        return cursor.rowcount > 0
-
-    def edges_from(self, src: str, kind: str) -> tuple[EdgeRow, ...]:
-        """出边：按 ``(src, kind)`` 查。"""
-        return self._edges(_EDGES_FROM, src, kind)
-
-    def edges_to(self, dst: str, kind: str) -> tuple[EdgeRow, ...]:
-        """入边（反查）：按 ``(dst, kind)`` 查。"""
-        return self._edges(_EDGES_TO, dst, kind)
-
-    def _edges(self, statement: str, value: str, kind: str) -> tuple[EdgeRow, ...]:
-        """按起点或终点查边；两条语句都在模块级拼好，列名不在这里出现。"""
-        rows = self._connection.execute(statement, (value, kind)).fetchall()
-        return tuple(_edge(row) for row in rows)
 
 
 def rebuild(rows: Rows, hubs: Iterable[Hub]) -> RebuildReport:
@@ -615,26 +542,12 @@ def _hub(row: sqlite3.Row) -> HubRow:
     return HubRow(name=str(row["name"]))
 
 
-def _edge(row: sqlite3.Row) -> EdgeRow:
-    """把一行读成关系边。"""
-    return EdgeRow(
-        id=str(row["id"]),
-        src=str(row["src_value_uuid"]),
-        dst=str(row["dst_value_uuid"]),
-        kind=str(row["kind"]),
-        domain=str(row["domain"] or ""),
-        created=int(row["created"] or 0),
-    )
-
-
 __all__ = [
     "BLOCK_TABLE",
     "BODY_TABLE",
-    "EDGE_TABLE",
     "HUB_TABLE",
     "BlockRow",
     "BodyRow",
-    "EdgeRow",
     "HubRow",
     "RebuildReport",
     "Rows",

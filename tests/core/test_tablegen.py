@@ -226,7 +226,7 @@ def test_generating_a_file_from_nothing(tmp_path: Path):
     assert "这份文件由代码写出来" in text
 
     names = [table.name for table in load_tables(target)]
-    assert names == ["block", "body", "hub", "edge"]
+    assert names == ["block", "body", "hub"]
 
 
 def test_a_registered_type_is_written_into_the_file(tmp_path: Path):
@@ -278,7 +278,7 @@ def test_tables_are_separated_by_a_blank_line(tmp_path: Path):
 
     assert blocks[0].startswith("# SPDX-FileCopyrightText"), "第一段是文件头"
     assert all(block.startswith("- name: ") for block in blocks[1:]), "其后每段一张表"
-    assert len(blocks) == 5, "四张内核表加文件头"
+    assert len(blocks) == 4, "三张内核表加文件头"
     assert "\n\n\n" not in text, "不许多空一行"
 
 
@@ -390,7 +390,7 @@ def test_the_index_is_built_from_the_registered_types(tmp_path: Path):
     declaration = Declaration(kernel_tables())
 
     with Index.open(tmp_path / "catalog.db", declaration, create=True) as index:
-        assert index.tables() == ("block", "body", "edge", "hub", "meta")
+        assert index.tables() == ("block", "body", "hub", "meta")
 
 
 def test_a_fresh_type_becomes_a_table_in_the_database(tmp_path: Path):

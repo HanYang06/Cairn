@@ -191,13 +191,13 @@ style = { 行id: [ {区间(tuple): Style} ] }
 | 节点 | 块（`type = notedata`），稳定 OID；创作 `Signature` 记署名 |
 | 基板 | `NoteBody`：`text`（行序列）+ `style`（行内区间样式）；`note.style` 代理 `body.style` |
 | 去重签名 | `checksum = body_hash`（落盘负载哈希、含行 id）；剥离行 id 的内容签名是 `body.hash` |
-| 关系 | **DB 行**（`relations` 表）：`src / dst / kind / at / attrs`（不是块） |
+| 关系 | **由块自己表达**（块说它有哪些关系）；库只做索引，**索引尚未设计**（不预埋） |
 | 组装 | 角色：正文里放节点引用的 note |
 | 版本路径 | 通用 `VersionStore`（`prev` 哈希链 + 反向补丁），域提供 Codec |
-| 衍生关系 | 对关系表做闭包计算 |
+| 衍生关系 | 对块表达出来的关系做闭包计算（索引形态待设计） |
 
 关系类型（草案）：`derived-from`、`edits`、`annotates`、`replies-to`、`references`、`transcludes`、`read`、`endorse`。
-当前代码常用的三个：`derived-from`（派生）、`references`（引用）、`contains`（归属 / 成员）。
+哪些真的用得上，等有领域产生关系时再定——**现在不预埋**。
 
 ---
 

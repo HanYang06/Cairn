@@ -52,8 +52,8 @@ KIND_COLUMN = ("kind", "text", False, "类型标号；由记录自报，顺扫�
 #: 没有类型标号的那张表（内容表）：它只承载身份（含位置段）。
 _NO_KIND = frozenset({BODY_TABLE})
 
-#: **不由类型诞生**的那两张内核表：`hub` 的主语是载体目录、`edge` 的主语是关系本身。
-#: 它们照旧由声明层写死（这里就是那份声明），不与"类型反查"那条路混在一起。
+#: **不由类型诞生**的那张内核表：`hub` 的主语是载体目录。
+#: 它照旧由声明层写死（这里就是那份声明），不与"类型反查"那条路混在一起。
 KERNEL_EXTRA_TABLES: tuple[TableSpec, ...] = (
     TableSpec(
         name="hub",
@@ -72,40 +72,13 @@ KERNEL_EXTRA_TABLES: tuple[TableSpec, ...] = (
         doc="登记表：主语是载体目录、不是 ID；真源是目录本身",
         primary_key=("name",),
     ),
-    # `edge` 现在**声明为真源**（tier=SOURCE）：关系数据目前只活在库里，删了就是永久损失。
-    # 设计上的归属是"关系落在块内、本表只是它的索引"（那时改成 DERIVED 并写明来源），
-    # 但关系块要等真有领域产生关系时再设计——**没有调用方的结构就是脚手架**。
-    # 故这里不写一句话实现不了的重建来源：声明只写现在成立的事。
-    TableSpec(
-        name="edge",
-        columns=(
-            column_of(
-                "id",
-                ColumnSource.DIGEST,
-                type=ColumnType.TEXT,
-                not_null=True,
-                doc="边身份摘要（由下列各列算出）",
-            ),
-            reference_column("src", "value_uuid"),
-            reference_column("dst", "value_uuid"),
-            column_of(
-                "kind", ColumnSource.PROGRAM, type=ColumnType.TEXT, not_null=True, doc="关系种类"
-            ),
-            column_of("domain", ColumnSource.PROGRAM, type=ColumnType.TEXT, doc="所属领域"),
-            column_of(
-                "created", ColumnSource.STORED, type=ColumnType.INTEGER, doc="建立时刻（unix 毫秒）"
-            ),
-        ),
-        tier=Tier.SOURCE,
-        owner="core",
-        doc="关系索引：一行一条；两端各指一个 ID，关系不需要第二种语法",
-        primary_key=("id",),
-        indexes=(
-            IndexSpec(columns=("src_value_uuid", "kind"), doc="出边（正向遍历）"),
-            IndexSpec(columns=("dst_value_uuid", "kind"), doc="反查（backlinks）"),
-        ),
-    ),
 )
+"""**不由类型诞生**的那张内核表：`hub` 的主语是载体目录，不是 ID，故照旧由声明层写死。
+
+**这里曾有一张 `edge`（关系索引）表，已删（2026-09-30）**：它零调用方，且形状是按
+"关系是一等 DB 行"那套设计的——而口径已经改成"关系由块表达、库只做索引"。
+关系落地时按那时的需要重新定索引形状，不在今天预埋（判据同上：没有调用方的结构即脚手架）。
+"""
 
 
 def type_tables(registry: Registry | None = None) -> tuple[TableSpec, ...]:
@@ -410,9 +383,9 @@ def _type_of(name: str) -> ColumnType:
 
 
 def kernel_declarations(registry: Registry | None = None) -> tuple[TableSpec, ...]:
-    """内核的**全部**表声明：类型派生的（`block` / `body`）＋ 不由类型诞生的（`hub` / `edge`）。
+    """内核的**全部**表声明：类型派生的（`block` / `body`）＋ 不由类型诞生的（`hub`）。
 
-    顺序确定（类型表按表名、补的那两张按声明顺序），故文件与库每次算出来都一样。
+    顺序确定（类型表按表名、补的那张按声明顺序），故文件与库每次算出来都一样。
     """
     return (*type_tables(registry), *KERNEL_EXTRA_TABLES)
 

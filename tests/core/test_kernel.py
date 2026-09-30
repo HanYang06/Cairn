@@ -37,7 +37,7 @@ def test_create_builds_a_vault(tmp_path: Path):
     with Kernel.create(tmp_path / "vault") as kernel:
         assert kernel.catalog_path.exists()
         assert kernel.catalog_path.name == CATALOG_FILENAME
-        assert kernel.index.tables() == ("block", "body", "edge", "hub", "meta")
+        assert kernel.index.tables() == ("block", "body", "hub", "meta")
         assert kernel.policy == PackPolicy()
 
 

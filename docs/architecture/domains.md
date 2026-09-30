@@ -33,8 +33,8 @@
 - 域**不落盘**，也不产生第三态；它只"管理"数据。
 - 数据是**载体**（字段 + 读视图）；编辑操作在**域服务**（`service.py`）里，以 data 为首参。
 - 数据类可以有自己的轻量构造入口（如 `AssetData.create`），但它**不是域**。
-- 共享设施同处 `feature/shared/`：`relation`（边表）/ `signature`（值）/ `provenance`（派生查询）/
-  `base`（错误 / 标签）/ `kinds`（类型词表）。
+- 共享设施同处 `feature/shared/`：`signature`（值）/ `provenance`（派生查询）/
+  `base`（错误 / 标签）/ `kinds`（类型词表）。（**关系**没有专属共享件：它由块表达，索引未设计。）
 
 ## 2. 类型词表 `Kind`
 
@@ -92,7 +92,7 @@ class NoteData(Block):
 
 - 容器分工：**内容** `body`（进内容池，按 `body_hash`＝落盘负载哈希去重）/ **描述** `attrs`（随块行存）。
 - 扩展方式只有两种：**加一个 `type` 子类**、或**给已有类加字段**（`Attr` / `Data` / `Body`）。
-- 关系是**一等 DB 行**（`relation` 表：`src` / `dst` / `kind` / `domain`），不是块。
+- 关系**由块自己表达**（块说它有哪些关系）；库只做索引，索引尚未设计（2026-09-30 定，不预埋）。
 - 组：域身份 `gid`（≠ 块 `oid`）+ 有序子项 `group` 列表（可嵌套）；另存 `contains` 边做反查。
 - 签名为**复合值**（`Signature`），落在 attrs；画板值类型（`Graphic` / `Paint` / `Link`）同属数据描述。
 
