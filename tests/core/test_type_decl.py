@@ -56,7 +56,7 @@ def test_declared_storage_fields_land_in_the_declaration():
         """测试用的工具型块。"""
 
         __table__ = "attrindex"
-        __nature__ = Nature.TOL
+        __nature__ = Nature.TOOL
         __owner__ = "note"
         __tier__ = Tier.SOURCE
         __backup__ = True
@@ -68,7 +68,7 @@ def test_declared_storage_fields_land_in_the_declaration():
 
     decl = _decl("AttrIndex")
 
-    assert decl.nature is Nature.TOL
+    assert decl.nature is Nature.TOOL
     assert decl.owner == "note"
     assert decl.tier is Tier.SOURCE
     assert decl.backup is True
