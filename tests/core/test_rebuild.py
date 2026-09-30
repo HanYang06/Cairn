@@ -31,10 +31,10 @@ def _record(payload: bytes) -> bytes:
     return encode(ID.of(payload), payload)
 
 
-def _block_record(ref: BodyRef) -> bytes:
+def _block_record(ref: BodyRef, *, kind: str = "") -> bytes:
     """造一条块记录（载荷是指针，故它进 `block` 表）。"""
     pointer = encode_block_payload(ref)
-    return encode(ID.of(pointer), pointer)
+    return encode(ID.of(pointer), pointer, kind=kind)
 
 
 def _uuid(raw: bytes) -> str:
@@ -63,7 +63,7 @@ def test_rebuild_registers_hub_and_adds_missing_rows(tmp_path: Path):
     second = hub.append(second_raw)
 
     with _index(tmp_path) as index:
-        report = rebuild(index.rows, [hub], now=1234)
+        report = rebuild(index.rows, [hub])
 
         assert report.registered_hubs == ("main",)
         assert report.scanned == 2
@@ -74,7 +74,7 @@ def test_rebuild_registers_hub_and_adds_missing_rows(tmp_path: Path):
         stored = index.rows.body(_uuid(second_raw))
 
     assert stored is not None
-    assert (stored.hub, stored.pack) == ("main", second.pack)
+    assert (stored.in_hub, stored.in_hub_pack) == ("main", second.pack)
     assert stored.span == second.span
 
 
@@ -88,7 +88,7 @@ def test_rebuild_routes_records_by_payload(tmp_path: Path):
     hub.append(block_raw)
 
     with _index(tmp_path) as index:
-        report = rebuild(index.rows, [hub], now=1)
+        report = rebuild(index.rows, [hub])
 
         assert report.added_bodies == (_uuid(content_raw),)
         assert report.added_blocks == (_uuid(block_raw),)
@@ -101,22 +101,40 @@ def test_rebuild_routes_records_by_payload(tmp_path: Path):
     assert stored.kind == ""
 
 
-def test_rebuild_keeps_unknown_fields_empty(tmp_path: Path):
-    """重扫补回的是身份与位置：类型与落盘时刻不在记录头里，只能给空值。"""
+def test_rebuild_restores_every_column(tmp_path: Path):
+    """重扫补回的是行上的**每一列**：身份字段与类型标号都在记录里，位置由扫到的位置给出。
+
+    这一条就是"索引只做索引"的判据：索引里的每一个值都必须能从载体算回来，
+    否则索引一丢就是永久损失，而不是可重建的投影。
+    """
     hub = _hub(tmp_path)
     raw = _record(b"only")
     hub.append(raw)
+    record = decode(raw)
 
     with _index(tmp_path) as index:
-        rebuild(index.rows, [hub], now=5)
+        rebuild(index.rows, [hub])
         stored = index.rows.body(_uuid(raw))
 
     assert stored is not None
-    assert stored.created == 0
-    assert stored.updated == 0
-    assert stored.birth_time == 0
-    assert stored.value_hash == ID.of(b"only").value_hash
-    assert stored.size == len(raw)
+    assert stored.name == record.id.name
+    assert stored.birth_time == record.id.birth_time
+    assert stored.value_hash == record.id.value_hash
+    assert (stored.in_hub, stored.in_hub_pack) == ("main", hub.pack_names()[0])
+
+
+def test_rebuild_restores_the_type_the_record_reports(tmp_path: Path):
+    """类型标号由记录自报，故重扫补回的块行带着真类型——索引不必当第二个事实源。"""
+    hub = _hub(tmp_path)
+    raw = _block_record(BodyRef(value_uuid="bu", value_hash="bh"), kind="notedata")
+    hub.append(raw)
+
+    with _index(tmp_path) as index:
+        rebuild(index.rows, [hub])
+        stored = index.rows.block(_uuid(raw))
+
+    assert stored is not None
+    assert stored.kind == "notedata"
 
 
 def test_rebuild_does_not_touch_existing_rows(tmp_path: Path):
@@ -129,23 +147,23 @@ def test_rebuild_does_not_touch_existing_rows(tmp_path: Path):
     with _index(tmp_path) as index:
         index.rows.put_body(
             BodyRow(
+                name="",
                 value_uuid=value_uuid,
                 value_hash="stale",
-                hub="main",
-                pack="elsewhere",
-                span=placement.span,
-                size=1,
-                created=7,
+                birth_time=7,
+                in_hub="main",
+                in_hub_pack="elsewhere",
+                in_pack_slot=(placement.span.first, placement.span.last),
             )
         )
-        report = rebuild(index.rows, [hub], now=9)
+        report = rebuild(index.rows, [hub])
         stored = index.rows.body(value_uuid)
 
     assert report.added_bodies == ()
     assert report.added_blocks == ()
     assert report.scanned == 1
     assert stored is not None
-    assert (stored.pack, stored.value_hash, stored.created) == ("elsewhere", "stale", 7)
+    assert (stored.in_hub_pack, stored.value_hash, stored.birth_time) == ("elsewhere", "stale", 7)
 
 
 def test_rebuild_is_idempotent(tmp_path: Path):
@@ -155,8 +173,8 @@ def test_rebuild_is_idempotent(tmp_path: Path):
     hub.append(_record(b"two"))
 
     with _index(tmp_path) as index:
-        first = rebuild(index.rows, [hub], now=1)
-        second = rebuild(index.rows, [hub], now=2)
+        first = rebuild(index.rows, [hub])
+        second = rebuild(index.rows, [hub])
 
     assert first.changed is True
     assert second.changed is False
@@ -168,13 +186,13 @@ def test_rebuild_registers_an_empty_hub(tmp_path: Path):
     hub = _hub(tmp_path, "spare")
 
     with _index(tmp_path) as index:
-        report = rebuild(index.rows, [hub], now=3)
+        report = rebuild(index.rows, [hub])
         stored = index.rows.hub("spare")
 
     assert report.registered_hubs == ("spare",)
     assert report.added_bodies == ()
     assert stored is not None
-    assert stored.created == 3
+    assert stored.name == "spare"
 
 
 # ---- 坏点即停 ----
@@ -195,7 +213,7 @@ def test_rebuild_stops_at_a_bad_carrier_and_keeps_what_it_added(tmp_path: Path):
 
     with _index(tmp_path) as index:
         with pytest.raises(RecordFormatError):
-            rebuild(index.rows, [hub], now=11)
+            rebuild(index.rows, [hub])
 
         # 坏点之前补的行留着（重建是幂等的，重跑接着补）
         assert index.rows.count_locations() == 1

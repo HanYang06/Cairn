@@ -23,11 +23,14 @@ from typing import TYPE_CHECKING
 
 from core.exc import TableDeclarationError
 
+from .format.id import ID_FIELDS
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-#: ID 上能绑成列的字段 = 落盘子集（设计篇 §3.5）与身份字段的交集。
-BINDABLE_FIELDS: frozenset[str] = frozenset({"value_uuid", "value_hash", "birth_time", "name"})
+#: ID 上能绑成列的字段 = `ID` 的**全部**字段（`ID_FIELDS`）。
+#: 表里的身份列照它逐列搬，故"哪个字段进不去库"这个问题在代码上没有第二种答案。
+BINDABLE_FIELDS: frozenset[str] = frozenset(ID_FIELDS)
 
 #: 指针能带的两套凭证：指向别处时只可能有这两列（设计篇 §3.2.1）。
 POINTER_FIELDS: frozenset[str] = frozenset({"value_uuid", "value_hash"})
@@ -48,14 +51,14 @@ class TypeDecl:
         name: 类型的登记名（`Body` / `Block` / 领域类名），由类定义处给出。
         table: 表名；默认取 `name` 的小写写法。
         doc: 说明文本；随表声明落进文件，**不进开库比对的签名**。
-        ids: 本行主语的 ID 字段名，与 `ID` 的字段同名（`value_uuid` / `value_hash` / …）。
+        ids: 本行主语的 ID 字段名，与 `ID` 的字段同名（`ID_FIELDS` 的全部）。
         refs: 指向别处的引用，字段名 → 目标表。
     """
 
     name: str
     table: str
     doc: str = ""
-    ids: tuple[str, ...] = ("value_uuid", "value_hash", "birth_time", "name")
+    ids: tuple[str, ...] = ID_FIELDS
     refs: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -162,7 +165,7 @@ def register(
     *,
     table: str = "",
     doc: str = "",
-    ids: tuple[str, ...] = ("value_uuid", "value_hash", "birth_time", "name"),
+    ids: tuple[str, ...] = ID_FIELDS,
     refs: Mapping[str, str] | None = None,
 ) -> TypeDecl:
     """向全局登记表登记一个类型；表名默认取名字的小写写法。

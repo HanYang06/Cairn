@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from core.clock import now_ms
 from core.exc import HubShapeError, InvalidIdError, RecordFormatError, SlotError
 
 from .format.block import BodyRef, body_ref_of
@@ -138,7 +137,7 @@ class RepairReport:
 
 @dataclass(frozen=True, slots=True)
 class _Occurrence:
-    """盘上一次出现：哪个身份、在哪儿、摘要是什么、它是不是块记录。"""
+    """盘上一次出现：哪个身份、在哪儿、摘要是什么、它是不是块记录、自报什么类型。"""
 
     value_uuid: str
     hub: str
@@ -148,6 +147,7 @@ class _Occurrence:
     size: int
     issued: int
     pointer: BodyRef | None
+    kind: str = ""
 
 
 def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) -> PatrolReport:
@@ -169,8 +169,8 @@ def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) 
     blocks = rows.blocks()
     bodies = rows.bodies()
     missing = {name for name in registered if name not in on_disk}
-    missing.update(row.hub for row in blocks if row.hub not in on_disk)
-    missing.update(row.hub for row in bodies if row.hub not in on_disk)
+    missing.update(row.in_hub for row in blocks if row.in_hub not in on_disk)
+    missing.update(row.in_hub for row in bodies if row.in_hub not in on_disk)
     finds.extend(
         Find(FindKind.MISSING_HUB, name, name, "登记或行指向的 hub 目录不在")
         for name in sorted(missing)
@@ -219,13 +219,13 @@ def _row_finds(
     """库 → 盘：逐行比位置与摘要。"""
     finds: list[Find] = []
     for block in blocks:
-        if (block.hub, block.pack) in corrupt_packs:
+        if (block.in_hub, block.in_hub_pack) in corrupt_packs:
             continue
         find = _compare(block, missing, occurrences)
         if find is not None:
             finds.append(find)
     for body in bodies:
-        if (body.hub, body.pack) in corrupt_packs:
+        if (body.in_hub, body.in_hub_pack) in corrupt_packs:
             continue
         find = _compare(body, missing, occurrences)
         if find is not None:
@@ -258,27 +258,26 @@ def _missing_row_finds(
     return tuple(finds)
 
 
-def repair(index: Index, report: PatrolReport, *, now: int | None = None) -> RepairReport:
+def repair(index: Index, report: PatrolReport) -> RepairReport:
     """处置：**只动可修复的那一列，且只补不删**。
 
-    - 缺登记 → 补登记（登记记的是"第一次见到它"）；
-    - 缺行 → 按记录补行（类型与落盘时刻给空值，重扫编不出来）；
-    - 坐标不符 → 只改坐标（不动类型标号与三个时刻）。
+    - 缺登记 → 补登记（那张表只记名字，真源是目录）；
+    - 缺行 → 按记录补行（行上的每一列都能从记录还原）；
+    - 坐标不符 → 只改坐标（不动身份字段与类型标号）。
 
     不可修复的发现一律不碰：删行等于把"丢了东西"这件事抹掉。
     """
     rows = index.rows
-    stamp = now_ms() if now is None else now
     applied: list[Find] = []
     skipped: list[Find] = []
 
     for find in report.finds:
         if find.kind is FindKind.UNREGISTERED_HUB:
-            rows.register_hub(find.hub, created=stamp)
+            rows.register_hub(find.hub)
         elif find.kind is FindKind.MISSING_ROW:
             _add_row(rows, find)
         elif find.kind is FindKind.MISPLACED:
-            _move_row(rows, find, stamp)
+            _move_row(rows, find)
         else:
             skipped.append(find)
             continue
@@ -295,12 +294,12 @@ def _add_row(rows: Rows, find: Find) -> None:
         rows.put_body(find.body)
 
 
-def _move_row(rows: Rows, find: Find, stamp: int) -> None:
+def _move_row(rows: Rows, find: Find) -> None:
     """按发现挪一行：只改坐标。"""
     if find.block is not None:
-        rows.move_block(find.block, updated=stamp)
+        rows.move_block(find.block)
     elif find.body is not None:
-        rows.move_body(find.body, updated=stamp)
+        rows.move_body(find.body)
 
 
 def _scan(hub: Hub, pack: str, occurrences: dict[str, list[_Occurrence]]) -> int:
@@ -322,6 +321,7 @@ def _scan(hub: Hub, pack: str, occurrences: dict[str, list[_Occurrence]]) -> int
                     size=len(raw),
                     issued=record.id.birth_time,
                     pointer=body_ref_of(record.payload),
+                    kind=record.kind,
                 )
             )
             count += 1
@@ -334,13 +334,13 @@ def _compare(
     occurrences: dict[str, list[_Occurrence]],
 ) -> Find | None:
     """比一行：位置与摘要**两项都对**才算一致。"""
-    if row.hub in missing:
+    if row.in_hub in missing:
         return None
     found = occurrences.get(row.value_uuid, [])
     same_place = [
         item
         for item in found
-        if item.hub == row.hub and item.pack == row.pack and item.span == row.span
+        if item.hub == row.in_hub and item.pack == row.in_hub_pack and item.span == row.span
     ]
     if any(item.value_hash == row.value_hash for item in same_place):
         return None
@@ -357,25 +357,29 @@ def _found(kind: FindKind, row: BlockRow | BodyRow, detail: str, where: _Occurre
     """按行的种类造一处发现：块行给 `block`、内容行给 `body`（处置据此知道补哪张表）。"""
     if isinstance(row, BlockRow):
         return Find(
-            kind, row.hub, row.value_uuid, detail, block=_as_block(where) if where else None
+            kind, row.in_hub, row.value_uuid, detail, block=_as_block(where) if where else None
         )
-    return Find(kind, row.hub, row.value_uuid, detail, body=_as_body(where) if where else None)
+    return Find(kind, row.in_hub, row.value_uuid, detail, body=_as_body(where) if where else None)
 
 
 def _as_block(occurrence: _Occurrence | None) -> BlockRow | None:
-    """把盘上的一次出现写成"应该补成什么样"的块行；不是块记录即 ``None``。"""
+    """把盘上的一次出现写成"应该补成什么样"的块行；不是块记录即 ``None``。
+
+    类型标号由记录自报（`record.kind`），故重扫补回的行带着真类型，不是空串。
+    """
     if occurrence is None or occurrence.pointer is None:
         return None
     return BlockRow(
+        name="",
         value_uuid=occurrence.value_uuid,
         value_hash=occurrence.value_hash,
+        birth_time=occurrence.issued,
+        in_hub=occurrence.hub,
+        in_hub_pack=occurrence.pack,
+        in_pack_slot=(occurrence.span.first, occurrence.span.last),
         body_value_uuid=occurrence.pointer.value_uuid,
         body_value_hash=occurrence.pointer.value_hash,
-        hub=occurrence.hub,
-        pack=occurrence.pack,
-        span=occurrence.span,
-        size=occurrence.size,
-        birth_time=occurrence.issued,
+        kind=occurrence.kind,
     )
 
 
@@ -384,13 +388,13 @@ def _as_body(occurrence: _Occurrence | None) -> BodyRow | None:
     if occurrence is None or occurrence.pointer is not None:
         return None
     return BodyRow(
+        name="",
         value_uuid=occurrence.value_uuid,
         value_hash=occurrence.value_hash,
-        hub=occurrence.hub,
-        pack=occurrence.pack,
-        span=occurrence.span,
-        size=occurrence.size,
         birth_time=occurrence.issued,
+        in_hub=occurrence.hub,
+        in_hub_pack=occurrence.pack,
+        in_pack_slot=(occurrence.span.first, occurrence.span.last),
     )
 
 

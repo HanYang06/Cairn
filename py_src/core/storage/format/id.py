@@ -9,8 +9,11 @@ ID 是身份证，不是"一个字段加一串内容"：它同时回答两个问
   （去重有效、比较无效）。前者使同内容的两次落盘仍可区分与引用，后者使
   同内容判重成立，两者合起来才构成内容寻址对象池的身份。
 - **在哪儿**：`in_hub` / `in_hub_pack` / `in_pack_slot` 记下物理坐标（`in_hub` 即旧称的"桶"）。
-  该段允许冗余与可推导值：它的服务对象是人眼排查，不是关键路径。
-  落盘只取必需子集（由存储层决定），位置段不随之入库。
+  该段由存储层在写入时补齐，并**整段进索引库**（见 :data:`ID_FIELDS`）——库里的行就是 ID 的镜像。
+  载体记录头里仍然只带两套凭证：记录头要小，且位置由目录与载体推得出来，库没有这份便宜可占。
+
+`ID_FIELDS` 是**全部**字段的清单，也是索引库里身份列的清单：两处同一个来源，
+故不存在"某个字段进得去、某个字段进不去"这种半截口径。
 
 `value_hash` 在签发时就由内容算出，故能签发的只有"有内容"的 ID；
 不知道内容时留空串，由存储层在写入时补齐——空串是"未绑定内容"的唯一写法，
@@ -19,7 +22,7 @@ ID 是身份证，不是"一个字段加一串内容"：它同时回答两个问
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from hashlib import sha256
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -96,12 +99,21 @@ class ID:
         return bool(self.value_hash) and self.value_hash == other.value_hash
 
     def to_record(self) -> dict[str, object]:
-        """**落盘必需子集**（§3.5）：载体记录头与索引库取这里的东西。
+        """**落盘的那部分 ID**：索引库里有的 ID 字段，都要能从记录还原。
 
-        只写两套凭证。位置由目录与载体推出、名字由容器给出、签发时间属程序给出的信息，
-        都不落盘；物理坐标（槽区间）更不进记录（§9.2）。
+        带两套凭证、名字与签发时刻；**位置段不带**——记录在哪儿由"它是在哪个载体的哪一格
+        被扫到"给出，扫一遍即可重建，故不必占记录头（§9.2）。
+
+        口径（2026-09-30）：早先只写两套凭证，于是索引库里的 `name` 与 `birth_time`
+        在重扫后化为空值——索引便不再是载体的投影。取舍判据是作者定的那条：
+        **索引只做索引，它里面的每一个值都必须能从载体算回来**。
         """
-        return {"value_uuid": self.value_uuid, "value_hash": self.value_hash}
+        return {
+            "name": self.name,
+            "value_uuid": self.value_uuid,
+            "value_hash": self.value_hash,
+            "birth_time": self.birth_time,
+        }
 
     @classmethod
     def from_record(cls, raw: Mapping[str, object]) -> ID:
@@ -129,6 +141,15 @@ class ID:
         )
 
 
+ID_FIELDS: tuple[str, ...] = tuple(item.name for item in fields(ID))
+"""`ID` 的**全部**字段，顺序即声明顺序。
+
+索引库里的身份列照这份清单逐列搬：谁用了 ID，那张表就有这几列，一个不多、一个不少。
+故"某个字段进不去库"在代码上不成立——**清单是从 `ID` 上数出来的，不是另抄一份子集**；
+本清单随 `ID` 加字段而自动变长，没有第二处要改。
+"""
+
+
 def _int_or_zero(value: object) -> int:
     """把可选整数字段读回；缺失取 0，形态非法即抛（不静默吞掉脏字节）。"""
     if value is None:
@@ -139,4 +160,4 @@ def _int_or_zero(value: object) -> int:
         raise InvalidIdError(f"ID 记录的整数字段非法: {value!r}") from error
 
 
-__all__ = ["ID", "digest", "new_uuid"]
+__all__ = ["ID", "ID_FIELDS", "digest", "new_uuid"]

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""载体记录：总长自框定 + 校验和 + ID 段 + 载荷。
+r"""载体记录：总长自框定 + 校验和 + ID 段 + 载荷。
 
 一条记录的字节布局（长度均指字节，见设计篇 §5.3）::
 
@@ -12,9 +12,14 @@
   不必依赖任何外部目录，索引库丢了也能重建；
 - ``checksum`` 是载荷摘要的 64 位小写十六进制；与 ID 的摘要形态**同源**，
   故一次比较同时回答"读到的是不是原文"与"ID 声称的内容与实际内容是否一致"；
-- ``id`` 只取落盘必需子集（§3.5，即两套凭证），用 canonical CBOR 编码——
-  同一份 ID 恒得同一段字节，这是"按内容判重"在字节层成立的前提；
+- ``id`` 段是 canonical CBOR 映射，装 **ID 的落盘部分**（两套凭证、名字、签发时刻，
+  见 `ID.to_record`）与**记录自报的类型标号**（保留键 ``\x00cairn.kind``）。
+  保留键带不可打印前缀，业务数据不可能占用它；未知键一律忽略（§3.2.1、§3.5）；
 - ``payload`` 是记录内容，结构由上层决定，本层只当字节。
+
+**类型标号为什么在记录里**：索引库只做索引，它里面的每一个值都必须能从载体算回来。
+`kind` 曾经只活在索引行里，于是索引一重扫，全库的块就不知道自己是什么类型
+（"可重建的投影"当场不成立）。故类型由记录自报，索引那一列退成它的投影。
 
 **"槽数"不进记录头**：槽对齐值是推导值（假定起点落在槽边界时装下总长需要几个槽），
 记录在载体里的实际占用由起点偏移与长度一起推出（§5.2、§5.3），两者不落盘。
@@ -44,6 +49,13 @@ CHECKSUM_CHARS = 64
 HEADER_BYTES = LEN_BYTES + CHECKSUM_CHARS
 """记录头（总长 + 校验和）的字节数；其后是 ID 段与载荷。"""
 
+KIND_KEY = "\x00cairn.kind"
+"""ID 段里的保留键：记录自报的类型标号（与 `block.BODY_REF_KEY` 同一套命名空间）。
+
+它属于**记录**而不属于内容：同一段 body 字节可以被不同类型的块用（内容按地址去重），
+故类型标号不能写进载荷——写进去就成了内容的一部分，去重会被类型切碎。
+"""
+
 _MAX_TOTAL_LEN = (1 << (8 * LEN_BYTES)) - 1
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
@@ -53,23 +65,27 @@ class Record:
     """一条已解码的记录。
 
     Attributes:
-        id: 记录携带的 ID（由落盘子集还原；名字、签发时间、位置不在记录里）。
+        id: 记录携带的 ID（由落盘部分还原；位置段不在记录里，由扫到的位置给出）。
         payload: 载荷字节，原样。
         total_len: 记录总长（自框定字段）。
         checksum: 记录头里的载荷摘要。
+        kind: 记录自报的类型标号；没写即空串（内容记录不带类型标号）。
     """
 
     id: ID
     payload: bytes
     total_len: int
     checksum: str
+    kind: str = ""
 
 
-def encode(record_id: ID, payload: bytes) -> bytes:
-    """把一份 ID 与载荷编成一条记录。
+def encode(record_id: ID, payload: bytes, *, kind: str = "") -> bytes:
+    """把一份 ID、一个类型标号与载荷编成一条记录。
 
     ID 未绑定内容（摘要为空串）时，由本函数把载荷摘要补进记录；已绑定但与载荷不符则拒绝——
     那说明"ID 声称的内容"与"实际内容"不是一回事，落盘只会把这个矛盾固化下来。
+
+    类型标号只在非空时写下：内容记录没有类型，多写一个空键会让同一份内容的记录字节变长。
 
     Raises:
         RecordFormatError: ID 声明的摘要与载荷不符，或记录总长超出总长字段的表示范围。
@@ -79,9 +95,11 @@ def encode(record_id: ID, payload: bytes) -> bytes:
         raise RecordFormatError(
             f"ID 声明的内容与载荷不符: id={record_id.value_hash} payload={checksum}"
         )
-    id_record = record_id.to_record()
-    id_record["value_hash"] = checksum
-    section = cbor2.dumps(id_record, canonical=True)
+    section_record = record_id.to_record()
+    section_record["value_hash"] = checksum
+    if kind:
+        section_record[KIND_KEY] = kind
+    section = cbor2.dumps(section_record, canonical=True)
     total_len = HEADER_BYTES + len(section) + len(payload)
     if total_len > _MAX_TOTAL_LEN:
         raise RecordFormatError(f"记录总长超出 {LEN_BYTES} 字节字段的表示范围: {total_len}")
@@ -119,7 +137,18 @@ def decode(raw: bytes) -> Record:
         raise RecordFormatError(
             f"ID 声明的摘要与载荷不符: id={record_id.value_hash} payload={checksum}"
         )
-    return Record(id=record_id, payload=payload, total_len=total_len, checksum=checksum)
+    return Record(
+        id=record_id,
+        payload=payload,
+        total_len=total_len,
+        checksum=checksum,
+        kind=_text_or_empty(mapping.get(KIND_KEY)),
+    )
+
+
+def _text_or_empty(value: object) -> str:
+    """取一段可选文本：缺了或不是字符串即当空串（未知键的宽容读法）。"""
+    return value if isinstance(value, str) else ""
 
 
 def _frame(total_len: int, checksum: str, section: bytes, payload: bytes) -> bytes:
@@ -161,4 +190,4 @@ def _decode_section(section: io.BytesIO) -> Mapping[str, object]:
     return mapping
 
 
-__all__ = ["CHECKSUM_CHARS", "HEADER_BYTES", "LEN_BYTES", "Record", "decode", "encode"]
+__all__ = ["CHECKSUM_CHARS", "HEADER_BYTES", "KIND_KEY", "LEN_BYTES", "Record", "decode", "encode"]

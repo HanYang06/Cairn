@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING
 import pytest
 
 from core.storage.carrier import SlotRange
+from core.storage.format.id import ID_FIELDS
 from core.storage.index import Index
 from core.storage.rows import BlockRow, BodyRow, EdgeRow, Rows
-from core.storage.tables import Declaration, kernel_tables
+from core.storage.tables import ColumnSource, Declaration, kernel_tables
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -27,35 +28,31 @@ def rows(tmp_path: Path) -> Iterator[Rows]:
 
 
 def _block(value_uuid: str, *, value_hash: str = "h1", pack: str = "p1") -> BlockRow:
-    """造一条块行：指针两列与身份两列都带上。"""
+    """造一条块行：ID 的字段 ＋ 指针两列 ＋ 类型标号。"""
     return BlockRow(
+        name="",
         value_uuid=value_uuid,
         value_hash=value_hash,
+        birth_time=11,
+        in_hub="main",
+        in_hub_pack=pack,
+        in_pack_slot=(3, 5),
         body_value_uuid="bu1",
         body_value_hash="bh1",
-        hub="main",
-        pack=pack,
-        span=SlotRange(first=3, last=5),
-        size=512,
         kind="notedata",
-        birth_time=11,
-        created=22,
-        updated=33,
     )
 
 
 def _body(value_uuid: str, *, value_hash: str = "bh1", pack: str = "p1") -> BodyRow:
     """造一条内容行。"""
     return BodyRow(
+        name="",
         value_uuid=value_uuid,
         value_hash=value_hash,
-        hub="main",
-        pack=pack,
-        span=SlotRange(first=3, last=5),
-        size=512,
         birth_time=11,
-        created=22,
-        updated=33,
+        in_hub="main",
+        in_hub_pack=pack,
+        in_pack_slot=(3, 5),
     )
 
 
@@ -74,31 +71,60 @@ def test_block_roundtrip(rows: Rows):
     assert rows.count_locations() == 1
 
 
-def test_put_block_rewrites_position_but_keeps_first_write(rows: Rows):
-    """同身份改写：位置、摘要与指针跟着变，签发时刻与落下时刻保持第一次的值。"""
+def test_the_identity_columns_are_exactly_the_id_fields():
+    """表是 ID 的镜像：身份列就是 `ID` 的全部字段，一个不多、一个不少。"""
+    block = Declaration(kernel_tables()).table("block")
+    body = Declaration(kernel_tables()).table("body")
+
+    assert block is not None
+    assert body is not None
+    assert (
+        tuple(column.name for column in block.columns if column.source is ColumnSource.IDENTITY)
+        == ID_FIELDS
+    )
+    assert (
+        tuple(column.name for column in body.columns if column.source is ColumnSource.IDENTITY)
+        == ID_FIELDS
+    )
+
+
+def test_every_id_field_survives_the_roundtrip(rows: Rows):
+    """ID 的每个字段都能进库、也能原样读回：名字、签发时刻与整段位置。"""
+    row = replace(
+        _body("b1"),
+        name="有名字的体",
+        birth_time=7,
+        in_hub="far",
+        in_hub_pack="p7",
+        in_pack_slot=(12, 45),
+    )
+
+    rows.put_body(row)
+
+    assert rows.body("b1") == row
+
+
+def test_put_block_rewrites_position_but_keeps_the_issuing_time(rows: Rows):
+    """同身份改写：名字、摘要与位置段跟着变；`birth_time` 保持第一次签发的值。"""
     first = _block("u1")
     rows.put_block(first)
 
     moved = replace(
         first,
+        name="改过名",
         value_hash="h2",
-        hub="other",
-        pack="p9",
-        span=SlotRange(first=8, last=9),
-        size=1024,
+        in_hub="other",
+        in_hub_pack="p9",
+        in_pack_slot=(8, 9),
         birth_time=99,
-        created=999,
-        updated=1000,
     )
     rows.put_block(moved)
     stored = rows.block("u1")
 
     assert stored is not None
-    assert stored.pack == "p9"
+    assert (stored.name, stored.in_hub, stored.in_hub_pack) == ("改过名", "other", "p9")
     assert stored.span == SlotRange(first=8, last=9)
     assert stored.value_hash == "h2"
-    assert stored.updated == 1000
-    assert stored.created == first.created
     assert stored.birth_time == first.birth_time
     assert rows.count_blocks() == 1
 
@@ -114,14 +140,15 @@ def test_blocks_by_body_finds_every_referrer(rows: Rows):
     rows.put_block(_block("u1", value_hash="h1"))
     rows.put_block(
         BlockRow(
+            name="",
             value_uuid="u2",
             value_hash="h2",
+            birth_time=0,
+            in_hub="main",
+            in_hub_pack="p2",
+            in_pack_slot=(8, 8),
             body_value_uuid="bu9",
             body_value_hash="shared",
-            hub="main",
-            pack="p2",
-            span=SlotRange(first=8, last=8),
-            size=256,
         )
     )
     rows.put_body(_body("b1", value_hash="shared"))
@@ -151,56 +178,46 @@ def test_drop_block_reports_whether_a_row_was_removed(rows: Rows):
 
 
 def test_move_block_changes_only_the_coordinates(rows: Rows):
-    """只改坐标：身份、指针、类型标号与 `birth_time` / `created` 都不动。"""
+    """只改坐标：名字、摘要、指针、类型标号与 `birth_time` 都不动。"""
     row = _block("u1")
     rows.put_block(row)
 
     moved = rows.move_block(
         BlockRow(
+            name="被无视的名字",
             value_uuid="u1",
-            value_hash=row.value_hash,
-            body_value_uuid=row.body_value_uuid,
-            body_value_hash=row.body_value_hash,
-            hub="other",
-            pack="p9",
-            span=SlotRange(first=40, last=41),
-            size=1024,
-            kind="被无视的类型",
+            value_hash="被无视的摘要",
             birth_time=999,
-            created=999,
-        ),
-        updated=777,
+            in_hub="other",
+            in_hub_pack="p9",
+            in_pack_slot=(40, 41),
+            body_value_uuid="被无视的指针",
+            body_value_hash="被无视的指针",
+            kind="被无视的类型",
+        )
     )
     stored = rows.block("u1")
 
     assert moved is True
     assert stored is not None
-    assert (stored.hub, stored.pack) == ("other", "p9")
+    assert (stored.in_hub, stored.in_hub_pack) == ("other", "p9")
     assert stored.span == SlotRange(first=40, last=41)
-    assert stored.size == 1024
+    assert stored.name == row.name
+    assert stored.value_hash == row.value_hash
+    assert stored.body_value_hash == row.body_value_hash
     assert stored.kind == row.kind, "类型标号由程序给，挪行不许冲掉它"
-    assert (stored.birth_time, stored.created, stored.updated) == (11, 22, 777)
+    assert stored.birth_time == row.birth_time
 
 
 def test_move_body_changes_only_the_coordinates(rows: Rows):
-    """内容行挪位置同理：身份与两个时刻都不动。"""
+    """内容行挪位置同理：身份与摘要都不动。"""
     row = _body("b1")
     rows.put_body(row)
 
-    assert rows.move_body(row, updated=555) is True
-    stored = rows.body("b1")
+    away = replace(row, in_hub="other", in_hub_pack="p9", in_pack_slot=(40, 41))
 
-    assert stored == BodyRow(
-        value_uuid="b1",
-        value_hash="bh1",
-        hub="main",
-        pack="p1",
-        span=SlotRange(first=3, last=5),
-        size=512,
-        birth_time=11,
-        created=22,
-        updated=555,
-    )
+    assert rows.move_body(away) is True
+    assert rows.body("b1") == away
 
 
 def test_rows_lists_both_tables_in_position_order(rows: Rows):
@@ -216,14 +233,14 @@ def test_rows_lists_both_tables_in_position_order(rows: Rows):
 # ---- hub 登记 ----
 
 
-def test_register_hub_keeps_the_first_sight(rows: Rows):
-    """登记记的是"第一次见到它"：重复登记不改写角色、状态与时刻。"""
-    assert rows.register_hub("main", created=1) is True
-    assert rows.register_hub("main", role="transient", state="merged", created=2) is False
+def test_register_hub_is_idempotent(rows: Rows):
+    """登记是"这个 hub 存在过"的索引：重复登记是空操作。"""
+    assert rows.register_hub("main") is True
+    assert rows.register_hub("main") is False
 
     stored = rows.hub("main")
     assert stored is not None
-    assert (stored.role, stored.state, stored.created) == ("main", "active", 1)
+    assert stored.name == "main"
 
 
 def test_hubs_are_listed_in_name_order(rows: Rows):

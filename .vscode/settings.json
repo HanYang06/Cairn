@@ -44,7 +44,6 @@
     },
     "search.exclude": {
         ".venv": true,
-        "vault": true,
         "build": true,
         "dist": true,
         ".mypy_cache": true,

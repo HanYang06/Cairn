@@ -88,12 +88,18 @@ class ColumnSource(Enum):
 #: 能绑成列的 ID 字段与「能依赖默认为空」的判据都在登记层（`registry.py`）；
 #: 它们对全部表一视同仁——**不再有身份表那种特例**（名字是表的坐标，不是行里的判别列）。
 
-#: 绑定列的类型由 `ID` 的字段推出（设计篇 §3.2），声明里不写
+#: 绑定列的类型由 `ID` 的字段推出（设计篇 §3.2），声明里不写。
+#: 这张表**必须覆盖 `ID` 的全部字段**：缺一个，`Column` 的校验就会在开库时抛。
+#: 位置段三列中，前两列就是目录名与载体名；`in_pack_slot` 是格区间，
+#: 库里写成 `头格:末格`（见 `rows.py` 的换写），故也是文本。
 _COLUMN_TYPE_OF_ID: dict[str, ColumnType] = {
     "name": ColumnType.TEXT,
     "value_uuid": ColumnType.TEXT,
     "value_hash": ColumnType.TEXT,
     "birth_time": ColumnType.INTEGER,
+    "in_hub": ColumnType.TEXT,
+    "in_hub_pack": ColumnType.TEXT,
+    "in_pack_slot": ColumnType.TEXT,
 }
 
 #: 绑定到别处的指针时，只能带两套凭证中那两种列名里的字段

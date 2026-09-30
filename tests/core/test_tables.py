@@ -375,20 +375,16 @@ def test_kernel_tables_declare_and_compile():
     block = declaration.table("block")
     assert block is not None
     assert block.column_names() == (
+        "name",
         "value_uuid",
         "value_hash",
         "birth_time",
-        "name",
+        "in_hub",
+        "in_hub_pack",
+        "in_pack_slot",
         "body_value_uuid",
         "body_value_hash",
         "kind",
-        "hub",
-        "pack",
-        "slot_first",
-        "slot_last",
-        "size",
-        "created",
-        "updated",
     )
     assert block.primary_key == ("value_uuid",)
     assert block.column("slot_head") is None
@@ -397,26 +393,32 @@ def test_kernel_tables_declare_and_compile():
     body = declaration.table("body")
     assert body is not None
     assert body.column_names() == (
+        "name",
         "value_uuid",
         "value_hash",
         "birth_time",
-        "name",
-        "hub",
-        "pack",
-        "slot_first",
-        "slot_last",
-        "size",
-        "created",
-        "updated",
+        "in_hub",
+        "in_hub_pack",
+        "in_pack_slot",
     )
     assert body.column("kind") is None, "内容记录没有类型标号"
 
 
-def test_kernel_tables_are_all_rebuildable_or_explicitly_source():
-    """每张内核表都写明重建来源（档一的硬规约）。"""
+def test_kernel_tables_are_either_rebuildable_or_explicitly_source():
+    """每张内核表的档都要与事实相符：可重建的写明来源，是真源的**不许**写来源。
+
+    `edge` 目前是真源（关系数据只活在库里，等关系块落地才改回可重建），
+    故它是"两档都合法、但必须各写各的"这一条的现成例子。
+    """
     for table in kernel_tables():
-        assert table.rebuild_from, table.name
-        assert table.tier is Tier.DERIVED
+        if table.tier is Tier.DERIVED:
+            assert table.rebuild_from, table.name
+        else:
+            assert table.tier is Tier.SOURCE
+            assert not table.rebuild_from, table.name
+
+    sourced = {table.name for table in kernel_tables() if table.tier is Tier.SOURCE}
+    assert sourced == {"edge"}
 
 
 # ---- 表声明文件的读取 ----

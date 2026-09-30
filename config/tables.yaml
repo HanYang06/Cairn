@@ -15,20 +15,16 @@
   owner: core
   rebuild_from: "载体记录头（设计篇 §8.5 档一）"
   columns:
+    - id().name
     - id().value_uuid
     - id().value_hash
     - id().birth_time
-    - id().name
+    - id().in_hub
+    - id().in_hub_pack
+    - id().in_pack_slot
     - id(body).value_uuid
     - id(body).value_hash
-    - { name: kind, from: prog, type: text, doc: 类型标号；由程序给出，不在记录头里 }
-    - { name: hub, from: store, type: text, not_null: True, doc: 所属 hub（目录名） }
-    - { name: pack, from: store, type: text, not_null: True, doc: 载体文件名 }
-    - { name: slot_first, from: store, type: integer, not_null: True, doc: 起始格（两数格模型的第一个数字） }
-    - { name: slot_last, from: store, type: integer, not_null: True, doc: 末格（闭区间上界） }
-    - { name: size, from: store, type: integer, not_null: True, doc: 记录字节数，便于估算与巡检 }
-    - { name: created, from: store, type: integer, doc: 第一次落盘时刻（unix 毫秒） }
-    - { name: updated, from: store, type: integer, doc: 最近一次改写时刻（unix 毫秒） }
+    - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }
   primary_key: [value_uuid]
 
 - name: body
@@ -37,17 +33,13 @@
   owner: core
   rebuild_from: "载体记录头（设计篇 §8.5 档一）"
   columns:
+    - id().name
     - id().value_uuid
     - id().value_hash
     - id().birth_time
-    - id().name
-    - { name: hub, from: store, type: text, not_null: True, doc: 所属 hub（目录名） }
-    - { name: pack, from: store, type: text, not_null: True, doc: 载体文件名 }
-    - { name: slot_first, from: store, type: integer, not_null: True, doc: 起始格（两数格模型的第一个数字） }
-    - { name: slot_last, from: store, type: integer, not_null: True, doc: 末格（闭区间上界） }
-    - { name: size, from: store, type: integer, not_null: True, doc: 记录字节数，便于估算与巡检 }
-    - { name: created, from: store, type: integer, doc: 第一次落盘时刻（unix 毫秒） }
-    - { name: updated, from: store, type: integer, doc: 最近一次改写时刻（unix 毫秒） }
+    - id().in_hub
+    - id().in_hub_pack
+    - id().in_pack_slot
   primary_key: [value_uuid]
 
 - name: hub
@@ -57,16 +49,12 @@
   rebuild_from: "vault 下的 hub 目录（设计篇 §6）"
   columns:
     - { name: name, from: store, type: text, not_null: True, doc: hub 名（目录名） }
-    - { name: role, from: store, type: text, not_null: True, doc: 主 hub / 短命 hub；短命 hub 为未来项 }
-    - { name: state, from: store, type: text, not_null: True, doc: 登记状态；合并期为未来项 }
-    - { name: created, from: store, type: integer, not_null: True, doc: 第一次见到它的时刻（unix 毫秒） }
   primary_key: [name]
 
 - name: edge
-  doc: "关系表：一行一条；两端各指一个 ID，关系不需要第二种语法"
-  tier: derived
+  doc: "关系索引：一行一条；两端各指一个 ID，关系不需要第二种语法"
+  tier: source
   owner: core
-  rebuild_from: "关系数据落在块内时的块记录（设计篇 §8.2 注；归属待定）"
   columns:
     - { name: id, from: digest, type: text, not_null: True, doc: 边身份摘要（由下列各列算出） }
     - id(src).value_uuid

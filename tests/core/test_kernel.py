@@ -72,7 +72,7 @@ def test_store_and_load_through_the_kernel(tmp_path: Path):
         assert kernel.load(block.value_uuid) == b"through the kernel"
         row = kernel.locate(block.value_uuid)
         assert row is not None
-        assert row.hub == "main"
+        assert row.in_hub == "main"
         assert row.kind == "notedata"
         assert kernel.patrol().clean
 
@@ -86,7 +86,7 @@ def test_named_hub_is_created_and_registered(tmp_path: Path):
         assert kernel.index.rows.hub("side") is not None
         row = kernel.locate(block.value_uuid)
         assert row is not None
-        assert row.hub == "side"
+        assert row.in_hub == "side"
         assert kernel.patrol().clean
 
 

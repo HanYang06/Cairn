@@ -288,16 +288,23 @@ Block:
 ### 6.4 索引库（catalog.db，可重建的投影）
 
 ```sql
-hub(name PK, role, state, created)                          -- hub 登记（真源是 hub 目录）
-block(value_uuid PK, value_hash, birth_time, name,
-      body_value_uuid, body_value_hash, kind,
-      hub, pack, slot_first, slot_last, size, created, updated)
-body(value_uuid PK, value_hash, birth_time, name,
-     hub, pack, slot_first, slot_last, size, created, updated)
+hub(name PK)                                                -- hub 登记（真源是 hub 目录；只记名字）
+block(name, value_uuid PK, value_hash, birth_time,
+      in_hub, in_hub_pack, in_pack_slot,                    -- 身份列 = ID 的全部字段
+      body_value_uuid, body_value_hash, kind)               -- 指向别处 + 类型标号
+body(name, value_uuid PK, value_hash, birth_time,
+     in_hub, in_hub_pack, in_pack_slot)                     -- 内容记录：只有身份列
 edge(id PK, src_value_uuid, dst_value_uuid, kind, domain, created)   -- 关系边
 meta(name PK, value)                                        -- 声明投影（开库时比对）
 -- 领域业务表（如 relation）由领域经 Storage.table() 建，落同一个库
 ```
+
+- **身份表里的行是 `ID` 的镜像**：`ID` 的字段有几项，表里就有几列（列名与顺序都照搬，
+  含位置段三列）；表与 `ID` 之间不再有人手维护的"子集"。位置段中 `in_pack_slot`
+  （一对格号）落库为文本 `头格:末格`。
+- **索引只做索引**（2026-09-30 裁定）：库里每一个值都要能从载体算回来。故 `kind`
+  （类型标号）随记录落盘、`name` / `birth_time` 也在记录里；位置段是唯一"索引存、记录不存"的一段，
+  因为记录被扫到时它在哪里已经由扫的动作给出。
 
 - **表结构由声明给出**（本体在 `config/tables.yaml`，由类型登记现算写出），
   源码内不出现建表语句；开库时对比 → 分类 → 处置，破坏性变更默认拒绝（设计篇 §8.4、§8.2.1）。

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from core.storage.carrier import HEADER_BYTES as CARRIER_HEADER_BYTES
-from core.storage.carrier import Carrier, SlotRange
+from core.storage.carrier import Carrier
 from core.storage.engine import Storage
 from core.storage.format.id import ID
 from core.storage.format.record import decode, encode
@@ -44,7 +44,7 @@ def _raw_at(engine: Storage, value_uuid: str) -> bytes:
     """把一个身份当前指向的记录原始字节读回来。"""
     row = engine.locate(value_uuid)
     assert row is not None
-    with _hub(engine).carrier(row.pack) as carrier:
+    with _hub(engine).carrier(row.in_hub_pack) as carrier:
         return carrier.read(row.span)
 
 
@@ -96,33 +96,33 @@ def test_unregistered_hub_and_missing_row_are_repaired(vault: Storage):
     ]
     assert len(before.repairable) == 2
 
-    result = repair(vault.index, before, now=42)
+    result = repair(vault.index, before)
 
     assert result.applied == before.finds
     assert result.skipped == ()
     assert patrol(vault.index, vault.root).clean
     registration = vault.index.rows.hub("side")
     assert registration is not None
-    assert registration.created == 42
+    assert registration.name == "side"
 
 
 def test_misplaced_is_repaired_by_moving_coordinates(vault: Storage):
-    """坐标不符：处置**只改坐标**，类型标号与落下时刻一个都不许动。"""
+    """坐标不符：处置**只改坐标**，类型标号与身份字段一个都不许动。"""
     block = vault.store(b"moved", kind="notedata")
     row = vault.locate(block.value_uuid)
     assert row is not None
-    vault.index.rows.move_block(replace(row, span=SlotRange(first=9999, last=9999)))
+    vault.index.rows.move_block(replace(row, in_pack_slot=(9999, 9999)))
 
     report = patrol(vault.index, vault.root)
     assert [item.kind for item in report.finds] == [FindKind.MISPLACED]
 
-    repair(vault.index, report, now=7)
+    repair(vault.index, report)
 
     restored = vault.locate(block.value_uuid)
     assert restored is not None
     assert restored.span == row.span
     assert restored.kind == "notedata"
-    assert restored.created == row.created
+    assert (restored.name, restored.birth_time) == (row.name, row.birth_time)
     assert patrol(vault.index, vault.root).clean
 
 
@@ -130,12 +130,12 @@ def test_misplaced_body_row_is_repaired_too(vault: Storage):
     """内容行的坐标不符同样只改坐标：两张表各有一条可修复路。"""
     vault.store(b"body move", kind="notedata")
     body = vault.index.rows.bodies_by_hash(ID.of(b"body move").value_hash)[0]
-    vault.index.rows.move_body(replace(body, span=SlotRange(first=9999, last=9999)))
+    vault.index.rows.move_body(replace(body, in_pack_slot=(9999, 9999)))
 
     report = patrol(vault.index, vault.root)
     assert {item.kind for item in report.finds} == {FindKind.MISPLACED}
 
-    repair(vault.index, report, now=3)
+    repair(vault.index, report)
 
     restored = vault.index.rows.body(body.value_uuid)
     assert restored is not None
@@ -169,7 +169,7 @@ def test_missing_record_is_reported_and_never_touched(vault: Storage):
 
 def test_missing_hub_is_reported_and_not_repaired(vault: Storage):
     """登记在、目录缺：hub 没了，只能报告。"""
-    vault.index.rows.register_hub("ghost", created=1)
+    vault.index.rows.register_hub("ghost")
 
     report = patrol(vault.index, vault.root)
 
@@ -203,11 +203,11 @@ def test_registration_rows_and_carriers_agree_after_repair(vault: Storage):
     placement = hub.append(raw)
     record = decode(raw)
 
-    repair(vault.index, patrol(vault.index, vault.root), now=9)
+    repair(vault.index, patrol(vault.index, vault.root))
 
     located = vault.index.rows.body(record.id.value_uuid)
     assert located is not None
-    assert located.hub == "side"
+    assert located.in_hub == "side"
     assert located.span == placement.span
     assert located.value_hash == record.id.value_hash
     assert patrol(vault.index, vault.root).clean
@@ -225,10 +225,9 @@ def test_placement_is_reported_for_the_row_to_carry(vault: Storage):
     assert find.block is None, "这条载荷不是指针，故它不该被补成块行"
     assert find.body is not None
     assert find.body.value_uuid == decode(raw).id.value_uuid
-    assert find.body.pack == placement.pack
+    assert find.body.in_hub_pack == placement.pack
     assert find.body.span == placement.span
-    assert find.body.hub == "far"
-    assert find.body.size == len(raw)
+    assert find.body.in_hub == "far"
 
 
 def test_rows_pointing_at_a_missing_hub_are_not_called_lost_content(vault: Storage):

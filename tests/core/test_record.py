@@ -41,6 +41,28 @@ def test_roundtrip_keeps_identity_and_payload():
     assert record.total_len == len(raw)
 
 
+def test_the_record_carries_the_identity_fields_the_index_stores():
+    """索引里有的 ID 字段都要能从记录还原：名字与签发时刻随之落盘（位置段除外）。"""
+    record_id = ID(name="有名字的块", value_hash=digest(_PAYLOAD), birth_time=123456789)
+
+    record = decode(encode(record_id, _PAYLOAD))
+
+    assert record.id.name == "有名字的块"
+    assert record.id.birth_time == 123456789
+
+
+def test_the_record_reports_its_own_kind():
+    """类型标号由记录自报：索引那一列是它的投影，故索引重扫之后类型不会丢。"""
+    raw = encode(ID.of(_PAYLOAD), _PAYLOAD, kind="notedata")
+
+    assert decode(raw).kind == "notedata"
+
+
+def test_a_record_without_a_kind_reads_back_empty():
+    """没写类型即空串：内容记录不带类型标号，不猜、也不降级成别的值。"""
+    assert decode(encode(ID.of(_PAYLOAD), _PAYLOAD)).kind == ""
+
+
 def test_total_len_self_frames_the_record():
     """总长在最前且含自身：顺扫即可切出记录，无需外部目录。"""
     raw = encode(ID.of(_PAYLOAD), _PAYLOAD)
