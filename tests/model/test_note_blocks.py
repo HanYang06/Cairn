@@ -15,9 +15,16 @@ from core.storage.format.block import block_attrs
 from core.storage.registry import REGISTRY
 from core.storage.tablegen import kernel_declarations
 from model.note.types import (
+    Chunk,
+    DiffStep,
+    LineContent,
+    NoteAsset,
+    NoteAssetBody,
     NoteData,
+    NoteDiffBody,
     NoteGroup,
     NoteGroupBody,
+    NoteLine,
     NoteTag,
     NoteTagTable,
 )
@@ -25,7 +32,7 @@ from model.note.types import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-_NOTE_TABLES = ("notedata", "notegroup", "notetag")
+_NOTE_TABLES = ("noteasset", "notedata", "notediff", "notegroup", "notetag")
 
 
 # ---- 登记与建表 ----
@@ -154,3 +161,66 @@ def test_a_group_names_itself_through_a_title_not_a_name():
     decl = REGISTRY.get("NoteGroup")
     assert decl is not None
     assert [name for name, _ in decl.attrs] == ["title", "collapsed"]
+
+
+# ---- 资产 ----
+
+
+def test_an_asset_declares_the_metadata_and_has_no_chunk_switch():
+    """元数据跟着块走；**没有"是否分片"这个字段**——默认就是分片，必然分片。"""
+    decl = REGISTRY.get("NoteAsset")
+    assert decl is not None
+    assert [name for name, _ in decl.attrs] == [
+        "mime",
+        "size",
+        "width",
+        "height",
+        "duration",
+        "timescale",
+        "original",
+    ]
+    assert NoteAsset(mime="image/png").mime == "image/png"
+
+
+def test_an_asset_body_is_a_chunk_manifest_and_its_size_is_summed():
+    """本体是分片清单：字节总数由清单算出来，不另存一份。"""
+    body = NoteAssetBody(chunks=(Chunk("c1", 10), Chunk("c2", 32)))
+    assert len(body) == 2
+    assert body.size == 42
+    assert [chunk.id for chunk in body.chunks] == ["c1", "c2"]
+    assert NoteAssetBody().size == 0
+
+
+# ---- 变更链 ----
+
+
+def test_a_diff_step_keeps_the_line_id_on_the_key_only():
+    """行 id 只写在键上：值是 `LineContent`（内容），故同一条事实不写两处。"""
+    content = LineContent(data="改过的一行")
+    step = DiffStep(hash="h1", lines=(("line-1", content),))
+    assert step.lines[0][0] == "line-1"
+    assert step.lines[0][1] is content
+    assert not hasattr(step.lines[0][1], "id")
+
+
+def test_a_diff_chain_is_ordered_and_lookup_is_by_hash():
+    """链是有序的若干步；按哈希取一步——哈希的用处就是这条连续性。"""
+    first = DiffStep(hash="h1", lines=(("line-1", LineContent(data="一")),))
+    second = DiffStep(
+        hash="h2",
+        lines=(("line-1", LineContent(data="二")), ("line-2", LineContent(data="新"))),
+    )
+    body = NoteDiffBody(steps=(first, second))
+    assert len(body) == 2
+    assert [step.hash for step in body.steps] == ["h1", "h2"]
+    assert body.step("h2") is second
+    assert body.step("没有这一步") is None
+    assert NoteDiffBody().steps == ()
+
+
+def test_a_diff_keeps_the_new_content_of_a_real_line():
+    """一步里装的是**新内容**：拿一行真造一遍，内容对得上。"""
+    line = NoteLine(data="原文")
+    changed = NoteLine(id=line.id, data="改后")
+    step = DiffStep(hash="h1", lines=((line.id, changed.content),))
+    assert step.lines[0][1].data == "改后"

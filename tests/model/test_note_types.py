@@ -17,6 +17,7 @@ from model.note.types import (
     REFERENCE_TABLES,
     Code,
     Heading,
+    LineContent,
     LineKind,
     Link,
     ListItem,
@@ -170,6 +171,22 @@ def test_spans_ride_on_the_line_and_keep_their_order():
         spans=(Span(start=0, end=2, style=SpanStyle.of({"font-weight": "bold"})), Span(2, 4)),
     )
     assert [span.start for span in line.spans] == [0, 2]
+
+
+def test_line_content_is_the_line_minus_its_identity():
+    """行内容 = 行去掉身份：三样都在，`id` 不在。"""
+    line = NoteLine(data="正文", spans=(Span(start=0, end=1),))
+    content = line.content
+    assert content.kind is LineKind.TEXT
+    assert content.data == "正文"
+    assert content.spans == line.spans
+    assert not hasattr(content, "id")
+
+
+def test_line_content_holds_the_same_shape_rule_as_the_line():
+    """内容那一层同样守着判别联合：载荷与类型对不上照样当场报错。"""
+    with pytest.raises(LineShapeError):
+        LineContent(kind=LineKind.HEADING, data="纯文本")
 
 
 # ---- 正文 ----

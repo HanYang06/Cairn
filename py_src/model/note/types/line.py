@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Code",
     "Heading",
+    "LineContent",
     "LineData",
     "Link",
     "ListItem",
@@ -135,9 +136,40 @@ class Span:
             raise SpanRangeError(f"行内区间非法: [{self.start}, {self.end})")
 
 
+def _check_shape(kind: LineKind, data: LineData) -> None:
+    """载荷与行类型必须配套：读 `data` 之前要按 `kind` 分支，判据不能破。"""
+    expected = _DATA_TYPES[kind]
+    if not isinstance(data, expected):
+        raise LineShapeError(
+            f"行类型 {kind.value} 的载荷应是 {expected.__name__}，"
+            f"而给的是 {type(data).__name__}: {data!r}"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LineContent:
+    """一行的**内容**：行去掉身份之后剩下的那三样。
+
+    它与 :class:`NoteLine` 是"同一件事去掉一个字段"的关系，分开的理由只有一条：
+    变更记录里"这一步把哪些行改成了什么"要写的是**内容**，而行 id 已经写在键上了——
+    再把整行塞进去，同一条事实就写了两处。
+    """
+
+    kind: LineKind = LineKind.TEXT
+    data: LineData = ""
+    spans: tuple[Span, ...] = ()
+
+    def __post_init__(self) -> None:
+        _check_shape(self.kind, self.data)
+
+
 @dataclass(frozen=True, slots=True)
 class NoteLine:
-    """一行：身份 + 类型 + 载荷 + 行内样式区间。"""
+    """一行：身份 + 内容。
+
+    内容那三样原样摊在本类上（`kind` / `data` / `spans`），不另嵌一层：
+    行是编辑与编码的最小单位，多一层包装只让读写绕路。
+    """
 
     id: str = field(default_factory=new_uuid)
     kind: LineKind = LineKind.TEXT
@@ -145,9 +177,9 @@ class NoteLine:
     spans: tuple[Span, ...] = ()
 
     def __post_init__(self) -> None:
-        expected = _DATA_TYPES[self.kind]
-        if not isinstance(self.data, expected):
-            raise LineShapeError(
-                f"行类型 {self.kind.value} 的载荷应是 {expected.__name__}，"
-                f"而给的是 {type(self.data).__name__}: {self.data!r}"
-            )
+        _check_shape(self.kind, self.data)
+
+    @property
+    def content(self) -> LineContent:
+        """这一行的内容（不含身份）。"""
+        return LineContent(kind=self.kind, data=self.data, spans=self.spans)

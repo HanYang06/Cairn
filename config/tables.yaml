@@ -104,3 +104,39 @@
     - id(body).value_hash
     - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }
   primary_key: [value_uuid]
+
+- name: noteasset
+  doc: "一份媒体。"
+  tier: derived
+  owner: note
+  rebuild_from: "载体记录头（设计篇 §8.5 档一）"
+  columns:
+    - id().name
+    - id().value_uuid
+    - id().value_hash
+    - id().birth_time
+    - id().in_hub
+    - id().in_hub_pack
+    - id().in_pack_slot
+    - id(body).value_uuid
+    - id(body).value_hash
+    - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }
+  primary_key: [value_uuid]
+
+- name: notediff
+  doc: "一篇笔记的变更链。"
+  tier: derived
+  owner: note
+  rebuild_from: "载体记录头（设计篇 §8.5 档一）"
+  columns:
+    - id().name
+    - id().value_uuid
+    - id().value_hash
+    - id().birth_time
+    - id().in_hub
+    - id().in_hub_pack
+    - id().in_pack_slot
+    - id(body).value_uuid
+    - id(body).value_hash
+    - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }
+  primary_key: [value_uuid]

@@ -14,10 +14,10 @@ import pytest
 
 from core.storage.format.block import Block, Body, register_type
 from core.storage.registry import REGISTRY
-from model.note.types import NoteData, NoteGroup, NoteTag
+from model.note.types import NoteAsset, NoteData, NoteDiff, NoteGroup, NoteTag
 
 _BASES = (Body, Block)
-_CARRIERS = (NoteData, NoteGroup, NoteTag)
+_CARRIERS = (NoteData, NoteTag, NoteGroup, NoteAsset, NoteDiff)
 
 
 @pytest.fixture(autouse=True)
