@@ -12,16 +12,20 @@
   `app/scripts/gen-tokens.mjs` 生成 `app/src/styles/tokens.css`（入库、防漂移）；
   组件只引用 `var(--…)`，由 stylelint 拦字面量。**只剩"页面层禁原生标签"那条待拍板。**
 - [ ] **待作者裁定 · 契约的类型同步**：领域契约必须同时是 Python 与 TS 的类型。
-  倾向"单一事实源 + 生成"（仓内先例：`tools/docgen.py`）；事实源放 **Python** 还是 **中立 schema**。
+  倾向"单一事实源 + 生成"（仓内先例：`scripts/docgen.py`）；事实源放 **Python** 还是 **中立 schema**。
   **生成器要有真领域类才有对象可生成**，而 `feature` 层当前为空，故本项**不预先实现**
   （没有调用方的生成器就是脚手架）。
-- [x] **前端门禁接线**（2026-09-30 定 + 已落）：`app/` 里一条 `pnpm check` 跑完六道——
+- [x] **前端门禁接线**（2026-09-30 定 + 已落）：`app/` 里一条 `pnpm check` 跑完七道——
   类型（tsc）/ lint 与格式（Biome）/ 样式（stylelint）/ 架构（dependency-cruiser）/
-  令牌防漂移 / 单测（Vitest）。**已接进** pre-commit（只在 `app/` 变动时跑）与
-  CI 的 `web` job。**已实测会拦**：页面里直接 import Tauri API 被 `ipc-single-chokepoint` 拦下。
+  令牌防漂移 / 重复代码（jscpd，报告模式）/ 单测（Vitest）。**已接进** pre-commit
+  （只在 `app/` 变动时跑）与 CI 的 `web` job。**已实测会拦**：页面里直接 import Tauri API 被
+  `ipc-single-chokepoint` 拦下。
+- [ ] **待作者裁定 · 标点全量替换**：`scripts/punct.py` 已接（**报告模式**），全仓 `.py` 里
+  注释与 docstring 的中文标点约 **5300 处**。待定：是否一次性 `--fix`、是否改成阻断式、
+  范围是否扩到 `.ts/.rs`（`.md` 建议不动——纯中文正文的全角标点是正确排版）。
 - [ ] **待作者裁定 ·"页面层禁止原生标签与样式属性"**：这条最狠也最有效
   （让"边距圆角阴影一个都不写"从自觉变成没有位置可写）。认了我就写检查脚本接进门禁。
-- [ ] **待作者裁定 · `jscpd`（重复代码）与 `knip`（未用导出与依赖）要不要接。**
+- [ ] **待作者裁定 · `knip`（未用导出与依赖）要不要接**（`jscpd` 已接，报告模式）。
 - [ ] **规则扩展的触发条件**：`src/` 真的分出原子 / 组合 / 页面三层之后，
   再把"依赖只能向下"那条 dependency-cruiser 规则打开（**没有代码的规矩先不立**）。
 - [ ] **许可证核对**：Tauri 及其插件、React 全链与后续每个前端依赖，核对后写进 `NOTICE`。
@@ -73,7 +77,7 @@
   "一个键都没有"时不动词表；只导入 `core` 的进程退出会把 `config/schema/settings.json`
   改写成只有 `core.*` 那三条。**2026-09-30 实测发生**，已还原；触发命令未定位。
   修法：词表更新**只增不删**，或按登记面判完整性。
-- [ ] **重写 `tools/build.py`**：现按 Qt 时代口径写（以 `src/app` 为入口、PyInstaller + Inno），
+- [ ] **重写 `scripts/build.py`**：现按 Qt 时代口径写（以 `src/app` 为入口、PyInstaller + Inno），
   而外壳已改 Tauri + Python 边车。
 - [ ] **CI / 构建改造**：`build.yaml`（可复用矩阵）取代 `build-windows.yml`；
   `ocr-review.yml` 改名 `agent-code-review.yml`（去掉显式 `pr_number`）。不要恢复旧草稿。
@@ -84,7 +88,7 @@
 - [ ] 可复现构建、代码签名（Authenticode）、包体瘦身。
 - [ ] Linux 服务端 / CLI / Docker（待服务端）。
 - [ ] `LICENSES/Apache-2.0.txt` 未建（`reuse lint` 才需要，而该 CLI 是 GPL，不引）。
-- [ ] docstring 覆盖补到 ≥95% 后，把 `tools/docgen.py` 的 `DOCSTRING_MIN` 接成
+- [ ] docstring 覆盖补到 ≥95% 后，把 `scripts/docgen.py` 的 `DOCSTRING_MIN` 接成
   `--coverage --strict` 门禁。
 - [ ] 中文搜索分词（`jieba` 未引，本机构 sdist 失败）。
 - [ ] 文档站发布接线（人工一次性）：Settings → Pages → Source 选 GitHub Actions。

@@ -12,10 +12,10 @@
 
 用法：
 
-    uv run python tools/prose.py            # 全仓检查（退出码 1 = 有命中）
-    uv run python tools/prose.py docs src   # 只查指定目录 / 文件
-    uv run python tools/prose.py --report   # 报告模式：有命中也不阻断
-    uv run python tools/prose.py --list     # 打印词典
+    uv run python scripts/prose.py            # 全仓检查（退出码 1 = 有命中）
+    uv run python scripts/prose.py docs src   # 只查指定目录 / 文件
+    uv run python scripts/prose.py --report   # 报告模式：有命中也不阻断
+    uv run python scripts/prose.py --list     # 打印词典
 """
 
 from __future__ import annotations

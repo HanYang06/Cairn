@@ -82,20 +82,21 @@ Python 顶层包一律去 `cairn.` 前缀（如 `from core.storage import …`�
 ```powershell
 uv run pytest                      # 全部测试（无需外部服务，全部用临时本地库）
 uv run ruff check .                # lint（--fix 自动修）
-uv run mypy src tools tests        # 类型检查（strict）
-uv run python tools/spdx.py --check  # SPDX 头门禁
+uv run mypy py_src tools scripts tests  # 类型检查（strict）
+uv run python scripts/spdx.py --check  # SPDX 头门禁
 uv run mkdocs serve                # 本地预览文档站
 ```
 
-提交前顺序：`ruff -> mypy -> pytest`。完整说明见 [参与开发](docs/guides/development.md)
+提交前顺序：一条命令跑完 `uv run pre-commit run --all-files`（钩子需先装，见
+[参与开发](docs/guides/development.md)）。完整说明见 [参与开发](docs/guides/development.md)
 与 [怎么改文档](docs/contributing/docs.md)。
 
 ### 打包（Windows）
 
 ```powershell
-uv run python tools/build.py               # 绿色包 -> dist/cairn/
-uv run python tools/build.py --clean       # 先清 build/ 与 dist/
-uv run python tools/build.py --installer   # 再出安装包（需已装 Inno Setup）
+uv run python scripts/build.py               # 绿色包 -> dist/cairn/
+uv run python scripts/build.py --clean       # 先清 build/ 与 dist/
+uv run python scripts/build.py --installer   # 再出安装包（需已装 Inno Setup）
 ```
 
 产物：`dist/cairn/`（免安装 zip）、`dist/installer/Cairn-<ver>-win-x64-setup.exe`；

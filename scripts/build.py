@@ -8,9 +8,9 @@
 文件留着当参考；UI 外壳回来之后修回，并把 `.github/workflows/build-windows.yml` 的标签触发一并恢复。
 
 用法：
-    uv run python tools/build.py                  # 出 dist/cairn/（onedir 绿色包）
-    uv run python tools/build.py --clean          # 先清掉 build/ 与 dist/
-    uv run python tools/build.py --installer      # 再生成安装包（需已装 Inno Setup）
+    uv run python scripts/build.py                  # 出 dist/cairn/（onedir 绿色包）
+    uv run python scripts/build.py --clean          # 先清掉 build/ 与 dist/
+    uv run python scripts/build.py --installer      # 再生成安装包（需已装 Inno Setup）
 """
 
 from __future__ import annotations

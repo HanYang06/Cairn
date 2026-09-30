@@ -4,7 +4,7 @@
 /*
  * 令牌生成器：把 `config/theme/tokens.json`（唯一手写处）投影成 CSS 自定义属性。
  *
- * 与 `tools/docgen.py` 同款：**能算的就不写**，生成物入库 + `--check` 防漂移。
+ * 与 `scripts/docgen.py` 同款：**能算的就不写**，生成物入库 + `--check` 防漂移。
  * 分工是死的——组件只引用 `var(--…)`，不许写字面值（由 stylelint 拦）。
  *
  * 用法：

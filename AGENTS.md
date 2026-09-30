@@ -22,45 +22,58 @@ uv run pytest                             # 全部测试（含覆盖率；CI 用
 uv run pytest tests/core/test_engine.py::test_store_then_load_roundtrip   # 单个测试
 uv run ruff check .                       # lint（--fix 自动修）
 uv run ruff format .                      # 格式化（提交前用 --check）
-uv run mypy py_src tools tests            # 类型检查（strict）
-uv run python tools/spdx.py --check       # SPDX 头门禁（缺头用 --fix 自动补）
-uv run python tools/prose.py              # 书面语门禁（文档/注释不得口语，词典即标准）
-uv run pre-commit run --all-files         # 提交前全量门禁（SPDX -> 书面语 -> ruff -> mypy）
+uv run mypy py_src tools scripts tests    # 类型检查（strict）
+uv run python scripts/spdx.py --check     # SPDX 头门禁（缺头用 --fix 自动补）
+uv run python scripts/prose.py            # 书面语门禁（文档/注释不得口语，词典即标准）
+uv run python scripts/punct.py --report   # 标点检查（注释/docstring 的中文标点；报告模式）
+uv run deptry .                           # 依赖盘点（声明了没用 / 用了没声明）
+uv run lint-imports                       # 架构校验（契约在 pyproject 的 [tool.importlinter]）
+uv lock --check                           # 锁文件是否与声明同步
+
+uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
+                                          # **先装钩子**，否则下面这条与提交时的门禁都不跑
+uv run pre-commit run --all-files         # 提交前全量门禁（11 个钩子；清单见 quality.md §4）
 
 uv run mkdocs serve                       # 文档站本地预览 -> http://127.0.0.1:8000
 uv run mkdocs build --strict              # 文档站构建门禁（坏链接/缺页面/未知配置即失败）
-uv run python tools/docgen.py --check     # 生成页防漂移（配置参考 vs 声明现算的词表）
-uv run python tools/docgen.py --write     # 重新生成配置参考页（改了配置声明后跑）
-uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的公共成员会从 API 页消失）
+uv run python scripts/docgen.py --check   # 生成页防漂移（配置参考 vs 声明现算的词表）
+uv run python scripts/docgen.py --write   # 重新生成配置参考页（改了配置声明后跑）
+uv run python scripts/docgen.py --coverage # docstring 覆盖报告（没写的公共成员会从 API 页消失）
 
-pnpm --dir app check                      # 前端门禁（类型/lint/样式/架构/令牌/单测，六道合一）
+pnpm --dir app check                      # 前端门禁（类型/lint/样式/架构/令牌/重复代码/单测，七道合一）
 pnpm --dir app gen:tokens                 # 由 config/theme/tokens.json 重新生成令牌 CSS
 pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 ```
 
 > 桌面外壳（Tauri 壳 + Web 前端）已在 `app/` 立项（脚手架已生成、图标与名字已换成 Cairn），
 > 但**功能未落地**：Python 内核的边车与 IPC 转发口尚未实现。
-> 旧打包脚本（`tools/build.py` 与 `build-windows.yml`）依赖 Qt 时代已删除的层级，**待重做**。
-> **前端门禁已接线**（`pnpm --dir app check`，六道合一；pre-commit 只在 `app/` 变动时跑，
+> 旧打包脚本（`scripts/build.py` 与 `build-windows.yml`）依赖 Qt 时代已删除的层级，**待重做**。
+> **前端门禁已接线**（`pnpm --dir app check`，七道合一；pre-commit 只在 `app/` 变动时跑，
 > CI 走 `web` job）——规矩与门禁的对照表见 `rules/references/frontend.md` §四。
 >
 > 配置投影**没有生成脚本**：跑一遍程序即可（值文件与词表在退出时落盘），
 > 入库产物与声明是否分叉由 `tests/core/test_conf_projection.py` 拦。
 
-提交前顺序：`ruff -> mypy -> pytest`。质量口径见 `.agents/skills/rules/references/quality.md`
+提交前顺序：`ruff -> mypy -> pytest`（全量一次跑完用 `pre-commit run --all-files`）。
+质量口径见 `.agents/skills/rules/references/quality.md`
 （企业级-ε：mypy strict、ruff ALL、warning 零容忍、覆盖率 ≥80%）。**只有用户明确要求才 commit。**
 
 ## 硬性约定
 
 - 每个源文件/文档顶部必须有 SPDX 头：`SPDX-FileCopyrightText: 2026 HanYang06`
   + `SPDX-License-Identifier: Apache-2.0`（`.py` 用 `#`，`.md` 用 `<!-- -->`）。
-  **不得手写**：pre-commit 自动补、`tools/spdx.py` 校验；装不下头的（图片 / JSON / 锁文件 /
+  **不得手写**：pre-commit 自动补、`scripts/spdx.py` 校验；装不下头的（图片 / JSON / 锁文件 /
   vendored）走 `REUSE.toml` 集中声明。细则见 `rules/references/spdx.md`。
 - Apache-2.0 项目：**禁止引入 GPL/AGPL 依赖**（传染红线）；第三方主题/画布库先核实许可。
 - 文档、注释、commit message 用中文；commit 用 Conventional Commits（`feat(ui): …`、`fix(core): …`）。
 - 不写 C++。Rust 已正式进入技术栈：桌面外壳用 **Tauri**（壳本身就是 Rust），
   另保留"把 Python 性能热点下沉到 Rust（PyO3 + maturin）"这条路，触发条件是热点被证实。
   **壳里不写业务**——判断句：换掉界面之后仍然该存在的逻辑，不属于壳。
+- **`tools/` 与 `scripts/` 按"能不能被 import"分**（两者不混）：
+  `tools/` 是正规包，可 `from tools.<模块> import …`，装**产品与流程用得着的可调用件**
+  （mypy 插件、原子写与输出助手）；`scripts/` 装门禁、生成器与打包，**不放 `__init__.py`**
+  （声明它不是包）。注意这只声明意图——Python 3 的命名空间包仍可 import，
+  **真正的拦截是 import-linter 契约**：`core` 与 `tools` 不许依赖 `scripts`。
 - 未实现的设计标为「预留/草案」，不要假装已存在。
 - **文档分两类，别混**：手写事实源在 `docs/**/*.md`（跟代码一起评审）；
   `docs/api/` 下的 API 参考与 `site/` 站点由 `mkdocs` + `mkdocstrings` 从 docstring **自动生成**，

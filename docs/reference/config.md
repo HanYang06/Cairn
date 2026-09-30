@@ -5,7 +5,7 @@
 
 !!! danger "本页由工具生成，请勿手改"
 
-    由 `uv run python tools/docgen.py --write` 生成，表来自 **配置声明现算**（`core/conf` 的
+    由 `uv run python scripts/docgen.py --write` 生成，表来自 **配置声明现算**（`core/conf` 的
     词表投影，副本落在 `config/schema/settings.json`）。改口径请改生成器，改配置请改声明的
     那个 `conf(...)` 调用点；`--check` 已进 CI，漂移即失败。**手改这一页会在下一次生成时被抹掉。**
 
@@ -32,4 +32,4 @@
   （引擎退出时落盘，不需要专门的生成脚本）。
 - 格式常量（载体魔数、文件头长度、记录头布局这类改了会坏库的）**故意不进配置**，留在实现处。
 - 想加一条配置：在**用到它的那个包**里声明（例：`py_src/core/storage/conf.py`），
-  再跑一次 `uv run python tools/docgen.py --write` 把这一页更新。
+  再跑一次 `uv run python scripts/docgen.py --write` 把这一页更新。

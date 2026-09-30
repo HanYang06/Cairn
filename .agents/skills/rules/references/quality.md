@@ -13,7 +13,7 @@
 - 公共**模块 / 类 / 函数**必须有 docstring（pydocstyle，google 约定）。
 - 不强制每个方法 / 魔法方法 / `__init__`（豁免 `D102` / `D105` / `D107`）。
 - 中文 docstring 以「。」结尾，`D415` 不认全角句号 → 豁免 `D415`。
-- 测试、工具脚本、实验包（`tests/` `tools/` `src/net/` `src/server/`）整体豁免 `D` 系。
+- 测试、工具脚本整体豁免 `D` 系（`tests/` `tools/`）。
 
 ### 2. 代码风格：有规范
 
@@ -24,8 +24,9 @@
 
 ### 3. 类型：按静态语言口径
 
-- `mypy strict = true`，覆盖 `src`、`tools` 与 `tests`（门禁命令 `uv run mypy src tools tests`）。
-- `mypy_path = "src"` 指明源码根：不指路时 mypy 把 `core` 当成缺 `py.typed` 的已装包，
+- `mypy strict = true`，覆盖 `py_src`、`tools`、`scripts` 与 `tests`
+  （门禁命令 `uv run mypy py_src tools scripts tests`）。
+- `mypy_path = "py_src"` 指明源码根：不指路时 mypy 把 `core` 当成缺 `py.typed` 的已装包，
   测试侧的 `core.*` 全成 `Any`，报错数仍在、判据已失效。
 - 未注解、隐式 `Any`、`Any` 返回值、缺泛型参数一律报错。
 - **测试只豁免签名**（`tests.*` 关 `disallow_untyped_defs` / `disallow_incomplete_defs`）：
@@ -38,8 +39,22 @@
 
 - **测试**：`pytest --strict-markers --strict-config`；`filterwarnings = ["error"]`（warning 零容忍）。
 - **覆盖率**：行 + 分支 ≥ 80%（CI 门禁 `--cov-fail-under=80`）。
-- **提交前**（pre-commit）：`ruff check --fix` → `ruff format` → `mypy`。
-- **CI**（`.github/workflows/ci.yml`）：ruff → format → mypy → pytest + 覆盖率门禁。
+- **提交前**（`.pre-commit-config.yaml`，共 10 个钩子；**须先 `uv run pre-commit install
+  --hook-type pre-commit --hook-type commit-msg`**，否则一个都不跑）：
+  SPDX → 书面语 → 标点（报告模式）→ `ruff check --fix` → `ruff format` → `deptry` →
+  `lint-imports` → `mypy` → `uv lock --check` → `pytest` → 前端 `pnpm check`；
+  提交信息另由 commit-msg 钩子校验 Conventional Commits。
+- **CI**（`.github/workflows/ci.yml`，Python 侧十道 + 前端一组 `pnpm check`）：
+  SPDX → 书面语 → 标点 → 文档防漂移 → docstring 覆盖（报告）→ ruff → deptry →
+  import-linter → `uv lock --check` → mypy → pytest + 覆盖率门禁。
+- **架构校验**（`uv run lint-imports`）：契约写在 `pyproject.toml` 的 `[tool.importlinter]`——
+  `core` 不许依赖上层（`model` / `feature` / `app` / `net` / `server`）且必须 Qt-free。
+  配置放 pyproject 而非 `.importlinter`：后者按系统默认编码读，Windows 下遇中文即失败。
+- **依赖盘点**（`uv run deptry .`）：拦"声明了却一处没用"与"用了却没声明"；
+  已知的未接线依赖冻结在 `[tool.deptry.per_rule_ignores]`，故新增的才会红。
+- **标点**（`uv run python scripts/punct.py`）：**注释与 docstring** 用半角标点（中英混排），
+  字符串字面量不动（那是行为不是排版）。当前是**报告模式**：全仓命中约 5300 处，
+  看过一轮再改成阻断式。
 
 ## 全局豁免清单（每条都有理由）
 
@@ -57,10 +72,13 @@
 | `PLR2004` | 可读性阈值判断不算魔法数 |
 | `A002` `A003` | 领域词汇 `id` / `type` / `hash` |
 
-按文件豁免（`per-file-ignores`）：Qt 边界 `backend.py`、测试 / 工具 / 实验包、`table.py` 的 `S608`。
+按文件豁免（`per-file-ignores`）：`rows.py` / `index.py` 的 `S608`（SQL 由声明拼、值全参数化），
+`conf/registry.py` 的 `PLR0913`（声明与取值共用一个签名），`storage/tables.py` 的 `PLC0415`
+（"配置在哪"延后问），以及测试 / 工具脚本的整组豁免。
 
 ## 升级到「全企业级」
 
 - 打开 `D103`（公共函数）与 `D102`（方法）的 docstring 要求。
 - 覆盖率阈值提到 90%+。
-- 引入 `bandit` / `pip-audit` 作为强制门禁（现未启用）。
+- `pip-audit`（CVE 扫描）作为 CI 门禁：它需要网络，**不放本机钩子**。
+  `bandit` 不再单独引入：ruff 的 `S` 规则族已覆盖同一批检查。

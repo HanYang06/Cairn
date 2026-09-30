@@ -25,24 +25,29 @@ jobs:
         run: uv sync
 
       - name: License headers (SPDX)
-        run: uv run python tools/spdx.py --check
+        run: uv run python scripts/spdx.py --check
 
       # 书面语：文档 / 注释一律非口语化，**阻断式**（全仓已清零）。标准见 rules/references/prose.md，
-      # 词典本体在 tools/prose.py；行首三叹号是 MkDocs admonition 语法，词典已按位置排除。
+      # 词典本体在 scripts/prose.py；行首三叹号是 MkDocs admonition 语法，词典已按位置排除。
       - name: Prose check (书面语)
-        run: uv run python tools/prose.py
+        run: uv run python scripts/prose.py
+
+      # 标点：注释与 docstring 用半角标点（中英混排）。当前是**报告模式**，
+      # 全仓命中数还很大（约 5300 处），看过一轮再改成阻断。口径见 scripts/punct.py。
+      - name: Punct check (半角标点 · 报告模式)
+        run: uv run python scripts/punct.py --report
 
       # 配置投影（config/settings.json 与 config/schema/settings.json）**没有生成脚本**：
       # 跑一遍程序就顺带生成，入库的产物与声明是否分叉由 pytest 的投影契约用例拦住
       # （`tests/core/test_conf_projection.py`）。详情见 docs/architecture/config.md。
 
       - name: Generated config reference (no drift)
-        run: uv run python tools/docgen.py --check
+        run: uv run python scripts/docgen.py --check
 
       # 报告模式：`DOCSTRING_MIN` 是既定阈值，但当前覆盖率未达标，故不阻断。
       # 达标后把这一步改成 `docgen.py --coverage --gate` 即成为门禁（与 prose 步同款两段式）。
       - name: Docstring coverage report (报告模式)
-        run: uv run python tools/docgen.py --coverage
+        run: uv run python scripts/docgen.py --coverage
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -50,13 +55,26 @@ jobs:
       - name: Format check (ruff)
         run: uv run ruff format --check .
 
+      # 依赖盘点：拦"声明了却一处没用"与"用了却没声明"。已知的未接线依赖冻结在
+      # `pyproject.toml` 的 `[tool.deptry.per_rule_ignores]`，故新增的才会红。
+      - name: Dependency check (deptry)
+        run: uv run deptry .
+
+      # 架构校验：core 是底座（不许依赖上层）、且必须 Qt-free。
+      # 契约写在 `pyproject.toml` 的 `[tool.importlinter]`。
+      - name: Architecture check (import-linter)
+        run: uv run lint-imports
+
+      - name: Lockfile check
+        run: uv lock --check
+
       - name: Type check (mypy strict)
-        run: uv run mypy py_src tools tests
+        run: uv run mypy py_src tools scripts tests
 
       - name: Tests with coverage gate
         run: uv run pytest --cov-fail-under=80
 
-  # 前端门禁：与上面那组（Python 七道）同等地位。规矩与门禁的对照表见
+  # 前端门禁：与上面那组（Python 十道）同等地位。规矩与门禁的对照表见
   # `.agents/skills/rules/references/frontend.md` §四；入口只有一个 `pnpm check`。
   web:
     runs-on: ubuntu-latest
@@ -79,5 +97,5 @@ jobs:
       - name: Install (lockfile 即事实源)
         run: pnpm install --frozen-lockfile
 
-      - name: Checks (类型 / lint / 样式 / 架构 / 令牌 / 单测)
+      - name: Checks (类型 / lint / 样式 / 架构 / 令牌 / 重复代码 / 单测)
         run: pnpm check

@@ -56,7 +56,7 @@ uv run mkdocs build --strict   # 与 CI 同口径：坏链接 / 缺页面 / 未�
 ## 构建产物
 
 - `site/` 是**构建产物，不入库**（已 gitignore，且在 `REUSE.toml` 里集中声明，
-  免得 SPDX 门禁把它当无主文件——虽然 `tools/spdx.py` 走 `git ls-files`，本来就躲得开）。
+  免得 SPDX 门禁把它当无主文件——虽然 `scripts/spdx.py` 走 `git ls-files`，本来就躲得开）。
 - 部署由 `.github/workflows/docs.yml` 负责：`main` 分支的文档变更 → 防漂移检查 → strict 构建 →
   发到 GitHub Pages（用官方 Pages Actions，**不推 `gh-pages` 分支**）。
 

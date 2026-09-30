@@ -1,23 +1,38 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-# SPDX 头 -> 书面语 -> ruff -> mypy。测试与覆盖率门禁在 CI。
-default_install_hook_types: [pre-commit]
+# 提交门禁：SPDX 头 -> 书面语 -> 标点 -> ruff -> deptry -> 架构 -> mypy -> 锁文件 -> 测试 -> 前端。
+# 提交信息另由 commit-msg 钩子校验（Conventional Commits）。
+# 覆盖率门禁与文档站构建留在 CI（见 `.github/workflows/ci.yml`）。
+#
+# `default_stages` 是必须的：**不写 `stages` 的钩子在每个阶段都跑**，于是 commit-msg 阶段
+# 它们会拿到 `.git/COMMIT_EDITMSG` 当"待检文件"——SPDX 钩子当场报"这个文件装不下内联头"。
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
 repos:
   - repo: local
     hooks:
       # SPDX 头：缺了自动补（补完需重新 git add）。装不下头的文件走 REUSE.toml 集中声明。
       - id: spdx-headers
         name: SPDX headers
-        entry: uv run python tools/spdx.py --fix
+        entry: uv run python scripts/spdx.py --fix
         language: system
         require_serial: true
 
       # 所有文档非口语化
       - id: prose
         name: prose (书面语)
-        entry: uv run python tools/prose.py
+        entry: uv run python scripts/prose.py
         language: system
+        require_serial: true
+
+      # 注释与 docstring 里的中文标点：**报告模式**（有命中不阻断），
+      # 口径与换法见 `scripts/punct.py`；看过量再决定是否改成阻断。
+      - id: punct
+        name: punct (半角标点)
+        entry: uv run python scripts/punct.py --report
+        language: system
+        types_or: [python]
         require_serial: true
 
       - id: ruff-check
@@ -34,12 +49,48 @@ repos:
         types_or: [python, pyi]
         require_serial: true
 
+      # 依赖盘点：拦"声明了却一处没用"与"用了却没声明"。
+      - id: deptry
+        name: deptry (依赖盘点)
+        entry: uv run deptry .
+        language: system
+        files: ^(pyproject\.toml|py_src/|tools/|scripts/|tests/)
+        pass_filenames: false
+        require_serial: true
+
+      # 架构校验：core 是底座、且必须 Qt-free（契约写在 pyproject 的 [tool.importlinter]）。
+      - id: import-linter
+        name: import-linter (架构)
+        entry: uv run lint-imports
+        language: system
+        files: ^py_src/
+        pass_filenames: false
+        require_serial: true
+
       - id: mypy
         name: mypy (strict)
-        entry: uv run mypy py_src tools tests
+        entry: uv run mypy py_src tools scripts tests
         language: system
         pass_filenames: false
         types_or: [python, pyi]
+
+      # 锁文件即事实源：声明变了而锁没跟上，当场拦下。
+      - id: uv-lock
+        name: uv lock --check
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+        require_serial: true
+
+      # 测试前移到提交时（当前全量约 5 秒）。覆盖率那一步仍在 CI。
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q --no-cov
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
 
       # 前端门禁：只在 app/ 下的文件被改动时跑，故纯 Python 的提交不受影响。
       # 入口与规矩的对照表见 `.agents/skills/rules/references/frontend.md` §四。
@@ -49,4 +100,12 @@ repos:
         language: system
         files: ^app/
         pass_filenames: false
+        require_serial: true
+
+      # 提交信息：Conventional Commits（`type(scope): 描述`）。
+      - id: commit-msg
+        name: commit-msg (Conventional Commits)
+        entry: uv run python scripts/commitmsg.py
+        language: system
+        stages: [commit-msg]
         require_serial: true

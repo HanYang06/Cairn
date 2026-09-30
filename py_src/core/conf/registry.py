@@ -522,7 +522,7 @@ class Config:
         """整份词表（现算，不读文件）：给文档投影与防漂移比对用。
 
         **不落盘也不改盘**：它只是把声明算成一份 JSON Schema，读它的人决定怎么用——
-        `tools/docgen.py` 拿它渲染参考页，测试拿它与入库的那份逐字比对。
+        `scripts/docgen.py` 拿它渲染参考页，测试拿它与入库的那份逐字比对。
         """
         return schema.build(self._entries())
 
