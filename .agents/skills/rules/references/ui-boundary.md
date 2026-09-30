@@ -57,7 +57,7 @@ src/core/  Python 内核（Qt-free、传输无关）
 2. **组件只发意图**：按钮 / 列表项不自己发请求，向上抛意图（`onRename` / `onActivate`），
    由页面级组合交给 IPC 客户端。
 3. **样式只来自令牌**：外观唯一真源是令牌词表（`docs/architecture/ui-theme.md`）。
-   组件内**禁止硬编码颜色 / 间距 / 圆角**；令牌的落地形态待定（CSS 自定义属性或等价物）。
+   组件内**禁止硬编码颜色 / 间距 / 圆角**；令牌的落地形态已定：CSS 自定义属性（`tokens.css`，见「主题令牌的归属」）。
 4. **类型不得逃逸**：跨边界的数据必须有 TypeScript 类型；禁止 `any`（Biome 与 `tsc strict` 双拦）。
    **契约只有一份**：领域的形状来自 Python 侧声明并**生成**给 TS（与 Rust），
    **不许在前端手写 `interface` 当第二份事实**（生成链见记忆的「UI 技术路线（2026-09-30 重定）」§6.2）。
@@ -93,10 +93,11 @@ src/core/  Python 内核（Qt-free、传输无关）
 
 ### 主题令牌的归属
 
-- 令牌词表与色板**继续以 `docs/architecture/ui-theme.md` 描述为准**（该页 Qt 机制部分待改写）。
+- 令牌词表与色板**继续以 `docs/architecture/ui-theme.md` 描述为准**（该页 Qt 机制部分已随材质改写作废）。
 - 深浅两套值、组件只引用令牌、切换即换值——**这条口径不变**。
-- **落地机制待定**：Qt 时代的 `token → QSS 编译` 与 QML 单例都不存在了，
-  替代形态（CSS 自定义属性 / 生成的主题模块）在动主题代码前必须先定，并在 `ui-theme.md` 回写。
+- **落地机制已定**：`config/theme/tokens.json`（唯一手写处）→ `app/scripts/gen-tokens.mjs` →
+  `app/src/styles/tokens.css`（入库、不许手改），防漂移 `check:tokens` 并入 `pnpm check`；
+  Qt 时代的 `token → QSS 编译` 与 QML 单例作废。
 
 ## 六、前端工程门禁（与 Python 七道同等地位）
 
