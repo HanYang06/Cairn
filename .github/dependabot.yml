@@ -93,3 +93,10 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      # CodeQL 的 `init` 与 `analyze` 同属一个 release，**只抬一个就是坏的**
+      # （实测：init 4.38.2 写出的配置文件被 analyze 3.38.2 拒收，`main` 上的 codeql
+      # 由此红了一整天）。故把这一族锁进一个分组，让它们始终同一个 PR、同一个版本。
+      codeql:
+        patterns:
+          - "github/codeql-action*"
