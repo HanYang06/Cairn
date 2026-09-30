@@ -38,13 +38,45 @@ describe("令牌声明", () => {
 describe("生成的 CSS", () => {
   it("深浅两套都在：一套进 :root，另一套进 prefers-color-scheme", () => {
     expect(css).toContain("@media (prefers-color-scheme: dark)");
-    expect(css).toContain("--color-bg: #FFFFFF");
-    expect(css).toContain("--color-bg: #0D1117");
+    // 浅色是默认值：暖纸底（不是纯白，见 ui-theme.md §3.1 的亮度理由）
+    expect(css).toContain(`--color-bg: ${tokens.color.light.bg}`);
+    expect(css).toContain(`--color-bg: ${tokens.color.dark.bg}`);
+    expect(css).toContain(`--color-accent: ${tokens.color.light.accent}`);
+    expect(css).toContain(`--color-accent: ${tokens.color.dark.accent}`);
+  });
+
+  it("浅色底不是纯白：暖纸底比纯白暗，但不至于显黄", () => {
+    const bg = String(tokens.color.light.bg).toUpperCase();
+    expect(bg).not.toBe("#FFFFFF");
+    const lum = (hex: string) => {
+      const c = [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+      const f = (s: number) => (s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4);
+      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+    };
+    expect(lum(bg)).toBeLessThan(1);
+    expect(lum(bg)).toBeGreaterThan(0.85);
   });
 
   it("默认档不带后缀，其余档带名字", () => {
     expect(css).toContain("--radius:");
     expect(css).toContain("--radius-sm:");
     expect(css).toContain("--space-md:");
+  });
+
+  it("正文与背景的对比度过 AA（4.5）", () => {
+    const lum = (hex: string) => {
+      const c = [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+      const f = (s: number) => (s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4);
+      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+    };
+    const ratio = (a: string, b: string) => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    for (const mode of ["light", "dark"] as const) {
+      const c = tokens.color[mode] as Record<string, string>;
+      expect(ratio(c.text, c.bg)).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(c.accent, c.bg)).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });

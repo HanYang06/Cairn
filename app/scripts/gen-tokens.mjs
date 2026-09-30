@@ -51,7 +51,7 @@ function render(tokens) {
     "",
     ...scale("radius", tokens.radius),
     "",
-    ...scale("font", { sans: tokens.fonts.sans, mono: tokens.fonts.mono, ...tokens.fontSize }),
+    ...scale("font", { ...tokens.fontFamily, ...tokens.fontSize }),
     "",
     ...scale("leading", tokens.lineHeight),
     "",
