@@ -346,11 +346,18 @@ class Config:
     def _flush(self) -> tuple[list[str], list[str]]:
         """真正落盘的一段：值文件与词表。**四条通路都走这里**（默认退出 / sync / force）。
 
-        **一件没声明过任何键时不动词表**：被 import 到的那个部分进程可能只认得一部分配置，
-        让它把整份词表清成空对象，等于用"没加载到"冒充"没有配置"。
+        **词表只增不删**：被 import 到的那个部分进程只认得一部分配置，让它按本会话的声明
+        整份重写词表，等于用"我没加载到"冒充"这条配置没有了"——实测过：一份只导入 `core`
+        的进程退出，就把 `storage.*` 那几条从词表里抹掉了。故写之前先与盘上那份**合并**：
+        同名条目由新算的顶掉，其余原样留着。
+
+        代价写在明处：一条声明从代码里删掉之后，它在词表里会**留成僵尸**。那份文件是人可以
+        改的投影，要清就手工清——总比每次跑测试都被削一遍好。
         """
         if self._seen:
-            self._write_if_changed(self.schema_path(), _dump(schema.build(self._entries())))
+            fresh = schema.build(self._entries())
+            merged = _merge_vocabulary(self.schema_path(), fresh)
+            self._write_if_changed(self.schema_path(), _dump(merged))
         payload = self._payload()
         loaded = self._load()
         added = [key for key in payload if key not in loaded]
@@ -591,6 +598,28 @@ class Config:
 def _dump(payload: dict[str, Any]) -> str:
     """把一份产物渲染成 JSON 文本（中文不转义、两格缩进、末尾留一个换行）。"""
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def _merge_vocabulary(path: Path, fresh: dict[str, Any]) -> dict[str, Any]:
+    """把本会话算出的词表并进盘上那份：**`properties` 一层只增不删**，其余头部照新算的。
+
+    那份文件是"全部声明的并集"，不是"最后一次退出的那个进程手里有的那些"。同名条目由新算
+    的顶掉，其余旧条目原样留着。读不出来（不在 / 坏 JSON / 形状不对）就按新的写——
+    一份坏文件不该挡住落盘。
+    """
+    if not path.is_file():
+        return fresh
+    try:
+        found = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return fresh
+    if not isinstance(found, dict):
+        return fresh
+    old = found.get("properties")
+    new = fresh.get("properties")
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return fresh
+    return {**fresh, "properties": {**old, **new}}
 
 
 def _atexit_sync() -> None:
