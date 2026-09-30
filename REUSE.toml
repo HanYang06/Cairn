@@ -52,6 +52,7 @@ path = [
   "app/pnpm-lock.yaml",
   "app/tsconfig.json",
   "app/tsconfig.node.json",
+  "app/biome.json",
   "app/.vscode/**",
   "app/src/assets/**",
   "app/src-tauri/Cargo.toml",
