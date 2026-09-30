@@ -1,0 +1,59 @@
+/*
+ * SPDX-FileCopyrightText: 2026 HanYang06
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * 胶囊动作按钮：动作可以胶囊，容器不做胶囊（`ui-theme.md` §3.4）。
+ * 悬停与选中**即时**、不做颜色过渡（§6）——故 transition 只留在阴影 / 背景上且用最快档。
+ *
+ * 本组件**不画透明边框**：门禁只认 `var(--…)` / `none` / `0` 作边框值，
+ * 而"透明边框"这类占位写法没有令牌可表达，故宁可不写（`ui-theme.md` §3.3 的"档位只增不改"）。
+ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  border-radius: var(--radius-pill);
+  background: var(--color-transparent);
+  font-family: var(--font-sans);
+  font-size: var(--font-xs);
+  line-height: var(--leading-tight);
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.pill:disabled {
+  color: var(--color-faint);
+  cursor: default;
+}
+
+.pill:focus-visible {
+  outline: var(--size-mark) solid var(--color-accent);
+  outline-offset: var(--size-hairline);
+}
+
+.pill:hover:not(:disabled) {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.pill-primary {
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  font-weight: 500;
+}
+
+.pill-primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  color: var(--color-accent-text);
+}
+
+.pill-danger {
+  color: var(--color-danger);
+}
+
+.pill-danger:hover:not(:disabled) {
+  background: var(--color-hover);
+  color: var(--color-danger);
+}

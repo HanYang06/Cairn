@@ -20,6 +20,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# 系统字体枚举（MIT；依赖 fontdb）。归"窗口与系统"那一摊，见 src/system_fonts.rs。
+tauri-plugin-system-fonts = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

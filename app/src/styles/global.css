@@ -1,0 +1,40 @@
+/*
+ * SPDX-FileCopyrightText: 2026 HanYang06
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * 全局底子。**只引用令牌**——颜色 / 字号 / 字体全走 var(--…)，字面值由 stylelint 拦。
+ *
+ * 三层明度（`ui-theme.md` §3.1）：纸面（`--color-bg`）→ 面板（`--color-surface`）→ 浮层。
+ * 默认**浅色**（`/root` 即浅色值），深色由 `tokens.css` 的 `prefers-color-scheme` 覆盖。
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+
+  /* 字体三层角色（ui-theme.md §3.7 / §3.8）：用户覆盖只写 `--font-<角色>-user`，
+     兜底仍是令牌里的默认链——故字体名只有一处真源，用户字体不存在时自动落回。 */
+  font-family: var(--font-sans-user, var(--font-sans));
+  font-size: var(--font-sm);
+  line-height: var(--leading);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: var(--size-mark) solid var(--color-accent);
+  outline-offset: var(--size-hairline);
+}
