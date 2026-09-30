@@ -61,12 +61,12 @@ path = [
 SPDX-FileCopyrightText = "2026 HanYang06"
 SPDX-License-Identifier = "Apache-2.0"
 
-# `app/src-tauri/icons/**` 目前是 **create-tauri-app 脚手架的占位图标**（上游 MIT），
-# 不是本项目图形：换上 Cairn 的图标（`pnpm tauri icon <方形 PNG>`）之后**改成上面那一条**。
+# `app/src-tauri/icons/**` 由 `pnpm tauri icon ../assets/logo/cairn-icon.png` 生成，
+# 源头是项目自有图形（`assets/logo/**`），故与项目同档。
 [[annotations]]
 path = ["app/src-tauri/icons/**"]
-SPDX-FileCopyrightText = "Tauri Apps contributors"
-SPDX-License-Identifier = "MIT"
+SPDX-FileCopyrightText = "2026 HanYang06"
+SPDX-License-Identifier = "Apache-2.0"
 
 # —— 法律文书本身（不给自己加头）——
 [[annotations]]
