@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 #
-# 文档站配置（MkDocs + Material）——**生成物，不入库**：`site/` 被 gitignore。
-# 事实源仍是 `docs/**/*.md`（手写）与 `src/**` 的 docstring（自动抽取）。
+# 文档站配置（MkDocs + Material）——手写事实源之一，随代码评审；
+# 构建产物 `site/` 不入库（被 gitignore）。事实源是 `docs/**/*.md`（手写）与
+# `py_src/**` 的 docstring（自动抽取）。
 # 本地预览：`uv run mkdocs serve`；门禁：`uv run mkdocs build --strict`。
 
 site_name: Cairn · 巨石堆
@@ -56,7 +57,6 @@ nav:
       - architecture/index.md
       - 总纲（数据结构）: architecture/data-model.md
       - L0 存储设计: architecture/storage-design.md
-      - 内核规格: architecture/kernel-spec.md
       - 内核: architecture/kernel.md
       - 领域: architecture/domains.md
       - 配置引擎: architecture/config.md
@@ -67,19 +67,12 @@ nav:
       - 设计档案: architecture/by-design.md
       - 网络与联邦: architecture/network.md
       - 生态与插件: architecture/ecosystem.md
-      - 内核 M1 计划: architecture/kernel-m1-plan.md
   - API 参考:
       - api/index.md
       - core（底座）: api/core.md
-      - feature（领域）: api/feature.md
-      - ui_tools（界面工具层）: api/ui-tools.md
-      - app（应用组合根）: api/app.md
   - 术语: reference/glossary.md
   - 配置项参考: reference/config.md
-  - 贡献:
-      - contributing/index.md
-      - 怎么改文档: contributing/docs.md
-      - 许可与署名: contributing/license.md
+  - 贡献与许可: contributing.md
   - 博客:
       - 滚轮选择器与物理引擎: blog/wheel-picker-physics-engine.md
 
@@ -91,8 +84,8 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          # 让 `::: core` 这类指令去 `src/` 找包（顶层包去 `cairn.` 前缀，见 AGENTS.md）
-          paths: [src]
+          # 让 `::: core` 这类指令去 `py_src/` 找包（顶层包去 `cairn.` 前缀，见 AGENTS.md）
+          paths: [py_src]
           options:
             docstring_style: google
             docstring_options:
@@ -117,6 +110,10 @@ markdown_extensions:
   - md_in_html
   - tables
   - toc:
+      # 保留中文字符做锚点（默认 slugify 会把中文剥成 `_1`，页内链接失效）
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
       permalink: true
       toc_depth: 3
   - pymdownx.details
