@@ -51,13 +51,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # ⚠️ `init` 与 `analyze` **必须是同一个版本**——两者同属 `github/codeql-action`
+      # 这个仓库的同一个 release，`init` 会把版本号写进配置文件，`analyze` 读到不匹配的
+      # 版本号即当场拒收。实测报错原文：
+      #   Loaded a configuration file for version '4.38.2', but running version '3.38.2'
+      # （2026-09-30 起 `main` 上的 codeql 一直红，起因是 Dependabot 只把 `init` 从
+      # 3.38.2 抬到 4.38.2，`analyze` 留在 3.38.2。）
+      # 故这两行**共用同一个 SHA**，改动时一起改；Dependabot 侧另有 `codeql` 分组兜底
+      # （见 `.github/dependabot.yml`）。
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v3.28.10
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
       - name: Analyze
-        uses: github/codeql-action/analyze@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.28.10
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: "/language:${{ matrix.language }}"
