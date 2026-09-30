@@ -10,10 +10,10 @@
 
 用法：
 
-    uv run python tools/docgen.py --write      # 重新生成 docs/reference/config.md
-    uv run python tools/docgen.py --check      # 防漂移门禁（页面与声明不一致即失败）
-    uv run python tools/docgen.py --coverage   # 只打印 docstring 覆盖率报告（报告模式）
-    uv run python tools/docgen.py --coverage --gate   # 同上，并低于阈值即非零退出（门禁模式）
+    uv run python scripts/docgen.py --write      # 重新生成 docs/reference/config.md
+    uv run python scripts/docgen.py --check      # 防漂移门禁（页面与声明不一致即失败）
+    uv run python scripts/docgen.py --coverage   # 只打印 docstring 覆盖率报告（报告模式）
+    uv run python scripts/docgen.py --coverage --gate   # 同上，并低于阈值即非零退出（门禁模式）
 
 生成的文件自己带 SPDX 头与"勿手改"声明；正文**没有一句是手写的**——表来自声明，
 说明文字来自本文件的模板常量（改口径改这里，不改正生成物）。
@@ -65,7 +65,7 @@ _PAGE_HEAD = """\
 
 !!! danger "本页由工具生成，请勿手改"
 
-    由 `uv run python tools/docgen.py --write` 生成，表来自 **配置声明现算**（`core/conf` 的
+    由 `uv run python scripts/docgen.py --write` 生成，表来自 **配置声明现算**（`core/conf` 的
     词表投影，副本落在 `config/schema/settings.json`）。改口径请改生成器，改配置请改声明的
     那个 `conf(...)` 调用点；`--check` 已进 CI，漂移即失败。**手改这一页会在下一次生成时被抹掉。**
 
@@ -88,7 +88,7 @@ _PAGE_TAIL = """
   （引擎退出时落盘，不需要专门的生成脚本）。
 - 格式常量（载体魔数、文件头长度、记录头布局这类改了会坏库的）**故意不进配置**，留在实现处。
 - 想加一条配置：在**用到它的那个包**里声明（例：`py_src/core/storage/conf.py`），
-  再跑一次 `uv run python tools/docgen.py --write` 把这一页更新。
+  再跑一次 `uv run python scripts/docgen.py --write` 把这一页更新。
 """
 
 Residue = tuple[str, int, int]
@@ -223,7 +223,7 @@ def _gate() -> int:
         _say(f"[docgen] {CONFIG_PAGE.relative_to(ROOT)} 与声明一致。")
         return 0
     _say(f"[docgen] {CONFIG_PAGE.relative_to(ROOT)} 已漂移（与声明现算的结果不一致）。")
-    _say("         跑 `uv run python tools/docgen.py --write` 重新生成。")
+    _say("         跑 `uv run python scripts/docgen.py --write` 重新生成。")
     return 1
 
 

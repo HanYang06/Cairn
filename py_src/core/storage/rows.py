@@ -21,8 +21,9 @@
 档一重建（:func:`rebuild`）正是这样的批量场景，整轮补行只提交一次。
 
 **档一重建**（§8.5）也在此：以载体为真源，**只补缺行**，已有行一律不动；
-重扫补回的是"身份＋位置"，`kind` 与落盘时刻不在记录头里，只能给空值（未知即降级）。
-判据落在载荷上（带指针的是块），故类型为空也认得出。坏点即停：:meth:`Hub.scan`
+重扫能把行上的每一列都补回来——身份字段与类型标号都在记录里（§3.5），
+位置由"在哪个载体的哪一格被扫到"给出。判据落在载荷上（带指针的是块），
+故类型为空也认得出。坏点即停：:meth:`Hub.scan`
 自己抛，已补的行留在库里，重跑幂等。
 """
 
@@ -31,8 +32,6 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-
-from core.clock import now_ms
 
 from .carrier import SlotRange
 from .format.block import body_ref_of
@@ -49,57 +48,42 @@ if TYPE_CHECKING:
 HUB_TABLE = "hub"
 """hub 登记所在表。"""
 
-EDGE_TABLE = "edge"
-"""关系边所在表。"""
+#: 身份列的书写顺序 = `ID` 的字段顺序（`ID_FIELDS`）：库里的行是 ID 的镜像，逐列照搬。
+_ID_COLUMNS = "name, value_uuid, value_hash, birth_time, in_hub, in_hub_pack, in_pack_slot"
 
-DEFAULT_HUB_ROLE = "main"
-"""默认 hub 角色：主 hub。短命 hub 与合并为未来项。"""
-
-DEFAULT_HUB_STATE = "active"
-"""默认登记状态：在用。"""
-
-_BLOCK_COLUMNS = (
-    "value_uuid, value_hash, body_value_uuid, body_value_hash, kind, hub, pack, "
-    "slot_first, slot_last, size, birth_time, created, updated"
-)
-_BODY_COLUMNS = (
-    "value_uuid, value_hash, hub, pack, slot_first, slot_last, size, birth_time, created, updated"
-)
-_HUB_COLUMNS = "name, role, state, created"
-_EDGE_COLUMNS = "id, src_value_uuid, dst_value_uuid, kind, domain, created"
+_BLOCK_COLUMNS = f"{_ID_COLUMNS}, body_value_uuid, body_value_hash, kind"
+_BODY_COLUMNS = _ID_COLUMNS
+_HUB_COLUMNS = "name"
 
 # 语句一律在这里拼好：表名来自登记表并经 quote_identifier 加引号，值全部参数化。
 # 调用点只传常量，故没有"现场拼 SQL"的地方（也就没有注入面）。
 _INSERT_BLOCK = f"""
 INSERT INTO {quote_identifier(BLOCK_TABLE)} ({_BLOCK_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(value_uuid) DO UPDATE SET
+    name = excluded.name,
     value_hash = excluded.value_hash,
+    in_hub = excluded.in_hub,
+    in_hub_pack = excluded.in_hub_pack,
+    in_pack_slot = excluded.in_pack_slot,
     body_value_uuid = excluded.body_value_uuid,
     body_value_hash = excluded.body_value_hash,
-    kind = excluded.kind,
-    hub = excluded.hub,
-    pack = excluded.pack,
-    slot_first = excluded.slot_first,
-    slot_last = excluded.slot_last,
-    size = excluded.size,
-    updated = excluded.updated
+    kind = excluded.kind
 """
-"""同身份重写：位置、摘要与指针跟着更新；`birth_time` 与 `created` 保持第一次写下的值。"""
+"""同身份重写：ID 的可变字段（名字、摘要、位置段）与指针、类型标号都跟着更新；
+`birth_time` 是签发时刻，一写定就不再改写——那会让一个旧身份看起来变年轻。"""
 
 _INSERT_BODY = f"""
 INSERT INTO {quote_identifier(BODY_TABLE)} ({_BODY_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(value_uuid) DO UPDATE SET
+    name = excluded.name,
     value_hash = excluded.value_hash,
-    hub = excluded.hub,
-    pack = excluded.pack,
-    slot_first = excluded.slot_first,
-    slot_last = excluded.slot_last,
-    size = excluded.size,
-    updated = excluded.updated
+    in_hub = excluded.in_hub,
+    in_hub_pack = excluded.in_hub_pack,
+    in_pack_slot = excluded.in_pack_slot
 """
-"""同身份重写：位置与摘要跟着更新；`birth_time` 与 `created` 保持第一次写下的值。"""
+"""同身份重写：ID 的可变字段跟着更新；`birth_time` 同上，不动。"""
 
 _SELECT_BLOCK = f"SELECT {_BLOCK_COLUMNS} FROM {quote_identifier(BLOCK_TABLE)} WHERE value_uuid = ?"
 _SELECT_BODY = f"SELECT {_BODY_COLUMNS} FROM {quote_identifier(BODY_TABLE)} WHERE value_uuid = ?"
@@ -117,148 +101,121 @@ _COUNT_BLOCKS = f"SELECT COUNT(*) AS n FROM {quote_identifier(BLOCK_TABLE)}"
 _COUNT_BODIES = f"SELECT COUNT(*) AS n FROM {quote_identifier(BODY_TABLE)}"
 _SELECT_ALL_BLOCKS = (
     f"SELECT {_BLOCK_COLUMNS} FROM {quote_identifier(BLOCK_TABLE)} "
-    "ORDER BY hub, pack, slot_first, value_uuid"
+    "ORDER BY in_hub, in_hub_pack, value_uuid"
 )
+"""全部块行。**格号不参与排序**：它存成文本，字典序与数值序不是一回事；
+排序键取 hub、载体与身份，够定位、也够稳定。"""
 _SELECT_ALL_BODIES = (
     f"SELECT {_BODY_COLUMNS} FROM {quote_identifier(BODY_TABLE)} "
-    "ORDER BY hub, pack, slot_first, value_uuid"
+    "ORDER BY in_hub, in_hub_pack, value_uuid"
 )
 _DELETE_BLOCK = f"DELETE FROM {quote_identifier(BLOCK_TABLE)} WHERE value_uuid = ?"
 _DELETE_BODY = f"DELETE FROM {quote_identifier(BODY_TABLE)} WHERE value_uuid = ?"
 _MOVE_BLOCK = (
     f"UPDATE {quote_identifier(BLOCK_TABLE)} "
-    "SET hub = ?, pack = ?, slot_first = ?, slot_last = ?, size = ?, updated = ? "
+    "SET in_hub = ?, in_hub_pack = ?, in_pack_slot = ? "
     "WHERE value_uuid = ?"
 )
-"""只改坐标：身份、类型标号与三个时刻都不动。"""
+"""只改坐标：身份、摘要、指针与类型标号都不动，只把位置段换成实际位置。"""
 _MOVE_BODY = (
     f"UPDATE {quote_identifier(BODY_TABLE)} "
-    "SET hub = ?, pack = ?, slot_first = ?, slot_last = ?, size = ?, updated = ? "
+    "SET in_hub = ?, in_hub_pack = ?, in_pack_slot = ? "
     "WHERE value_uuid = ?"
 )
-"""只改坐标：身份与两个时刻都不动。"""
+"""只改坐标：身份与摘要都不动。"""
 
 _INSERT_HUB = (
-    f"INSERT INTO {quote_identifier(HUB_TABLE)} ({_HUB_COLUMNS}) VALUES (?, ?, ?, ?) "
+    f"INSERT INTO {quote_identifier(HUB_TABLE)} ({_HUB_COLUMNS}) VALUES (?) "
     "ON CONFLICT(name) DO NOTHING"
 )
-"""登记一旦写下就不改写：重复登记是空操作。"""
+"""登记一旦写下就不改写：重复登记是空操作。**只记名字**——
+它是"这个 hub 存在过"的索引，真源始终是那个目录（§三：索引不得揣着推不回来的值）。"""
 
 _SELECT_HUB = f"SELECT {_HUB_COLUMNS} FROM {quote_identifier(HUB_TABLE)} WHERE name = ?"
 _SELECT_HUBS = f"SELECT {_HUB_COLUMNS} FROM {quote_identifier(HUB_TABLE)} ORDER BY name"
 
-_INSERT_EDGE = (
-    f"INSERT INTO {quote_identifier(EDGE_TABLE)} ({_EDGE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?) "
-    "ON CONFLICT(id) DO NOTHING"
-)
-"""边身份即主键：同一关系重复写不产生第二行。"""
-
-_EDGES_FROM = (
-    f"SELECT {_EDGE_COLUMNS} FROM {quote_identifier(EDGE_TABLE)} "
-    "WHERE src_value_uuid = ? AND kind = ? ORDER BY created, id"
-)
-_EDGES_TO = (
-    f"SELECT {_EDGE_COLUMNS} FROM {quote_identifier(EDGE_TABLE)} "
-    "WHERE dst_value_uuid = ? AND kind = ? ORDER BY created, id"
-)
-
 
 @dataclass(frozen=True, slots=True)
 class BlockRow:
-    """一条块行：块的身份、它指向的 body、以及它自己那份记录的位置。
+    """一条块行：**ID 的镜像** ＋ 它指向哪份内容 ＋ 类型标号。
+
+    字段与顺序照 `ID` 的声明搬（`ID_FIELDS`），故"ID 里的某个字段进不了库"不成立：
+    位置段三列就是 `in_hub` / `in_hub_pack` / `in_pack_slot`，不再改名另立一套。
+    位置段里的那对格号在库里写成文本（`头格:末格`），进出各转一次。
 
     Attributes:
+        name: 可读名称；由所在容器给出，可为空。
         value_uuid: 块的分配形态凭证（主键）。
         value_hash: 块的摘要形态凭证（块记录载荷的摘要）。
+        birth_time: ID 签发时刻（unix 纳秒）；记录头不带它，重建补行时为 0。
+        in_hub: 所属 hub（目录名）。
+        in_hub_pack: hub 内的载体文件名。
+        in_pack_slot: 载体内的格区间（头格，末格），闭区间。
         body_value_uuid: 指针指向的 body 的分配形态凭证。
         body_value_hash: 指针指向的 body 的摘要形态凭证（内容地址）。
-        hub: 所属 hub。
-        pack: 载体文件名。
-        span: 载体内的格区间。
-        size: 记录字节数。
         kind: 类型标号；由程序给出，重建补行时只能是空串（未知）。
-        birth_time: ID 签发时刻（unix 纳秒）；记录头不带它，重建补行时为 0。
-        created: 落盘时刻（unix 毫秒）；重建补行时为 0（未知）。
-        updated: 最近一次改写时刻（unix 毫秒）。
     """
 
+    name: str
     value_uuid: str
     value_hash: str
+    birth_time: int
+    in_hub: str
+    in_hub_pack: str
+    in_pack_slot: tuple[int, int]
     body_value_uuid: str
     body_value_hash: str
-    hub: str
-    pack: str
-    span: SlotRange
-    size: int
     kind: str = ""
-    birth_time: int = 0
-    created: int = 0
-    updated: int = 0
+
+    @property
+    def span(self) -> SlotRange:
+        """格区间（载体层要的形态）：库里那份文本在这里还原。"""
+        return SlotRange(first=self.in_pack_slot[0], last=self.in_pack_slot[1])
 
 
 @dataclass(frozen=True, slots=True)
 class BodyRow:
-    """一条内容行：body 的身份与它自己那份记录的位置。
+    """一条内容行：**ID 的镜像**，没有指针也没有类型标号。
+
+    字段与顺序同上，故两张身份表的形状差就是"块多一个指向与一个类型标号"。
 
     Attributes:
+        name: 可读名称；由所在容器给出，可为空。
         value_uuid: body 的分配形态凭证（主键）。
         value_hash: body 的摘要形态凭证（内容地址，去重与反查都走它）。
-        hub: 所属 hub。
-        pack: 载体文件名。
-        span: 载体内的格区间。
-        size: 记录字节数。
-        birth_time: ID 签发时刻（unix 纳秒）。
-        created: 落盘时刻（unix 毫秒）。
-        updated: 最近一次改写时刻（unix 毫秒）。
+        birth_time: ID 签发时刻（unix 纳秒）；记录头不带它，重建补行时为 0。
+        in_hub: 所属 hub（目录名）。
+        in_hub_pack: hub 内的载体文件名。
+        in_pack_slot: 载体内的格区间（头格，末格），闭区间。
     """
 
+    name: str
     value_uuid: str
     value_hash: str
-    hub: str
-    pack: str
-    span: SlotRange
-    size: int
-    birth_time: int = 0
-    created: int = 0
-    updated: int = 0
+    birth_time: int
+    in_hub: str
+    in_hub_pack: str
+    in_pack_slot: tuple[int, int]
+
+    @property
+    def span(self) -> SlotRange:
+        """格区间（载体层要的形态）：库里那份文本在这里还原。"""
+        return SlotRange(first=self.in_pack_slot[0], last=self.in_pack_slot[1])
 
 
 @dataclass(frozen=True, slots=True)
 class HubRow:
-    """一条 hub 登记。
+    """一条 hub 登记：**只有名字**。
+
+    它是"存在过哪些 hub"的索引，真源是 vault 下那些目录（扫一遍即得）。
+    角色、状态、第一次见到的时刻都推不出来，故**不进这张表**——索引不得揣着推不回来的值
+    （短命 hub 与合并落地时，那些事实的真源要放在 hub 目录里，再由索引投影）。
 
     Attributes:
         name: hub 名（目录名，主键）。
-        role: 角色；主 hub / 短命 hub（后者为未来项）。
-        state: 状态；在用 / 已合并（后者为未来项）。
-        created: 第一次见到它的时刻（unix 毫秒）。
     """
 
     name: str
-    role: str = DEFAULT_HUB_ROLE
-    state: str = DEFAULT_HUB_STATE
-    created: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class EdgeRow:
-    """一条关系边。
-
-    Attributes:
-        id: 边身份摘要（主键，由 ``(src, dst, kind, domain)`` 算出）。
-        src: 起点 ID。
-        dst: 终点 ID。
-        kind: 关系种类。
-        domain: 所属领域。
-        created: 建立时刻（unix 毫秒）。
-    """
-
-    id: str
-    src: str
-    dst: str
-    kind: str
-    domain: str = ""
-    created: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,16 +299,14 @@ class Rows:
         self._commit()
         return cursor.rowcount > 0
 
-    def move_block(self, row: BlockRow, *, updated: int | None = None) -> bool:
-        """**只改坐标**：按 `row` 里的位置挪这一行；返回是否确实改到了一行。
+    def move_block(self, row: BlockRow) -> bool:
+        """**只改坐标**：按 `row` 的位置段挪这一行；返回是否确实改到了一行。
 
         处置"坐标不符"用它：把行挪到载体里的实际位置，而不是整行重写——整行重写会把
-        类型标号冲掉，而类型是程序给的信息，重扫补不回来（§3.5、§8.7）。身份、类型标号
-        与 `birth_time` / `created` 一律不动，只刷新 `updated`。
+        类型标号冲掉，而类型是程序给的信息，重扫补不回来（§3.5、§8.7）。
+        身份、摘要、指针与 `birth_time` 一律不动。
         """
-        cursor = self._connection.execute(
-            _MOVE_BLOCK, (*_coordinates(row, updated), row.value_uuid)
-        )
+        cursor = self._connection.execute(_MOVE_BLOCK, (*_coordinates(row), row.value_uuid))
         self._commit()
         return cursor.rowcount > 0
 
@@ -372,9 +327,9 @@ class Rows:
         found = self._connection.execute(_SELECT_BODIES_BY_HASH, (value_hash,)).fetchall()
         return tuple(_body(row) for row in found)
 
-    def move_body(self, row: BodyRow, *, updated: int | None = None) -> bool:
-        """**只改坐标**：按 `row` 里的位置挪这一行；身份与两个时刻都不动。"""
-        cursor = self._connection.execute(_MOVE_BODY, (*_coordinates(row, updated), row.value_uuid))
+    def move_body(self, row: BodyRow) -> bool:
+        """**只改坐标**：按 `row` 的位置段挪这一行；身份与摘要都不动。"""
+        cursor = self._connection.execute(_MOVE_BODY, (*_coordinates(row), row.value_uuid))
         self._commit()
         return cursor.rowcount > 0
 
@@ -402,22 +357,12 @@ class Rows:
 
     # ---- hub 登记 ----
 
-    def register_hub(
-        self,
-        name: str,
-        *,
-        role: str = DEFAULT_HUB_ROLE,
-        state: str = DEFAULT_HUB_STATE,
-        created: int | None = None,
-    ) -> bool:
+    def register_hub(self, name: str) -> bool:
         """登记一个 hub；**已经登记过就不改写它**，返回是否新登记。
 
-        登记记的是"第一次见到它"；改形态是另一个显式动作（尚未落地）。
+        只写名字：这张表回答的是"存在过哪些 hub"，真源是那个目录。
         """
-        cursor = self._connection.execute(
-            _INSERT_HUB,
-            (name, role, state, now_ms() if created is None else created),
-        )
+        cursor = self._connection.execute(_INSERT_HUB, (name,))
         self._commit()
         return cursor.rowcount > 0
 
@@ -430,45 +375,14 @@ class Rows:
         """全部 hub 登记，按名排序。"""
         return tuple(_hub(row) for row in self._connection.execute(_SELECT_HUBS).fetchall())
 
-    # ---- 关系边 ----
 
-    def put_edge(self, edge: EdgeRow) -> bool:
-        """写入一条关系边；同一身份（`id`）重复写不产生第二行。返回是否新写入。"""
-        cursor = self._connection.execute(
-            _INSERT_EDGE,
-            (
-                edge.id,
-                edge.src,
-                edge.dst,
-                edge.kind,
-                edge.domain,
-                now_ms() if edge.created == 0 else edge.created,
-            ),
-        )
-        self._commit()
-        return cursor.rowcount > 0
-
-    def edges_from(self, src: str, kind: str) -> tuple[EdgeRow, ...]:
-        """出边：按 ``(src, kind)`` 查。"""
-        return self._edges(_EDGES_FROM, src, kind)
-
-    def edges_to(self, dst: str, kind: str) -> tuple[EdgeRow, ...]:
-        """入边（反查）：按 ``(dst, kind)`` 查。"""
-        return self._edges(_EDGES_TO, dst, kind)
-
-    def _edges(self, statement: str, value: str, kind: str) -> tuple[EdgeRow, ...]:
-        """按起点或终点查边；两条语句都在模块级拼好，列名不在这里出现。"""
-        rows = self._connection.execute(statement, (value, kind)).fetchall()
-        return tuple(_edge(row) for row in rows)
-
-
-def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> RebuildReport:
+def rebuild(rows: Rows, hubs: Iterable[Hub]) -> RebuildReport:
     """档一重建：以载体为真源，**只补缺行**。
 
     - hub 目录在、登记缺 → 补登记（登记是投影，真源是目录）；
-    - 盘上有记录、库里没有行 → 按记录补行：身份与位置照实填，`kind` 与落盘时刻给空值
-      （它们不在记录头里，编不出来）；
-    - **已有行一律不动**：清空重扫要由程序按 ID 给出类型，属 ID 专项（§12）。
+    - 盘上有记录、库里没有行 → 按记录补行：**行上的每一列都从记录还原**
+      （身份字段与类型标号在记录里，位置由扫到的位置给出）；
+    - **已有行一律不动**：清空重扫要走显式授权。
 
     进哪张表**由载荷判断**（§3.2.1）：带指针的是块记录，进 `block`；其余是内容记录，进
     `body`。判据落在载荷上，故类型为空也认得出。坏点即停：遇到读不出底来的载体即抛，
@@ -477,7 +391,6 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
     两类开销在这一层各自消掉：**已有身份集合进循环前一次预载**——逐条 `SELECT` 在大库里是
     N+1 查询；**整轮补行包在一层 :meth:`Rows.batch` 里**——逐行提交就是逐行 fsync。
     """
-    stamp = now_ms() if now is None else now
     registered: list[str] = []
     blocks: list[str] = []
     bodies: list[str] = []
@@ -490,7 +403,7 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
     with rows.batch():
         for hub in hubs:
             if rows.hub(hub.name) is None:
-                rows.register_hub(hub.name, created=stamp)
+                rows.register_hub(hub.name)
                 registered.append(hub.name)
             for pack, span, raw in hub.scan():
                 scanned += 1
@@ -501,13 +414,13 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
                     if value_uuid not in known_bodies:
                         rows.put_body(
                             BodyRow(
+                                name=record.id.name,
                                 value_uuid=value_uuid,
                                 value_hash=record.id.value_hash,
-                                hub=hub.name,
-                                pack=pack,
-                                span=span,
-                                size=len(raw),
                                 birth_time=record.id.birth_time,
+                                in_hub=hub.name,
+                                in_hub_pack=pack,
+                                in_pack_slot=(span.first, span.last),
                             )
                         )
                         known_bodies.add(value_uuid)
@@ -516,15 +429,16 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
                 if value_uuid not in known_blocks:
                     rows.put_block(
                         BlockRow(
+                            name=record.id.name,
                             value_uuid=value_uuid,
                             value_hash=record.id.value_hash,
+                            birth_time=record.id.birth_time,
+                            in_hub=hub.name,
+                            in_hub_pack=pack,
+                            in_pack_slot=(span.first, span.last),
                             body_value_uuid=pointer.value_uuid,
                             body_value_hash=pointer.value_hash,
-                            hub=hub.name,
-                            pack=pack,
-                            span=span,
-                            size=len(raw),
-                            birth_time=record.id.birth_time,
+                            kind=record.kind,
                         )
                     )
                     known_blocks.add(value_uuid)
@@ -538,16 +452,9 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
     )
 
 
-def _coordinates(row: BlockRow | BodyRow, updated: int | None) -> tuple[object, ...]:
-    """挪行要写的那几个坐标值（两张表共用同一套）。"""
-    return (
-        row.hub,
-        row.pack,
-        row.span.first,
-        row.span.last,
-        row.size,
-        now_ms() if updated is None else updated,
-    )
+def _coordinates(row: BlockRow | BodyRow) -> tuple[object, ...]:
+    """挪行要写的那三个坐标值（两张表共用同一套 = ID 的位置段）。"""
+    return (row.in_hub, row.in_hub_pack, _slot_text(row.in_pack_slot))
 
 
 def _count(connection: sqlite3.Connection, statement: str) -> int:
@@ -556,106 +463,91 @@ def _count(connection: sqlite3.Connection, statement: str) -> int:
     return 0 if row is None else int(row["n"])
 
 
+def _slot_text(slot: tuple[int, int]) -> str:
+    """格区间落库的写法：`头格:末格`（两数即精确位置，见 `carrier.SlotRange`）。
+
+    库里存文本而不是两列，是因为"一对格号"在 `ID` 里本来就是一个字段；
+    要还原成两列，等于把一个字段拆成两个列名。范围查询本来也不落在格号上
+    （位置只用于按主键定位），故这一层的取舍没有代价。
+    """
+    return f"{slot[0]}:{slot[1]}"
+
+
+def _slot_pair(text: object) -> tuple[int, int]:
+    """把库里的 `头格:末格` 还原成一对格号；写坏了即抛，不猜。"""
+    first, _, last = str(text).partition(":")
+    return (int(first), int(last))
+
+
 def _block_values(row: BlockRow) -> tuple[object, ...]:
     """块行写库时的参数顺序，与 `_BLOCK_COLUMNS` 逐一对应。"""
     return (
+        row.name,
         row.value_uuid,
         row.value_hash,
+        row.birth_time,
+        row.in_hub,
+        row.in_hub_pack,
+        _slot_text(row.in_pack_slot),
         row.body_value_uuid,
         row.body_value_hash,
         row.kind,
-        row.hub,
-        row.pack,
-        row.span.first,
-        row.span.last,
-        row.size,
-        row.birth_time,
-        row.created,
-        row.updated,
     )
 
 
 def _body_values(row: BodyRow) -> tuple[object, ...]:
     """内容行写库时的参数顺序，与 `_BODY_COLUMNS` 逐一对应。"""
     return (
+        row.name,
         row.value_uuid,
         row.value_hash,
-        row.hub,
-        row.pack,
-        row.span.first,
-        row.span.last,
-        row.size,
         row.birth_time,
-        row.created,
-        row.updated,
+        row.in_hub,
+        row.in_hub_pack,
+        _slot_text(row.in_pack_slot),
     )
 
 
 def _block(row: sqlite3.Row) -> BlockRow:
     """把一行读成块行。"""
     return BlockRow(
+        name=str(row["name"] or ""),
         value_uuid=str(row["value_uuid"]),
         value_hash=str(row["value_hash"]),
+        birth_time=int(row["birth_time"] or 0),
+        in_hub=str(row["in_hub"]),
+        in_hub_pack=str(row["in_hub_pack"]),
+        in_pack_slot=_slot_pair(row["in_pack_slot"]),
         body_value_uuid=str(row["body_value_uuid"] or ""),
         body_value_hash=str(row["body_value_hash"] or ""),
-        hub=str(row["hub"]),
-        pack=str(row["pack"]),
-        span=SlotRange(first=int(row["slot_first"]), last=int(row["slot_last"])),
-        size=int(row["size"]),
         kind=str(row["kind"] or ""),
-        birth_time=int(row["birth_time"] or 0),
-        created=int(row["created"] or 0),
-        updated=int(row["updated"] or 0),
     )
 
 
 def _body(row: sqlite3.Row) -> BodyRow:
     """把一行读成内容行。"""
     return BodyRow(
+        name=str(row["name"] or ""),
         value_uuid=str(row["value_uuid"]),
         value_hash=str(row["value_hash"]),
-        hub=str(row["hub"]),
-        pack=str(row["pack"]),
-        span=SlotRange(first=int(row["slot_first"]), last=int(row["slot_last"])),
-        size=int(row["size"]),
         birth_time=int(row["birth_time"] or 0),
-        created=int(row["created"] or 0),
-        updated=int(row["updated"] or 0),
+        in_hub=str(row["in_hub"]),
+        in_hub_pack=str(row["in_hub_pack"]),
+        in_pack_slot=_slot_pair(row["in_pack_slot"]),
     )
 
 
 def _hub(row: sqlite3.Row) -> HubRow:
     """把一行读成 hub 登记。"""
-    return HubRow(
-        name=str(row["name"]),
-        role=str(row["role"] or ""),
-        state=str(row["state"] or ""),
-        created=int(row["created"] or 0),
-    )
-
-
-def _edge(row: sqlite3.Row) -> EdgeRow:
-    """把一行读成关系边。"""
-    return EdgeRow(
-        id=str(row["id"]),
-        src=str(row["src_value_uuid"]),
-        dst=str(row["dst_value_uuid"]),
-        kind=str(row["kind"]),
-        domain=str(row["domain"] or ""),
-        created=int(row["created"] or 0),
-    )
+    return HubRow(name=str(row["name"]))
 
 
 __all__ = [
     "BLOCK_TABLE",
     "BODY_TABLE",
-    "DEFAULT_HUB_ROLE",
-    "DEFAULT_HUB_STATE",
-    "EDGE_TABLE",
     "HUB_TABLE",
     "BlockRow",
     "BodyRow",
-    "EdgeRow",
     "HubRow",
     "RebuildReport",
     "Rows",

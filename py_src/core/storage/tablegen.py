@@ -41,28 +41,19 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-#: 存储层看见的那几列：名字、类型、是否必填与说明。表与列的顺序即书写顺序。
-OBSERVATION_COLUMNS: tuple[tuple[str, str, bool, str], ...] = (
-    ("hub", "text", True, "所属 hub（目录名）"),
-    ("pack", "text", True, "载体文件名"),
-    ("slot_first", "integer", True, "起始格（两数格模型的第一个数字）"),
-    ("slot_last", "integer", True, "末格（闭区间上界）"),
-    ("size", "integer", True, "记录字节数，便于估算与巡检"),
-    ("created", "integer", False, "第一次落盘时刻（unix 毫秒）"),
-    ("updated", "integer", False, "最近一次改写时刻（unix 毫秒）"),
-)
-
 #: 指针里两列的固定顺序：分配形态在前（它是引用方第一眼要的那个），摘要在后。
 POINTER_COLUMNS: tuple[str, ...] = ("value_uuid", "value_hash")
 
 #: 类型标号那一列：只有块表有（内容记录没有类型，程序也不给它）。
-KIND_COLUMN = ("kind", "text", False, "类型标号；由程序给出，不在记录头里")
+#: 它是**记录自报**的（`record.KIND_KEY`），故来路是 `store` —— 顺扫即可还原，
+#: 索引里那一列只是它的投影（2026-09-30 定：索引只做索引，每一列都要能从载体算回来）。
+KIND_COLUMN = ("kind", "text", False, "类型标号；由记录自报，顺扫可还原")
 
-#: 没有类型标号的那张表（内容表）：它只承载身份与位置。
+#: 没有类型标号的那张表（内容表）：它只承载身份（含位置段）。
 _NO_KIND = frozenset({BODY_TABLE})
 
-#: **不由类型诞生**的那两张内核表：`hub` 的主语是载体目录、`edge` 的主语是关系本身。
-#: 它们照旧由声明层写死（这里就是那份声明），不与"类型反查"那条路混在一起。
+#: **不由类型诞生**的那张内核表：`hub` 的主语是载体目录。
+#: 它照旧由声明层写死（这里就是那份声明），不与"类型反查"那条路混在一起。
 KERNEL_EXTRA_TABLES: tuple[TableSpec, ...] = (
     TableSpec(
         name="hub",
@@ -74,21 +65,6 @@ KERNEL_EXTRA_TABLES: tuple[TableSpec, ...] = (
                 not_null=True,
                 doc="hub 名（目录名）",
             ),
-            column_of(
-                "role",
-                ColumnSource.STORED,
-                type=ColumnType.TEXT,
-                doc="主 hub / 短命 hub；短命 hub 为未来项",
-            ),
-            column_of(
-                "state", ColumnSource.STORED, type=ColumnType.TEXT, doc="登记状态；合并期为未来项"
-            ),
-            column_of(
-                "created",
-                ColumnSource.STORED,
-                type=ColumnType.INTEGER,
-                doc="第一次见到它的时刻（unix 毫秒）",
-            ),
         ),
         tier=Tier.DERIVED,
         owner="core",
@@ -96,37 +72,13 @@ KERNEL_EXTRA_TABLES: tuple[TableSpec, ...] = (
         doc="登记表：主语是载体目录、不是 ID；真源是目录本身",
         primary_key=("name",),
     ),
-    TableSpec(
-        name="edge",
-        columns=(
-            column_of(
-                "id",
-                ColumnSource.DIGEST,
-                type=ColumnType.TEXT,
-                not_null=True,
-                doc="边身份摘要（由下列各列算出）",
-            ),
-            reference_column("src", "value_uuid"),
-            reference_column("dst", "value_uuid"),
-            column_of(
-                "kind", ColumnSource.PROGRAM, type=ColumnType.TEXT, not_null=True, doc="关系种类"
-            ),
-            column_of("domain", ColumnSource.PROGRAM, type=ColumnType.TEXT, doc="所属领域"),
-            column_of(
-                "created", ColumnSource.STORED, type=ColumnType.INTEGER, doc="建立时刻（unix 毫秒）"
-            ),
-        ),
-        tier=Tier.DERIVED,
-        owner="core",
-        rebuild_from="关系数据落在块内时的块记录（设计篇 §8.2 注；归属待定）",
-        doc="关系表：一行一条；两端各指一个 ID，关系不需要第二种语法",
-        primary_key=("id",),
-        indexes=(
-            IndexSpec(columns=("src_value_uuid", "kind"), doc="出边（正向遍历）"),
-            IndexSpec(columns=("dst_value_uuid", "kind"), doc="反查（backlinks）"),
-        ),
-    ),
 )
+"""**不由类型诞生**的那张内核表：`hub` 的主语是载体目录，不是 ID，故照旧由声明层写死。
+
+**这里曾有一张 `edge`（关系索引）表，已删（2026-09-30）**：它零调用方，且形状是按
+"关系是一等 DB 行"那套设计的——而口径已经改成"关系由块表达、库只做索引"。
+关系落地时按那时的需要重新定索引形状，不在今天预埋（判据同上：没有调用方的结构即脚手架）。
+"""
 
 
 def type_tables(registry: Registry | None = None) -> tuple[TableSpec, ...]:
@@ -145,17 +97,18 @@ def type_tables(registry: Registry | None = None) -> tuple[TableSpec, ...]:
 def table_spec(decl: TypeDecl) -> TableSpec:
     """把一个类型登记算成一张表的声明。
 
-    列的顺序：身份列 → 指针列 → 类型标号 → 存储层的观测列。顺序即书写顺序，
-    故同一份登记每次算出来的文件逐字相同。
+    列的顺序：**身份列 → 指针列 → 类型标号**。身份列就是 `ID` 的全部字段
+    （`ID_FIELDS`：两套凭证、签发时刻、名字、位置段三列），顺序即 `ID` 的声明顺序。
+    故同一份登记每次算出来的文件逐字相同；位置段不再另立观测列——
+    "在哪儿"本来就是 ID 记的，库里的行只是它的镜像。
     """
     columns: list[Column] = [column_of(field, ColumnSource.IDENTITY) for field in decl.ids]
     columns.extend(_reference_columns(decl))
     if decl.table not in _NO_KIND:
         name, kind, not_null, doc = KIND_COLUMN
         columns.append(
-            column_of(name, ColumnSource.PROGRAM, type=_type_of(kind), not_null=not_null, doc=doc)
+            column_of(name, ColumnSource.STORED, type=_type_of(kind), not_null=not_null, doc=doc)
         )
-    columns.extend(_observation())
     return TableSpec(
         name=decl.table,
         columns=tuple(columns),
@@ -421,14 +374,6 @@ def _reference_columns(decl: TypeDecl) -> tuple[Column, ...]:
     )
 
 
-def _observation() -> tuple[Column, ...]:
-    """造出存储层看见的那几列。"""
-    return tuple(
-        column_of(name, ColumnSource.STORED, type=_type_of(kind), not_null=not_null, doc=doc)
-        for name, kind, not_null, doc in OBSERVATION_COLUMNS
-    )
-
-
 def _type_of(name: str) -> ColumnType:
     """中立类型名 → `ColumnType`；名字写错即报错（常量表写坏了要当场看得见）。"""
     try:
@@ -438,9 +383,9 @@ def _type_of(name: str) -> ColumnType:
 
 
 def kernel_declarations(registry: Registry | None = None) -> tuple[TableSpec, ...]:
-    """内核的**全部**表声明：类型派生的（`block` / `body`）＋ 不由类型诞生的（`hub` / `edge`）。
+    """内核的**全部**表声明：类型派生的（`block` / `body`）＋ 不由类型诞生的（`hub`）。
 
-    顺序确定（类型表按表名、补的那两张按声明顺序），故文件与库每次算出来都一样。
+    顺序确定（类型表按表名、补的那张按声明顺序），故文件与库每次算出来都一样。
     """
     return (*type_tables(registry), *KERNEL_EXTRA_TABLES)
 
@@ -455,7 +400,6 @@ def _registry(registry: Registry | None) -> Registry:
 __all__ = [
     "KERNEL_EXTRA_TABLES",
     "KIND_COLUMN",
-    "OBSERVATION_COLUMNS",
     "POINTER_COLUMNS",
     "kernel_declarations",
     "render",

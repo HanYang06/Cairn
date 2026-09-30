@@ -25,7 +25,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.clock import now_ms
 from core.event.catalog import OBJECT_DELETED, OBJECT_PUT
 from core.event.events import Event
 from core.exc import ObjectNotFoundError
@@ -44,6 +43,17 @@ if TYPE_CHECKING:
 
 ENGINE_SOURCE = "core.storage"
 """事件来源标识：存储引擎发出的通知都带它。"""
+
+
+def _place(identity: ID, hub: str, placement: Placement) -> None:
+    """把落盘后的物理坐标写回 ID 的位置段。
+
+    "在哪儿"是 ID 自己记的（`in_hub` / `in_hub_pack` / `in_pack_slot`），
+    行只是它的镜像——故这条路径是唯一的写入口：坐标先落在 ID 上，再由 ID 搬进索引库。
+    """
+    identity.in_hub = hub
+    identity.in_hub_pack = placement.pack
+    identity.in_pack_slot = (placement.span.first, placement.span.last)
 
 
 class Storage:
@@ -137,7 +147,7 @@ class Storage:
         body = self._index.rows.body(value_uuid)
         if body is None:
             raise ObjectNotFoundError(f"对象不在索引里: {value_uuid}")
-        return self._read_payload(body.hub, body.pack, body.span)
+        return self._read_payload(body.in_hub, body.in_hub_pack, body.span)
 
     def body(self, address: str) -> bytes:
         """按内容地址读回 body。
@@ -149,7 +159,7 @@ class Storage:
             ObjectNotFoundError: 没有哪一行指向这份内容。
         """
         for row in self._index.rows.bodies_by_hash(address):
-            payload = self._read_payload(row.hub, row.pack, row.span)
+            payload = self._read_payload(row.in_hub, row.in_hub_pack, row.span)
             if digest(payload) == address:
                 return payload
         raise ObjectNotFoundError(f"内容不在: {address}")
@@ -189,40 +199,40 @@ class Storage:
         """写内容记录，并把它落成一条内容行。"""
         raw = encode(body, data)
         placement: Placement = target.append(raw)
-        stamp = now_ms()
+        _place(body, target.name, placement)
         self._index.rows.put_body(
             BodyRow(
+                name=body.name,
                 value_uuid=body.value_uuid,
                 value_hash=body.value_hash,
-                hub=target.name,
-                pack=placement.pack,
-                span=placement.span,
-                size=len(raw),
                 birth_time=body.birth_time,
-                created=stamp,
-                updated=stamp,
+                in_hub=body.in_hub,
+                in_hub_pack=body.in_hub_pack,
+                in_pack_slot=body.in_pack_slot,
             )
         )
 
     def _write_block(self, target: Hub, block: ID, payload: bytes, *, kind: str, body: ID) -> None:
-        """写块记录，并把它落成一条块行（指针落成两列）。"""
-        raw = encode(block, payload)
+        """写块记录，并把它落成一条块行（指针落成两列）。
+
+        类型标号**写进记录本身**（`encode(..., kind=…)`），索引那一列是它的投影：
+        否则索引一重扫，全库的块就不知道自己是什么类型。
+        """
+        raw = encode(block, payload, kind=kind)
         placement: Placement = target.append(raw)
-        stamp = now_ms()
+        _place(block, target.name, placement)
         self._index.rows.put_block(
             BlockRow(
+                name=block.name,
                 value_uuid=block.value_uuid,
                 value_hash=block.value_hash,
+                birth_time=block.birth_time,
+                in_hub=block.in_hub,
+                in_hub_pack=block.in_hub_pack,
+                in_pack_slot=block.in_pack_slot,
                 body_value_uuid=body.value_uuid,
                 body_value_hash=body.value_hash,
-                hub=target.name,
-                pack=placement.pack,
-                span=placement.span,
-                size=len(raw),
                 kind=kind,
-                birth_time=block.birth_time,
-                created=stamp,
-                updated=stamp,
             )
         )
 

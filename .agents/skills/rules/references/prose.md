@@ -24,7 +24,7 @@ Issue / PR 描述、规则与记忆。日常讨论不限；**产品交付物不�
 
 ## 用词对照
 
-**词典本体在 `tools/prose.py` 的 `_LEXICON`（唯一事实来源）；本节只给判据与改写方向，
+**词典本体在 `scripts/prose.py` 的 `_LEXICON`（唯一事实来源）；本节只给判据与改写方向，
 不重复列出禁用词**——否则本节自身会被检查器命中（本文件受同一门禁约束）。
 
 改写方向，按类别：
@@ -49,12 +49,12 @@ Issue / PR 描述、规则与记忆。日常讨论不限；**产品交付物不�
 ## 怎么查（不靠自觉）
 
 ```powershell
-uv run python tools/prose.py            # 全仓检查；有命中即非零退出
-uv run python tools/prose.py docs src   # 只查指定目录
-uv run python tools/prose.py --list     # 打印词典
+uv run python scripts/prose.py            # 全仓检查；有命中即非零退出
+uv run python scripts/prose.py docs src   # 只查指定目录
+uv run python scripts/prose.py --list     # 打印词典
 ```
 
-- 工具是**词表驱动**的确定性检查：`tools/prose.py` 的 `_LEXICON` 就是标准本体。
+- 工具是**词表驱动**的确定性检查：`scripts/prose.py` 的 `_LEXICON` 就是标准本体。
   发现新的口语词**加进词典**，不要在文档里绕开它。
 - 扫描面：`.md` 全文 + `.py` 的 docstring 与注释（字符串字面量不查——那是给用户的界面文案）。
 - 排除面：生成物（`docs/api/`、`site/`）、第三方（`.agents/skills/skill-creator/`、

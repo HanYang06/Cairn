@@ -19,6 +19,7 @@ import pytest
 from core.exc import TableDeclarationError
 from core.storage import tablegen
 from core.storage.format.block import Block, Body, register_type
+from core.storage.format.id import ID_FIELDS
 from core.storage.index import Index
 from core.storage.registry import REGISTRY, TypeDecl
 from core.storage.tables import Declaration, kernel_tables, load_tables
@@ -26,8 +27,8 @@ from core.storage.tables import Declaration, kernel_tables, load_tables
 if TYPE_CHECKING:
     from pathlib import Path
 
-#: `id: ID` 那个字段落成的整整一套身份列。
-_IDENTITY = ("value_uuid", "value_hash", "birth_time", "name")
+#: `id: ID` 那个字段落成的整整一套身份列 = `ID` 的全部字段。
+_IDENTITY = ID_FIELDS
 
 
 def _registered(name: str) -> TypeDecl:
@@ -126,9 +127,9 @@ def test_re_registering_the_same_shape_is_a_replay():
 
 
 def test_registration_rejects_an_unbindable_field():
-    """登记的 ID 字段必须在落盘子集里（设计篇 §3.5）。"""
+    """登记的只能是 `ID` 的字段：别处来的名字绑不成列（设计篇 §3.5）。"""
     with pytest.raises(TableDeclarationError, match="绑不成"):
-        TypeDecl(name="X", table="x", ids=("value_uuid", "in_hub"))
+        TypeDecl(name="X", table="x", ids=("value_uuid", "checksum"))
 
 
 def test_registration_requires_the_key_field():
@@ -146,27 +147,23 @@ def test_registration_rejects_a_ref_without_a_target():
 # ---- 表形状：登记算出列与主键 ----
 
 
-def test_a_registered_type_gets_a_table_with_identity_pointer_and_observation_columns():
-    """一个类型的表 = 身份列 ＋（指针两列）＋ 类型标号 ＋ 存储观测列。"""
+def test_a_registered_type_gets_a_table_of_the_id_fields_pointer_and_kind():
+    """一个类型的表 = `ID` 的全部字段 ＋（指针两列）＋ 类型标号：行是 ID 的镜像。"""
     spec = tablegen.table_spec(_registered("Block"))
 
     assert spec.name == "block"
     assert spec.primary_key == ("value_uuid",)
     assert spec.column_names() == (
+        "name",
         "value_uuid",
         "value_hash",
         "birth_time",
-        "name",
+        "in_hub",
+        "in_hub_pack",
+        "in_pack_slot",
         "body_value_uuid",
         "body_value_hash",
         "kind",
-        "hub",
-        "pack",
-        "slot_first",
-        "slot_last",
-        "size",
-        "created",
-        "updated",
     )
 
 
@@ -197,12 +194,12 @@ def test_reference_columns_carry_the_body_prefix():
     assert len(names) == len(set(names)), "列名不许撞"
 
 
-def test_observation_columns_are_not_null_except_the_two_timestamps():
-    """观测列里只有两个时刻可空：位置与大小没有值，那一行就没有意义。"""
+def test_only_the_three_optional_id_fields_may_be_empty():
+    """可空的只有"未绑定内容"那三个字段：位置段没有值，那一行就没有意义。"""
     spec = tablegen.table_spec(_registered("Body"))
     nullable = {column.sql_name for column in spec.columns if not column.not_null}
 
-    assert nullable == {"value_hash", "birth_time", "name", "created", "updated"}
+    assert nullable == {"value_hash", "birth_time", "name"}
 
 
 def test_a_dangling_reference_is_refused():
@@ -229,7 +226,7 @@ def test_generating_a_file_from_nothing(tmp_path: Path):
     assert "这份文件由代码写出来" in text
 
     names = [table.name for table in load_tables(target)]
-    assert names == ["block", "body", "hub", "edge"]
+    assert names == ["block", "body", "hub"]
 
 
 def test_a_registered_type_is_written_into_the_file(tmp_path: Path):
@@ -281,7 +278,7 @@ def test_tables_are_separated_by_a_blank_line(tmp_path: Path):
 
     assert blocks[0].startswith("# SPDX-FileCopyrightText"), "第一段是文件头"
     assert all(block.startswith("- name: ") for block in blocks[1:]), "其后每段一张表"
-    assert len(blocks) == 5, "四张内核表加文件头"
+    assert len(blocks) == 4, "三张内核表加文件头"
     assert "\n\n\n" not in text, "不许多空一行"
 
 
@@ -315,7 +312,7 @@ def test_a_new_column_is_appended_to_an_existing_table(tmp_path: Path):
 
     # 代码侧多出一列：把 `kind` 从声明文件里删掉，引擎下一轮应当把它补回来
     trimmed = grown.replace(
-        "    - { name: kind, from: prog, type: text, doc: 类型标号；由程序给出，不在记录头里 }\n",
+        "    - { name: kind, from: store, type: text, doc: 类型标号；由记录自报，顺扫可还原 }\n",
         "",
         1,
     )
@@ -393,7 +390,7 @@ def test_the_index_is_built_from_the_registered_types(tmp_path: Path):
     declaration = Declaration(kernel_tables())
 
     with Index.open(tmp_path / "catalog.db", declaration, create=True) as index:
-        assert index.tables() == ("block", "body", "edge", "hub", "meta")
+        assert index.tables() == ("block", "body", "hub", "meta")
 
 
 def test_a_fresh_type_becomes_a_table_in_the_database(tmp_path: Path):

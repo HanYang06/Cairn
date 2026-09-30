@@ -28,16 +28,16 @@ SPDX-License-Identifier: Apache-2.0
 
 | 层 | 手段 |
 |---|---|
-| **写** | `uv run python tools/spdx.py --fix`（pre-commit 钩子已挂，会自动补） |
-| **查** | `uv run python tools/spdx.py --check`（缺头 / 年份错 / `SKILL.md` 少 `license:` 即非零退出） |
+| **写** | `uv run python scripts/spdx.py --fix`（pre-commit 钩子已挂，会自动补） |
+| **查** | `uv run python scripts/spdx.py --check`（缺头 / 年份错 / `SKILL.md` 少 `license:` 即非零退出） |
 | **兜底** | 根 `REUSE.toml` 集中声明装不下头的文件（图片 / JSON / 锁文件 / 法律文书 / vendored） |
 
 - **不手抄**：新文件让钩子补。钩子补完会**非零退出**（它把"改动了文件"也当失败），
   重新 `git add` 再提交即可。
-- **新增文件类型时**：能写注释 → 加进 `tools/spdx.py` 的 `_COMMENT_STYLES`
+- **新增文件类型时**：能写注释 → 加进 `scripts/spdx.py` 的 `_COMMENT_STYLES`
   （无扩展名的按 `_NAMED_STYLES` 认领）；装不下 → 加进 `REUSE.toml`。两条都不走，`--check` 会报"未归类"。
 - **不引入 `reuse` CLI**：`fsfe/reuse-tool` 是 GPL-3.0-or-later，撞红线；
-  我们只采用它定义的 `REUSE.toml` **数据格式**，读写由 `tools/spdx.py` 自己实现。
+  我们只采用它定义的 `REUSE.toml` **数据格式**，读写由 `scripts/spdx.py` 自己实现。
 
 ## 3. 分层边界（别越界）
 
@@ -66,9 +66,12 @@ core(L0)  ←  feature(L3)  ←  app(组合根)
 
 ## 5. 质量门禁（企业级-ε）
 
-- `mypy strict`（覆盖 `src` + `tools`）、`ruff select=ALL` + 逐条有理由的 ignore、`ruff format` 强制。
+- `mypy strict`（覆盖 `py_src` + `tools`）、`ruff select=ALL` + 逐条有理由的 ignore、`ruff format` 强制。
 - **warning 零容忍**（pytest `filterwarnings = ["error"]`）；覆盖率行 + 分支 **≥ 80%**。
-- 提交前：`ruff → mypy → pytest`；pre-commit：SPDX → ruff → mypy。
+- **提交前一条命令跑完**：`uv run pre-commit run --all-files`（11 个钩子，清单与判据见
+  `rules/references/quality.md` §4）。**钩子必须先装**：
+  `uv run pre-commit install --hook-type pre-commit --hook-type commit-msg`；
+  不装时配置文件在、门禁不跑。
 
 ## 6. 文档与提交
 

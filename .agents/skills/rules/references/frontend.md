@@ -68,11 +68,13 @@
 | 样式令牌 | `pnpm check:css` | `stylelint`，禁字面量样式值 |
 | 架构边界 | `pnpm check:arch` | `depcruise`：无环 + Tauri API 单一咽喉 |
 | 令牌防漂移 | `pnpm check:tokens` | `gen-tokens.mjs --check` |
+| 重复代码 | `pnpm check:dup` | `jscpd`，阈值 10%（**报告模式**：先跑一段，看过实际比例再收紧） |
 | 单测 | `pnpm check:test` | `vitest run` |
 | 依赖 | `pnpm install --frozen-lockfile` | 锁文件即事实源 |
 
-**接线位置**（两边都要）：`pre-commit` 的 `frontend` 钩子（`apps: app`，只在前端文件被改动时跑）、
+**接线位置**（两边都要）：`pre-commit` 的 `frontend` 钩子（`files: ^app/`，只在前端文件被改动时跑）、
 `.github/workflows/ci.yml` 的 `web` job（`pnpm install --frozen-lockfile` → `pnpm check`）。
+**钩子须先安装才生效**：`uv run pre-commit install --hook-type pre-commit --hook-type commit-msg`。
 
 **门禁与人的关系**：规矩不靠自觉，靠上面这张表；表里没有的规矩不要写在别处。
 

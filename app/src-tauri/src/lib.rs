@@ -10,11 +10,17 @@
 //! 现状：**边车与转发口尚未实现**（脚手架演示命令已清掉）。接法见
 //! `.agents/skills/memory/references/decisions/界面.md` §二。
 
+mod system_fonts;
+
 /// 启动桌面外壳。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_system_fonts::init())
+        .invoke_handler(tauri::generate_handler![
+            system_fonts::list_system_fonts
+        ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
 }

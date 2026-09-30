@@ -45,6 +45,9 @@ site/
 # 本地工具
 .workbuddy/
 
+# 并排设计稿（仿真件：只用来定方向，不入库、不进门禁；口径落在 docs/architecture/by-design.md）
+.design-lab/
+
 # 本地数据 / 密钥
 .env
 *.local

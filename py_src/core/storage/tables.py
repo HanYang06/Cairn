@@ -78,22 +78,28 @@ class ColumnSource(Enum):
     """程序给的列：写的时候由程序给出，记录头里没有（如 `kind`）。"""
 
     REFERENCE = "ref"
-    """引用列：值是**另一个 ID**（关系表的端点），不是本行主语的字段。"""
+    """引用列：值是**另一个 ID** 的字段（指向别处），不是本行主语的字段。"""
 
     DIGEST = "digest"
-    """派生列：由本表其它列算出的摘要（如边身份 `edge.id`）。"""
+    """派生列：由本表其它列算出的摘要。**内核当前无实例**，词汇留给域表。"""
 
 
 #: 能从载荷指针里取到的字段：指针只承载两套凭证（设计篇 §3.2.1）
 #: 能绑成列的 ID 字段与「能依赖默认为空」的判据都在登记层（`registry.py`）；
 #: 它们对全部表一视同仁——**不再有身份表那种特例**（名字是表的坐标，不是行里的判别列）。
 
-#: 绑定列的类型由 `ID` 的字段推出（设计篇 §3.2），声明里不写
+#: 绑定列的类型由 `ID` 的字段推出（设计篇 §3.2），声明里不写。
+#: 这张表**必须覆盖 `ID` 的全部字段**：缺一个，`Column` 的校验就会在开库时抛。
+#: 位置段三列中，前两列就是目录名与载体名；`in_pack_slot` 是格区间，
+#: 库里写成 `头格:末格`（见 `rows.py` 的换写），故也是文本。
 _COLUMN_TYPE_OF_ID: dict[str, ColumnType] = {
     "name": ColumnType.TEXT,
     "value_uuid": ColumnType.TEXT,
     "value_hash": ColumnType.TEXT,
     "birth_time": ColumnType.INTEGER,
+    "in_hub": ColumnType.TEXT,
+    "in_hub_pack": ColumnType.TEXT,
+    "in_pack_slot": ColumnType.TEXT,
 }
 
 #: 绑定到别处的指针时，只能带两套凭证中那两种列名里的字段
@@ -895,7 +901,7 @@ def load_tables(path: Path | None = None) -> tuple[TableSpec, ...]:
 
 
 def kernel_tables() -> tuple[TableSpec, ...]:
-    """内核的**全部**表声明：类型派生的（`block` / `body`）＋ 不由类型诞生的（`hub` / `edge`）。
+    """内核的**全部**表声明：类型派生的（`block` / `body`）＋ 不由类型诞生的（`hub`）。
 
     **不再读文件**：文件是这条路的投影，不是它的入口。谁用了 ID，谁就在登记表里
     （`Body` → `body`、`Block` → `block`），故这里问登记表即可——于是"表会自己诞生"

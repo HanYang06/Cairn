@@ -5,10 +5,10 @@
 #
 # 它只负责一类文件：**装不下内联 SPDX 头的**——二进制素材、JSON（没有注释语法）、
 # 锁文件与生成物、法律文书本身、以及第三方 vendored 技能。
-# 能写内联头的源文件 / 文档仍写内联头，由 `tools/spdx.py` 负责插入与检查。
+# 能写内联头的源文件 / 文档仍写内联头，由 `scripts/spdx.py` 负责插入与检查。
 #
 # 注意：`reuse` 那个 CLI 工具本体是 GPL-3.0-or-later，与本项目红线冲突，故**不引入**；
-# 这里采用的只是它定义的**数据格式**，由本仓库自己的 `tools/spdx.py` 读写。
+# 这里采用的只是它定义的**数据格式**，由本仓库自己的 `scripts/spdx.py` 读写。
 
 version = 1
 
@@ -24,10 +24,10 @@ SPDX-FileCopyrightText = "2026 HanYang06"
 SPDX-License-Identifier = "Apache-2.0"
 
 # —— 工具与生成物：库锁、Python 版本、文档站构建产物 ——
-# `.gitignore` / `.gitattributes` / `.editorconfig` 能写 `#` 注释，故仍写内联头（由 tools/spdx.py
+# `.gitignore` / `.gitattributes` / `.editorconfig` 能写 `#` 注释，故仍写内联头（由 scripts/spdx.py
 # 按文件名认领并校验），不进这份清单。
 # `site/**` 是 `mkdocs build` 的产物（已 gitignore）；这里声明只是兜底——
-# `tools/spdx.py` 走 `git ls-files`，本来就不会把它算进"无主文件"。
+# `scripts/spdx.py` 走 `git ls-files`，本来就不会把它算进"无主文件"。
 [[annotations]]
 path = [
   "uv.lock",
@@ -43,9 +43,16 @@ path = [".fileTemplates.json"]
 SPDX-FileCopyrightText = "2026 HanYang06"
 SPDX-License-Identifier = "Apache-2.0"
 
+# —— 文档里的截图（装不下内联头）——
+# 手写文档在 `docs/**/*.md`，走内联头；文档配的位图（如窗口截图）走这里。
+[[annotations]]
+path = ["docs/**/*.png", "docs/**/*.jpg", "docs/**/*.webp"]
+SPDX-FileCopyrightText = "2026 HanYang06"
+SPDX-License-Identifier = "Apache-2.0"
+
 # —— 桌面外壳工程（`app/`）：装不下内联头的那些 ——
 # 本项目的工程文件（JSON / 数据格式 / 锁文件）与自有图形资源。
-# 前端源码本身（`.tsx` / `.ts` / `.css`）与 Rust（`.rs`）走内联头，由 `tools/spdx.py` 校验。
+# 前端源码本身（`.tsx` / `.ts` / `.css`）与 Rust（`.rs`）走内联头，由 `scripts/spdx.py` 校验。
 [[annotations]]
 path = [
   "app/package.json",
@@ -56,6 +63,7 @@ path = [
   "app/.vscode/**",
   "app/src/assets/**",
   "app/src-tauri/Cargo.toml",
+  "app/src-tauri/Cargo.lock",
   "app/src-tauri/tauri.conf.json",
   "app/src-tauri/capabilities/**",
 ]

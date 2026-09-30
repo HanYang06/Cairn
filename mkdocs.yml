@@ -64,6 +64,7 @@ nav:
       - 内嵌资源: architecture/access.md
       - UI 内核: architecture/ui-kernel.md
       - UI 主题: architecture/ui-theme.md
+      - 设计档案: architecture/by-design.md
       - 网络与联邦: architecture/network.md
       - 生态与插件: architecture/ecosystem.md
       - 内核 M1 计划: architecture/kernel-m1-plan.md

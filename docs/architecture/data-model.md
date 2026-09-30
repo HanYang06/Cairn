@@ -34,7 +34,8 @@
    **内容**（字节）进**内容记录**（载荷即 body，身份按内容签发，故同内容只存一份）；
    **描述**（标题 / 标签 / 签名）**当前尚未落地**——块的属性面随领域层重建再长，
    将来的口径是随块记录存、不参与去重；
-   **结构**（关系）落**索引库的 `edge` 表**，可查询 / join。
+   **结构**（关系）**由块自己表达**（块说它有哪些关系），库只做索引——
+   关系索引尚未设计，**不预埋**（2026-09-30 定：没有调用方的结构就是脚手架）。
 
 > 判据仍是三关（见 §1）：性能、存储利用率、综合（并发 / 安全 / 扩展）。
 
@@ -45,18 +46,17 @@ graph TD
     N["notedata<br/>正文 = 行序列 + 行内区间样式"]
     C["canvas<br/>画板：模式 + 图形 + 连线（数值）"]
     A["asset<br/>二进制：图 / 声 / 视频 / 文件"]
-    P["projectdata<br/>具名容器，成员走 contains 关系"]
-    R["relations 表（不是块）<br/>src --kind--> dst"]
+    P["projectdata<br/>具名容器，成员由块表达"]
     N -. "canvas: [oid] / 占位" .-> C
     N -. "access: [oid] / 占位" .-> A
-    P -. "contains（DB 行）" .-> N
-    N -. "references / derived-from（DB 行）" .-> N
+    P -. "contains（由块表达）" .-> N
+    N -. "references / derived-from（由块表达）" .-> N
 ```
 
 - `note`：正文 = 有序行序列；画板 / 多媒体以**引用 + 占位**嵌入，不复制内容。
 - `canvas`：升格为**全局内容类型**（`canvas`），内容寻址、全局去重；note 用 oid 引用。
 - `asset`：二进制内容，只被引用、永不嵌套；入库先转码（草案，见 §5.3）。
-- `project`：具名容器；**成员不是塞进结构，而是 DB 里的关系行**。
+- `project`：具名容器；**成员由块自己表达**（关系索引未设计，见 §0 与存储设计篇 §12）。
 - 内部还有 `part` / `index`：大内容的分片与索引块，见 §6.3。
 
 ### 0.3 阅读路径
@@ -89,15 +89,15 @@ graph TD
 | hub | hub | `<root>/<hub>/`：装若干载体；hub 名即地址（目录名） |
 | 载体 | Pack | 追加写的载体文件，**定长格**、记录自框定；写满即封口 |
 | 块 | Block | 存储单元：当前实现只有 `id` ＋ `body`；落盘成**两条记录**（内容 ＋ 块） |
-| 索引库 | Index | `<root>/catalog.db`：hub 登记、身份到位置、关系边；**可重建的投影** |
+| 索引库 | Index | `<root>/catalog.db`：hub 登记、身份到位置；**可重建的投影** |
 | 身份 | `ID` | 两套凭证：`value_uuid`（`uuid4`，比较有效）与 `value_hash`（`sha256`，去重有效）。**身份 ≠ 内容** |
 | 地址 | address | 由 body 内容算出的确定性摘要（`sha256` 十六进制）；即摘要形态 |
 | checksum | — | 记录头里的载荷摘要（与身份摘要同源）；块记录载荷里的指针（`body_ref`）指向它 |
-| type | — | 块类型（短名），如 `notedata`：由**程序**给出，落索引库的 `kind` 列，不落盘 |
+| type | — | 块类型（短名），如 `notedata`：写时由程序给出，**随记录落盘**，索引库的 `kind` 列是它的投影 |
 | body | — | 块的主体内容，进**内容记录**（同内容只存一份） |
 | attrs | — | 块的描述字段（标题 / 标签 / 签名）：**当前未落地**，随领域层重建再长 |
 | config | — | 写入配置：**未落地**（旧 pack 那套语义已退役） |
-| 关系 | edge | 一等 DB 行：`src --kind--> dst`，**不是块**（表名 `edge`） |
+| 关系 | relation | **由块自己表达**（块说它有哪些关系）；库只做索引，索引未设计、不预埋 |
 | 行 | line | 笔记正文的一个元素（一行 / 一块），带稳定行 id |
 | 区间样式 | range style | 行内 `[start, end)` 的样式覆盖层 |
 | 分片 / 索引块 | part / index | 大内容切成的块 + 聚合成一个可引用 id 的索引块（**预留**，尚未接进块面） |
@@ -142,12 +142,12 @@ note ──relation(DB)──► project / note
 | | 内容 | 描述 | 结构 |
 |---|---|---|---|
 | 是什么 | 字节流：正文、画板、图片 | 标题、标签、签名、`props` | 关系（成员 / 引用 / 派生） |
-| 载体 | 内容记录（载荷即 body，按内容地址去重） | 块记录（**当前只有指向 body 的指针**；属性面待领域层） | 索引库的 `edge` 表 |
+| 载体 | 内容记录（载荷即 body，按内容地址去重） | 块记录（**当前只有指向 body 的指针**；属性面待领域层） | **块自己表达**（索引待设计，未预埋） |
 | 为什么 | 去重 / 传输 / 随机读 | 随块读写、不进内容面 | 索引 / 约束 / join |
 | 例 | `note.body` / `asset.body` | `title` / `tags` / `signature` | `contains` / `references` / `derived-from` |
 
-> 旧稿的 "结构数据全部进 DB" 已收窄：**只有关系进 DB**；标签 / 属性将来的口径是随块记录存，
-> **当前尚未落地**（见 §0 的现状提示）。
+> 旧稿的 "结构数据全部进 DB" **已作废**（2026-09-30）：**关系由块表达，库只做索引**；
+> 标签 / 属性将来的口径是随块记录存，**当前尚未落地**（见 §0 的现状提示）。
 
 ### 4.3 type → 承载 映射（一张表，禁止造第二套类型系统）
 
@@ -160,7 +160,7 @@ note ──relation(DB)──► project / note
 | `group` | 裸 body（默认空） | 组：`gid` 域身份 + 有序子项 ID 列表（笔记 / 项目 / 组），可嵌套 |
 | `block` | 裸 body | 未登记 `type` 的兜底裸块 |
 | `part` / `index` | 裸 body | 内部分片 / 索引块（不做块级去重） |
-| —（不是块） | — | 关系：`relations` 表的一行 |
+| —（不是块） | — | 关系**不是一种块型**：它由块自己表达（索引未设计） |
 
 > `composition`（文档 / 博客）**不再是独立类型**：它就是"正文里放一堆引用"的 note，属于角色差异而非新物种。
 
@@ -240,7 +240,8 @@ CanvasBody = { "m": mode, "g": [图形序列...], "l": [连线序列...] }
 - **组是块**：有自己的稳定域 ID **`gid`**（与块的存储身份 `oid` **分开**）与 `title` / `lock`。
 - **`group: list[str]`**：有序子项 ID 列表，装笔记 / 项目 / **组**——组存 `gid`，其余存 `oid`；
   顺序即显示顺序，可无限嵌套。
-- **两套归属都存**：`group` 列表存**结构**（顺序），`relations` 表存 `contains` 关系（**反查**某块在哪些组）。
+- **两套归属都存**：`group` 列表存**结构**（顺序），而"某块在哪些组"靠**反查索引**——
+  关系由块表达、索引尚未设计（见 §0 与存储设计篇 §12），故这一条是**意图，不是现状**。
 - `lock`：锁定后不可增删成员。`owner` / `member`：社区「有限编辑组」预埋（`User` 系统落地前用字符串）。
   `key`：访问口令，非空则进组要密码（是口令，不是加密）。
 - 组不承载版本；`checksum = body_hash`（body 为空，故组间共享空内容，属预期）。
@@ -288,16 +289,23 @@ Block:
 ### 6.4 索引库（catalog.db，可重建的投影）
 
 ```sql
-hub(name PK, role, state, created)                          -- hub 登记（真源是 hub 目录）
-block(value_uuid PK, value_hash, birth_time, name,
-      body_value_uuid, body_value_hash, kind,
-      hub, pack, slot_first, slot_last, size, created, updated)
-body(value_uuid PK, value_hash, birth_time, name,
-     hub, pack, slot_first, slot_last, size, created, updated)
-edge(id PK, src_value_uuid, dst_value_uuid, kind, domain, created)   -- 关系边
+hub(name PK)                                                -- hub 登记（真源是 hub 目录；只记名字）
+block(name, value_uuid PK, value_hash, birth_time,
+      in_hub, in_hub_pack, in_pack_slot,                    -- 身份列 = ID 的全部字段
+      body_value_uuid, body_value_hash, kind)               -- 指向别处 + 类型标号
+body(name, value_uuid PK, value_hash, birth_time,
+     in_hub, in_hub_pack, in_pack_slot)                     -- 内容记录：只有身份列
 meta(name PK, value)                                        -- 声明投影（开库时比对）
--- 领域业务表（如 relation）由领域经 Storage.table() 建，落同一个库
+-- 索引库当前就这三张业务表 + meta。关系索引**尚未设计**（不预埋）；
+-- 将来真有域表，同样经声明层建，落同一个库。
 ```
+
+- **身份表里的行是 `ID` 的镜像**：`ID` 的字段有几项，表里就有几列（列名与顺序都照搬，
+  含位置段三列）；表与 `ID` 之间不再有人手维护的"子集"。位置段中 `in_pack_slot`
+  （一对格号）落库为文本 `头格:末格`。
+- **索引只做索引**（2026-09-30 裁定）：库里每一个值都要能从载体算回来。故 `kind`
+  （类型标号）随记录落盘、`name` / `birth_time` 也在记录里；位置段是唯一"索引存、记录不存"的一段，
+  因为记录被扫到时它在哪里已经由扫的动作给出。
 
 - **表结构由声明给出**（本体在 `config/tables.yaml`，由类型登记现算写出），
   源码内不出现建表语句；开库时对比 → 分类 → 处置，破坏性变更默认拒绝（设计篇 §8.4、§8.2.1）。

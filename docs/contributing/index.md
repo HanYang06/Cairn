@@ -21,7 +21,9 @@ Cairn 尚在早期，**提交前请先读**「[约定与红线](../guides/conven
 
 - **commit message 用中文 + Conventional Commits**：`feat(core): …` / `fix(ui): …` / `docs: …`。
 - **只有维护者明确要求时才 commit**；不要自作主张提交。
-- 提交前跑：`ruff → mypy → pytest`（pre-commit 已挂 SPDX → ruff → mypy）。
+- 提交前跑：`uv run pre-commit run --all-files`（11 个钩子，清单见
+  `rules/references/quality.md` §4）。**钩子需先装**：
+  `uv run pre-commit install --hook-type pre-commit --hook-type commit-msg`。
 - CI（`.github/workflows/ci.yml`）会再跑一遍全量门禁，含覆盖率 ≥ 80%。
 
 ## 报告问题

@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: 2026 HanYang06
+# SPDX-License-Identifier: Apache-2.0
+#
+# 依赖更新机器人。
+#
+# 分工：**Dependabot 负责"版本更新"与"告警"，CI 里的 audit 负责"构建时阻断"**
+# （`pip-audit` / `pnpm audit`，见 `.github/workflows/ci.yml` 的 security-scan）。
+# 两者都要：前者让依赖保持新，后者让"不新"这件事在合并前就拦下。
+#
+# 两个要点：
+# · `uv` 是 Dependabot 的独立生态（不只是 `pip`）：它会连 `uv.lock` 一起更新，
+#   这正是本仓"锁文件即事实源"需要的。见 https://docs.astral.sh/uv/guides/integration/dependabot/
+# · `github-actions` 那条与工作流里**按 SHA 钉住**配套：钉住才不会被上游偷偷换代码，
+#   而 Dependabot 负责在**有意的**版本更新时把 SHA 与注释一起抬上去。
+
+version: 2
+
+updates:
+  # Python：`pyproject.toml` + `uv.lock`（uv 生态，不是 pip）。
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      # 开发工具扎堆更新，避免一个工具一条 PR。
+      dev-tools:
+        patterns:
+          - "pytest*"
+          - "ruff"
+          - "mypy"
+          - "mkdocs*"
+          - "mkdocstrings*"
+          - "deptry"
+          - "import-linter"
+          - "pip-audit"
+          - "pre-commit"
+
+  # 前端：`app/package.json` + `pnpm-lock.yaml`。
+  - package-ecosystem: "npm"
+    directory: "/app"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      tooling:
+        patterns:
+          - "vite"
+          - "vitest"
+          - "@biomejs/*"
+          - "stylelint*"
+          - "typescript"
+          - "jscpd"
+          - "dependency-cruiser"
+
+  # 壳：`app/src-tauri/Cargo.toml` + `Cargo.lock`。
+  - package-ecosystem: "cargo"
+    directory: "/app/src-tauri"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      tauri:
+        patterns:
+          - "tauri"
+          - "tauri-*"
+
+  # 工作流里钉住的那些 action：让 SHA 与注释随上游发布一起抬。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"

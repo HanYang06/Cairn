@@ -37,7 +37,7 @@ def test_create_builds_a_vault(tmp_path: Path):
     with Kernel.create(tmp_path / "vault") as kernel:
         assert kernel.catalog_path.exists()
         assert kernel.catalog_path.name == CATALOG_FILENAME
-        assert kernel.index.tables() == ("block", "body", "edge", "hub", "meta")
+        assert kernel.index.tables() == ("block", "body", "hub", "meta")
         assert kernel.policy == PackPolicy()
 
 
@@ -72,7 +72,7 @@ def test_store_and_load_through_the_kernel(tmp_path: Path):
         assert kernel.load(block.value_uuid) == b"through the kernel"
         row = kernel.locate(block.value_uuid)
         assert row is not None
-        assert row.hub == "main"
+        assert row.in_hub == "main"
         assert row.kind == "notedata"
         assert kernel.patrol().clean
 
@@ -86,7 +86,7 @@ def test_named_hub_is_created_and_registered(tmp_path: Path):
         assert kernel.index.rows.hub("side") is not None
         row = kernel.locate(block.value_uuid)
         assert row is not None
-        assert row.hub == "side"
+        assert row.in_hub == "side"
         assert kernel.patrol().clean
 
 

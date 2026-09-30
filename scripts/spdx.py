@@ -13,9 +13,9 @@
 
 用法：
 
-    uv run python tools/spdx.py --check                     # 门禁（默认行为）
-    uv run python tools/spdx.py --fix                       # 补插；改动了就非零退出
-    uv run python tools/spdx.py --check README.md README2.md  # 只看指定文件
+    uv run python scripts/spdx.py --check                     # 门禁（默认行为）
+    uv run python scripts/spdx.py --fix                       # 补插；改动了就非零退出
+    uv run python scripts/spdx.py --check README.md README2.md  # 只看指定文件
 """
 
 from __future__ import annotations

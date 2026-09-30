@@ -6,17 +6,26 @@ name: ci
 on:
   push:
   pull_request:
+  # 手动重跑全量安全扫描（security-scan 只在这条与 push 上跑）。
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# 输出编码统一 UTF-8。Windows runner 的 stdout 默认不是 UTF-8（cp1252 / cp936），
+# 而 `lint-imports` 的**报告里含中文契约名**，打印即 `UnicodeEncodeError: 'charmap'`
+# （实测：`PYTHONIOENCODING=cp1252 uv run lint-imports` 可逐字复现）。
+# 放 job 级看不了整段，故提到 workflow 级，两条 job 同享。
+env:
+  PYTHONIOENCODING: utf-8
 
 jobs:
   quality:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           python-version: "3.13"
           enable-cache: true
@@ -25,24 +34,29 @@ jobs:
         run: uv sync
 
       - name: License headers (SPDX)
-        run: uv run python tools/spdx.py --check
+        run: uv run python scripts/spdx.py --check
 
       # 书面语：文档 / 注释一律非口语化，**阻断式**（全仓已清零）。标准见 rules/references/prose.md，
-      # 词典本体在 tools/prose.py；行首三叹号是 MkDocs admonition 语法，词典已按位置排除。
+      # 词典本体在 scripts/prose.py；行首三叹号是 MkDocs admonition 语法，词典已按位置排除。
       - name: Prose check (书面语)
-        run: uv run python tools/prose.py
+        run: uv run python scripts/prose.py
+
+      # 标点：注释与 docstring 用半角标点（中英混排）。当前是**报告模式**，
+      # 全仓命中数还很大（约 5300 处），看过一轮再改成阻断。口径见 scripts/punct.py。
+      - name: Punct check (半角标点 · 报告模式)
+        run: uv run python scripts/punct.py --report
 
       # 配置投影（config/settings.json 与 config/schema/settings.json）**没有生成脚本**：
       # 跑一遍程序就顺带生成，入库的产物与声明是否分叉由 pytest 的投影契约用例拦住
       # （`tests/core/test_conf_projection.py`）。详情见 docs/architecture/config.md。
 
       - name: Generated config reference (no drift)
-        run: uv run python tools/docgen.py --check
+        run: uv run python scripts/docgen.py --check
 
       # 报告模式：`DOCSTRING_MIN` 是既定阈值，但当前覆盖率未达标，故不阻断。
       # 达标后把这一步改成 `docgen.py --coverage --gate` 即成为门禁（与 prose 步同款两段式）。
       - name: Docstring coverage report (报告模式)
-        run: uv run python tools/docgen.py --coverage
+        run: uv run python scripts/docgen.py --coverage
 
       - name: Lint (ruff)
         run: uv run ruff check .
@@ -50,13 +64,26 @@ jobs:
       - name: Format check (ruff)
         run: uv run ruff format --check .
 
+      # 依赖盘点：拦"声明了却一处没用"与"用了却没声明"。已知的未接线依赖冻结在
+      # `pyproject.toml` 的 `[tool.deptry.per_rule_ignores]`，故新增的才会红。
+      - name: Dependency check (deptry)
+        run: uv run deptry .
+
+      # 架构校验：core 是底座（不许依赖上层）、且必须 Qt-free。
+      # 契约写在 `pyproject.toml` 的 `[tool.importlinter]`。
+      - name: Architecture check (import-linter)
+        run: uv run lint-imports
+
+      - name: Lockfile check
+        run: uv lock --check
+
       - name: Type check (mypy strict)
-        run: uv run mypy py_src tools tests
+        run: uv run mypy py_src tools scripts tests
 
       - name: Tests with coverage gate
         run: uv run pytest --cov-fail-under=80
 
-  # 前端门禁：与上面那组（Python 七道）同等地位。规矩与门禁的对照表见
+  # 前端门禁：与上面那组（Python 十道）同等地位。规矩与门禁的对照表见
   # `.agents/skills/rules/references/frontend.md` §四；入口只有一个 `pnpm check`。
   web:
     runs-on: ubuntu-latest
@@ -64,13 +91,13 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.1.0
         with:
           version: 12
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
@@ -79,5 +106,70 @@ jobs:
       - name: Install (lockfile 即事实源)
         run: pnpm install --frozen-lockfile
 
-      - name: Checks (类型 / lint / 样式 / 架构 / 令牌 / 单测)
+      - name: Checks (类型 / lint / 样式 / 架构 / 令牌 / 重复代码 / 单测)
         run: pnpm check
+
+  # ---- 安全：依赖与静态分析 ----
+  # 分工（为什么不是一道了事）：
+  # · PR 上跑 **dependency-review**：只判"这次改动**新增**了有漏洞的依赖"——
+  #   它不因既有漏洞把每个 PR 都判红，这才是 PR 门禁该有的口径。
+  # · 主分支与手动触发上跑**全量**：`pip-audit`（Python 依赖 CVE）、`pnpm audit`、
+  #   `gitleaks`（提交历史里的密钥）。全量扫描放这里，免得历史遗留问题卡住无关的 PR。
+  # · **CodeQL** 单独一个 workflow（`codeql.yml`）：它要写 Security 标签，权限特殊。
+  security-deps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    # 只给 PR：dependency-review 需要 base/head 对比。
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # ⚠️ 前置条件（仓库设置，文件里改不了）：**Dependency graph 必须开启**，
+      # 否则这个 action 直接报 "Dependency review is not supported on this repository"。
+      # 公开仓库通常默认开启；未开启时去 Settings → Security → Code security 打开。
+      - name: Dependency review（新增依赖漏洞）
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure
+
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # 全量扫描：**只在主分支推送与手动触发**。不给分支推送——
+    # 那会让每个功能分支都跑一遍全量（慢），而且一旦有既有问题，红的是无关的 PR。
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # gitleaks 要完整历史
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      # Python 依赖的 CVE。**必须走全新 `uv sync` 的环境**：本机旧 `.venv` 会漏
+      # （实测它漏掉了 virtualenv 21.7.10 的四个漏洞，CI 才报出来）。
+      # `bandit` 不单独引：ruff 的 `S` 规则族覆盖同一批检查，见 quality.md。
+      - name: Python dependency audit (pip-audit)
+        run: uv run pip-audit --progress-spinner off
+
+      # 前端依赖的 CVE。**必须显式指官方 registry**：本仓 npm 源配的是
+      # registry.npmmirror.com，它没实现 audit 端点，裸跑 `pnpm audit` 会直接报
+      # ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS（实测）。
+      - name: Frontend dependency audit (pnpm audit)
+        working-directory: app
+        run: pnpm audit --registry https://registry.npmjs.org --audit-level low
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

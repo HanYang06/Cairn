@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, get_args, get_type_hints
 import cbor2
 
 from ..registry import BINDABLE_FIELDS, REGISTRY, TypeDecl
-from .id import ID
+from .id import ID, ID_FIELDS
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -137,8 +137,8 @@ def register_type(cls: type[object]) -> TypeDecl:
     )
 
 
-#: `id: ID` 那个字段落成的整整一套身份列（顺序即书写顺序）。
-_IDENTITY_FIELDS: tuple[str, ...] = ("value_uuid", "value_hash", "birth_time", "name")
+#: `id: ID` 那个字段落成的整整一套身份列 = `ID` 的全部字段（顺序即 `ID` 的声明顺序）。
+_IDENTITY_FIELDS: tuple[str, ...] = ID_FIELDS
 
 
 def _summary(cls: type[object]) -> str:

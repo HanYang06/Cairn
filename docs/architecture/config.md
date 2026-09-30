@@ -147,7 +147,7 @@ config/schema/settings.json   ← 词表（给 IDE 悬停与分发看的 JSON Sc
 - **没有生成脚本**：两份产物由引擎在落盘时写出，跑一遍程序（或 `pytest`）就顺带生成。
   入库的产物与声明是否分叉，由 `tests/core/test_conf_projection.py` 拦；
 - 词表带 `type` / `description` / `default` / `x-cairn-owner`（声明它的模块）/ `x-cairn-site`
-  （声明处的文件与行号）；`docs/reference/config.md` 由 `tools/docgen.py` 从**声明现算**渲染，
+  （声明处的文件与行号）；`docs/reference/config.md` 由 `scripts/docgen.py` 从**声明现算**渲染，
   不读入库的那份副本。
 
 ## 9. 边界（别越界）

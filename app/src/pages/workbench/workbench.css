@@ -1,0 +1,195 @@
+/*
+ * SPDX-FileCopyrightText: 2026 HanYang06
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * 工作台页面的编排。只做"哪儿放什么"，不做观感——
+ * 观感在原子（card / pill）与组合（board）里，页面层不写它们的内部样式
+ * （`rules/references/frontend.md` §一第 3 条）。
+ */
+
+.workbench {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  min-height: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-sm);
+  line-height: var(--leading);
+}
+
+/* ---------- 顶带 ---------- */
+.workbench-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  height: var(--space-xl);
+  padding: var(--space-0) var(--space-lg);
+  border-bottom: var(--size-hairline) solid var(--color-border-faint);
+  font-size: var(--font-xs);
+  color: var(--color-muted);
+}
+
+.workbench-brand {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.workbench-find {
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  color: var(--color-faint);
+}
+
+.workbench-status {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-md);
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  color: var(--color-faint);
+}
+
+/* ---------- 主体：纵向页签 + 舞台 ---------- */
+.workbench-main {
+  display: grid;
+  grid-template-columns: var(--size-rail) 1fr;
+  min-height: 0;
+}
+
+.workbench-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding-top: var(--space-sm);
+  border-right: var(--size-hairline) solid var(--color-border-faint);
+}
+
+.workbench-rail-item {
+  padding: var(--space-sm) 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--font-3xs);
+  color: var(--color-muted);
+  border-left: var(--size-mark) solid transparent;
+}
+
+.workbench-rail-item.on {
+  color: var(--color-accent);
+  background: var(--color-selection);
+  border-left-color: var(--color-accent);
+}
+
+/* ---------- 舞台 ---------- */
+
+/* 舞台三行：动作行（自适应）、卡片板（吃掉剩余高度）、字体行（自适应）。
+   板必须**撑满**——它扮演的就是"桌面"，空一半就不是桌面了。 */
+.workbench-stage {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--space-sm);
+  min-height: 0;
+  min-width: 0;
+  padding: var(--space-sm) var(--space-md) var(--space-md);
+}
+
+.workbench-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: none;
+}
+
+.workbench-views {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.workbench-view {
+  padding: var(--space-xs) var(--space-md);
+  border: var(--size-hairline) solid var(--color-transparent);
+  border-radius: var(--radius-pill);
+  background: var(--color-transparent);
+  font-family: var(--font-sans);
+  font-size: var(--font-xs);
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.workbench-view.on {
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.workbench-view:focus-visible {
+  outline: var(--color-accent) solid var(--size-mark);
+  outline-offset: var(--size-hairline);
+}
+
+.workbench-actions-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.workbench-hint {
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  color: var(--color-faint);
+}
+
+/* ---------- 字体替换（口径见 ui-theme.md §3.8） ---------- */
+.workbench-fonts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-sm);
+  flex: none;
+  padding-top: var(--space-sm);
+  border-top: var(--size-hairline) solid var(--color-border-faint);
+}
+
+.workbench-font {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.workbench-font-role {
+  flex: none;
+  font-size: var(--font-xs);
+  color: var(--color-muted);
+}
+
+.workbench-font-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-xs) var(--space-sm);
+  border-width: var(--size-hairline);
+  border-style: solid;
+  border-color: var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  color: var(--color-text);
+}
+
+.workbench-font-input:focus-visible {
+  outline: var(--color-accent) solid var(--size-mark);
+  outline-offset: var(--size-hairline);
+}
+
+.workbench-font-bad {
+  flex: none;
+  font-size: var(--font-2xs);
+  color: var(--color-danger);
+}
+
+.workbench-fonts-note {
+  grid-column: 1 / -1;
+  font-size: var(--font-2xs);
+  color: var(--color-faint);
+}

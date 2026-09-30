@@ -12,7 +12,6 @@ import pytest
 from core.event.bus import Bus
 from core.event.catalog import OBJECT_DELETED, OBJECT_PUT
 from core.exc import HubNotFoundError, ObjectNotFoundError
-from core.storage.carrier import SlotRange
 from core.storage.engine import Storage
 from core.storage.format.block import BodyRef, body_ref_of, encode_block_payload
 from core.storage.format.id import digest
@@ -40,14 +39,15 @@ def vault(tmp_path: Path) -> Iterator[tuple[Storage, Bus]]:
 def _stray_block(value_uuid: str, *, hub: str = "main", pack: str = "p") -> BlockRow:
     """造一条指向某处的块行（测试用：位置是编的，只为让读路径去找它）。"""
     return BlockRow(
+        name="",
         value_uuid=value_uuid,
         value_hash="h",
+        birth_time=0,
+        in_hub=hub,
+        in_hub_pack=pack,
+        in_pack_slot=(0, 0),
         body_value_uuid="bu",
         body_value_hash="bh",
-        hub=hub,
-        pack=pack,
-        span=SlotRange(first=0, last=0),
-        size=1,
     )
 
 
@@ -193,12 +193,13 @@ def test_body_refuses_a_row_pointing_at_the_wrong_bytes(vault: tuple[Storage, Bu
     assert block_row is not None
     engine.index.rows.put_body(
         BodyRow(
+            name="",
             value_uuid="liar",
             value_hash=digest(b"claimed"),
-            hub=block_row.hub,
-            pack=block_row.pack,
-            span=block_row.span,
-            size=block_row.size,
+            birth_time=0,
+            in_hub=block_row.in_hub,
+            in_hub_pack=block_row.in_hub_pack,
+            in_pack_slot=block_row.in_pack_slot,
         )
     )
 
@@ -249,7 +250,7 @@ def test_store_into_a_named_hub_and_read_it_back(vault: tuple[Storage, Bus]):
     row = engine.locate(block.value_uuid)
 
     assert row is not None
-    assert row.hub == "side"
+    assert row.in_hub == "side"
     assert (engine.root / "side" / "packs").is_dir()
     assert engine.load(block.value_uuid) == b"side data"
 
@@ -260,12 +261,13 @@ def test_read_path_refuses_a_missing_hub_without_creating_it(vault: tuple[Storag
     address = digest(b"elsewhere")
     engine.index.rows.put_body(
         BodyRow(
+            name="",
             value_uuid="ghost",
             value_hash=address,
-            hub="ghost",
-            pack="p",
-            span=SlotRange(first=0, last=0),
-            size=1,
+            birth_time=0,
+            in_hub="ghost",
+            in_hub_pack="p",
+            in_pack_slot=(0, 0),
         )
     )
 

@@ -15,7 +15,8 @@
     "check:test": "vitest run",
     "check:arch": "depcruise src",
     "check:css": "stylelint \"src/**/*.css\"",
-    "check": "pnpm check:types && pnpm check:lint && pnpm check:css && pnpm check:arch && pnpm check:tokens && pnpm check:test"
+    "check:dup": "jscpd src --threshold 10 --reporters console --min-tokens 50",
+    "check": "pnpm check:types && pnpm check:lint && pnpm check:css && pnpm check:arch && pnpm check:tokens && pnpm check:dup && pnpm check:test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -30,6 +31,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
     "dependency-cruiser": "^18.4.0",
+    "jscpd": "^5.3.3",
     "stylelint": "^17.15.0",
     "stylelint-config-standard": "^40.0.0",
     "typescript": "~6.0.3",
