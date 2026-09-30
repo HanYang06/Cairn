@@ -38,7 +38,7 @@ from .tables import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
 
 #: 指针里两列的固定顺序：分配形态在前（它是引用方第一眼要的那个），摘要在后。
@@ -112,12 +112,20 @@ def table_spec(decl: TypeDecl) -> TableSpec:
     return TableSpec(
         name=decl.table,
         columns=tuple(columns),
-        tier=Tier.DERIVED,
-        owner="core",
-        rebuild_from="载体记录头（设计篇 §8.5 档一）",
+        tier=decl.tier,
+        owner=decl.owner,
+        rebuild_from=_rebuild_from(decl.tier),
         doc=decl.doc or f"类型 {decl.name} 的索引表",
         primary_key=("value_uuid",),
     )
+
+
+def _rebuild_from(tier: Tier) -> str:
+    """重建来源：可重建那一档必须写明来路，真源那一档必须为空。
+
+    两条都由 `TableSpec` 的构造校验兜住——写反了当场报错，不会带进声明文件。
+    """
+    return "载体记录头（设计篇 §8.5 档一）" if tier is Tier.DERIVED else ""
 
 
 def sync(
@@ -125,6 +133,7 @@ def sync(
     *,
     registry: Registry | None = None,
     replace: Sequence[str] = (),
+    prune_columns: Mapping[str, Sequence[str]] | None = None,
 ) -> tuple[str, ...]:
     """把登记表的形状写进声明文件，返回本次动过的表与列（人读的报告）。
 
@@ -136,21 +145,62 @@ def sync(
       点名的表本来就不在文件里时是空操作，且**那句"淘汰了某某"只在真淘汰过时才写**——
       否则文件里会永远挂着一句早已完成的话。
 
+    `prune_columns` 是**列**那一层的同一个出口（表名 → 要点名去掉的列）：淘汰是破坏性动作，
+    故一律显式点名、不靠猜。点名的列会同时从"文件里已有的"和"登记表现算的"两侧去掉——
+    只去一侧，它下一轮就会被补回来。
+
+    Args:
+        path: 声明文件路径。
+        registry: 用哪份登记表现算；不给即进程内那一份。
+        replace: 要点名淘汰的表。
+        prune_columns: 要点名淘汰的列；不给即一个都不动。
+
     Raises:
-        TableDeclarationError: 文件读不出来或坏 YAML。
+        TableDeclarationError: 文件读不出来、坏 YAML，或淘汰之后形状立不起来
+            （如把主键列删了）。
     """
+    pruned: Mapping[str, Sequence[str]] = {} if prune_columns is None else prune_columns
     if not path.is_file():
-        fresh = kernel_declarations(registry)
+        fresh, _removed = _prune(kernel_declarations(registry), pruned)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(render(fresh), encoding="utf-8")
         return tuple(f"新建表: {table.name}" for table in fresh)
 
     found = _present(path, replace)
-    existing = _surviving(path, found)
-    merged, changed = _merge(existing, kernel_declarations(registry), replace=replace)
-    if changed:
+    kept, removed_here = _prune(_surviving(path, found), pruned)
+    fresh, _removed_fresh = _prune(kernel_declarations(registry), pruned)
+    merged, changed = _merge(kept, fresh, replace=replace)
+    report = (
+        *changed,
+        *(f"淘汰列: {name}" for name in dict.fromkeys(removed_here)),
+    )
+    if report:
         path.write_text(render(merged, dropped=found), encoding="utf-8")
-    return changed
+    return report
+
+
+def _prune(
+    tables: Sequence[TableSpec], pruned: Mapping[str, Sequence[str]]
+) -> tuple[tuple[TableSpec, ...], tuple[str, ...]]:
+    """按点名把列从表里去掉，返回（剩下的表，真删掉的那些列）。
+
+    点名的列本来就不在时是空操作；点名的表整张不在时同样空操作。
+    """
+    if not pruned:
+        return tuple(tables), ()
+    kept: list[TableSpec] = []
+    removed: list[str] = []
+    for table in tables:
+        wanted = pruned.get(table.name)
+        if not wanted:
+            kept.append(table)
+            continue
+        drop = set(wanted)
+        removed.extend(
+            f"{table.name}.{column.name}" for column in table.columns if column.name in drop
+        )
+        kept.append(_with_columns(table, tuple(c for c in table.columns if c.name not in drop)))
+    return tuple(kept), tuple(removed)
 
 
 def _present(path: Path, replace: Sequence[str]) -> tuple[str, ...]:

@@ -6,7 +6,7 @@
 发布方与订阅方都引常量、不写裸字符串——两处字面量一旦分叉，就是"发了没人收到"
 那类最难查的故障。
 
-目录当前只有两条，都来自存储的写路径。加事件的门槛：先问"是不是一次通知"，
+目录当前只有三条，都来自存储的写路径。加事件的门槛：先问"是不是一次通知"，
 再问"有没有人订"；只是为了"顺手发一条"的事件，不加。
 """
 
@@ -18,4 +18,11 @@ OBJECT_PUT = "object.put"
 OBJECT_DELETED = "object.deleted"
 """块被摘掉之后发出的通知：`subject` 是块身份。内容面不动，等压实回收。"""
 
-__all__ = ["OBJECT_DELETED", "OBJECT_PUT"]
+BUDGET_EXHAUSTED = "budget.exhausted"
+"""类型声明的配额用完、且档位为 `notify` 时发出的通知：`subject` 是类型表名。
+
+它是**通知**不是决策——内核只说"这份满了，我续了一份"，要不要清理、要不要调配额，
+不归它管。
+"""
+
+__all__ = ["BUDGET_EXHAUSTED", "OBJECT_DELETED", "OBJECT_PUT"]

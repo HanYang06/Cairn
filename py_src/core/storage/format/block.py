@@ -23,14 +23,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any, get_args, get_type_hints
 
 import cbor2
 
 from core.attr import attr_type_of
-from core.exc import AttrTypeError
+from core.exc import AttrTypeError, TableDeclarationError
 
-from ..registry import BINDABLE_FIELDS, REGISTRY, TypeDecl
+from ..registry import BINDABLE_FIELDS, REGISTRY, Nature, OverBudget, Tier, TypeDecl
 from .id import ID, ID_FIELDS
 
 if TYPE_CHECKING:
@@ -187,15 +188,113 @@ def register_type(cls: type[object]) -> TypeDecl:
         if target is not None:
             refs[name] = target
     return REGISTRY.register(
-        TypeDecl(
-            name=cls.__name__,
+        _decl_of(
+            cls,
             table=table,
-            doc=_summary(cls),
             ids=tuple(ids) or _IDENTITY_FIELDS,
             refs=refs,
             attrs=tuple(attrs),
         )
     )
+
+
+def _decl_of(
+    cls: type[object],
+    *,
+    table: str,
+    ids: tuple[str, ...],
+    refs: dict[str, str],
+    attrs: tuple[tuple[str, TypeSpec], ...],
+) -> TypeDecl:
+    """由类体的注解与那组 `__…__` 拼出一份类型登记。
+
+    注解定**列与属性**（`ID` / ID 字段名 / `attr[T]` / 已登记类型）；
+    `__…__` 定**存储行为**（性质、归属、配额、体积上限）。后者**不进声明文件**——
+    那份文件只描述库的形状，而"配额多少"是策略，不是形状。
+    """
+    return TypeDecl(
+        name=cls.__name__,
+        table=table,
+        doc=_summary(cls),
+        ids=ids,
+        refs=refs,
+        attrs=attrs,
+        nature=_enum_field(cls, "__nature__", Nature, Nature.DATA),
+        owner=_text_field(cls, "__owner__", "core"),
+        tier=_enum_field(cls, "__tier__", Tier, Tier.DERIVED),
+        backup=_flag_field(cls, "__backup__"),
+        own_hub=_flag_field(cls, "__own_hub__"),
+        hub=_text_field(cls, "__hub__", ""),
+        slot_budget=_budget_field(cls, "__slot_budget__"),
+        pack_budget=_budget_field(cls, "__pack_budget__"),
+        max_block_bytes=_max_block_bytes(cls),
+        over_budget=_enum_field(cls, "__over_budget__", OverBudget, OverBudget.EXTEND),
+    )
+
+
+#: 单块上限的分档：后缀 → 每单位多少字节（1024 进制）。**单位是字节，不是位。**
+_BLOCK_SIZE_FACTORS: tuple[tuple[str, int], ...] = (
+    ("byte", 1),
+    ("kbyte", 1024),
+    ("mbyte", 1024**2),
+    ("gbyte", 1024**3),
+)
+
+
+def _enum_field[T: Enum](cls: type[object], dunder: str, expected: type[T], default: T) -> T:
+    """读一个枚举声明：本类没写就用默认值，写了但不是那个枚举即报错。"""
+    value = cls.__dict__.get(dunder)
+    if value is None:
+        return default
+    if not isinstance(value, expected):
+        raise TableDeclarationError(
+            f"{cls.__name__} 的 {dunder} 必须是 {expected.__name__}: {value!r}"
+        )
+    return value
+
+
+def _text_field(cls: type[object], dunder: str, default: str) -> str:
+    """读一段文本声明：本类没写就用默认值，写了但不是字符串即报错。"""
+    value = cls.__dict__.get(dunder)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise TableDeclarationError(f"{cls.__name__} 的 {dunder} 必须是字符串: {value!r}")
+    return value
+
+
+def _flag_field(cls: type[object], dunder: str) -> bool:
+    """读一个开关声明：本类没写即关。只收布尔——`1` 与 `True` 是两回事。"""
+    value = cls.__dict__.get(dunder)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise TableDeclarationError(f"{cls.__name__} 的 {dunder} 必须是布尔值: {value!r}")
+    return value
+
+
+def _budget_field(cls: type[object], dunder: str) -> int | None:
+    """读一个配额声明：本类没写即 `None`（等于没有这个配额）。"""
+    value = cls.__dict__.get(dunder)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TableDeclarationError(f"{cls.__name__} 的 {dunder} 必须是整数: {value!r}")
+    return value
+
+
+def _max_block_bytes(cls: type[object]) -> int | None:
+    """把分档写下的单块上限**相加归一**成字节数；一档都没写即 `None`。
+
+    分档只为写得直观（`__max_block_mbyte__ = 1`）；进登记的只有归一后的那个数——
+    否则同一份上限的两种等价写法会变成两份事实。
+    """
+    total = 0
+    for suffix, factor in _BLOCK_SIZE_FACTORS:
+        value = _budget_field(cls, f"__max_block_{suffix}__")
+        if value is not None:
+            total += value * factor
+    return total or None
 
 
 def block_attrs[T](block: Block[T]) -> dict[str, object]:

@@ -60,6 +60,21 @@ class ObjectNotFoundError(StorageError):
     """对象不在存储里：索引没有这一行，或行指向的字节已经读不出来。"""
 
 
+class BlockTooLargeError(StorageError):
+    """块超出它声明的体积上限。
+
+    上限由类型声明给出（`__max_block_*__`）。**分片尚未接线**，故此刻的处置是拒绝写入，
+    而不是切开——切分是存储的活，落地时这条异常会变成"切完再写"。
+    """
+
+
+class BudgetExhaustedError(StorageError):
+    """配额用完，且该类型的档位声明为拒绝（`over_budget = deny`）。
+
+    声明为 `notify` 或 `extend` 的类型不会抛它：那两档都自动续一份，前者另发一条通知。
+    """
+
+
 class ConfigError(CairnError, ValueError):
     """配置侧异常的基类：调用方按它兜住整层，再按子类分流。"""
 
@@ -89,6 +104,8 @@ class ConfigReferenceError(ConfigError):
 
 __all__ = [
     "AttrTypeError",
+    "BlockTooLargeError",
+    "BudgetExhaustedError",
     "CairnError",
     "ConfigDuplicateError",
     "ConfigError",

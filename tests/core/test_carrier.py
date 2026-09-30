@@ -19,6 +19,7 @@ from core.storage.carrier import (
     Carrier,
     SlotRange,
     build_header,
+    owner_digest,
     parse_header,
     slots_needed,
 )
@@ -47,7 +48,29 @@ def test_file_header_roundtrip():
 
     assert len(raw) == HEADER_BYTES == 24
     assert raw.startswith(MAGIC)
-    assert parse_header(raw) == _SLOT
+    header = parse_header(raw)
+    assert header.slot_bytes == _SLOT
+    assert not header.has_owner, "没给归属名即全零，读回来是「无归属」"
+
+
+def test_file_header_carries_owner():
+    """归属摘要写进预留段：同一个名字恒得同一份摘要，不同的名字不该撞。"""
+    header = parse_header(build_header(_SLOT, "attrindex"))
+
+    assert header.slot_bytes == _SLOT
+    assert header.has_owner
+    assert header.owner == owner_digest("attrindex")
+    assert header.owner != owner_digest("notedata")
+
+
+def test_reserved_bytes_left_zero_read_as_no_owner():
+    """旧版本留下的文件（预留段没写东西）读回来是「无归属」这个合法状态，不报错。"""
+    legacy = MAGIC + _SLOT.to_bytes(8, "big") + bytes(8)
+
+    header = parse_header(legacy)
+
+    assert header.slot_bytes == _SLOT
+    assert not header.has_owner
 
 
 def test_header_rejects_foreign_or_short_bytes():

@@ -25,14 +25,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.event.catalog import OBJECT_DELETED, OBJECT_PUT
+from core.event.catalog import BUDGET_EXHAUSTED, OBJECT_DELETED, OBJECT_PUT
 from core.event.events import Event
-from core.exc import ObjectNotFoundError
+from core.exc import BlockTooLargeError, ObjectNotFoundError
 
 from .format.block import BlockPayload, BodyRef, block_payload_of, encode_block_payload
 from .format.id import ID, digest
 from .format.record import decode, encode
 from .hub import Hub, PackPolicy, Placement
+from .registry import REGISTRY, OverBudget, TypeDecl
 from .rows import BlockRow, BodyRow
 
 if TYPE_CHECKING:
@@ -56,6 +57,18 @@ def _place(identity: ID, hub: str, placement: Placement) -> None:
     identity.in_hub = hub
     identity.in_hub_pack = placement.pack
     identity.in_pack_slot = (placement.span.first, placement.span.last)
+
+
+def _check_block_size(decl: TypeDecl | None, size: int) -> None:
+    """块体积上限的判据：按**载荷**长度判，不把记录头的开销算进去。
+
+    Raises:
+        BlockTooLargeError: 载荷超过这个类型声明的上限。**分片尚未接线**，故此刻是拒写。
+    """
+    if decl is not None and decl.max_block_bytes is not None and size > decl.max_block_bytes:
+        raise BlockTooLargeError(
+            f"块超出体积上限: 载荷 {size} 字节 > {decl.max_block_bytes}（类型 {decl.table}）"
+        )
 
 
 class Storage:
@@ -119,13 +132,22 @@ class Storage:
         `attrs` 是块自己的属性，编进**块记录载荷**——不进 body（那是大头内容、按地址
         去重），也不靠库里的列承载（库只是索引）。
 
+        **写进哪个 hub、受不受配额约束，都看类型声明**：`kind` 就是表名，拿它反查
+        `TypeDecl`（`__own_hub__` / `__hub__` / `__pack_budget__` / `__over_budget__` /
+        `__max_block_*__`）。`hub` 参数是调用方的显式点名，优先于声明。
+
         **块身份随载荷**：同一份 body 配上不同的属性就是两个块；body 那侧仍按内容去重，
         故"同内容不同属性"只多一条块记录，内容面还是那一份。
+
+        Raises:
+            BlockTooLargeError: 载荷超过该类型声明的单块上限。
+            BudgetExhaustedError: 配额用完，且该类型的档位声明为 `deny`。
 
         Returns:
             块身份：分配形态凭证新建，摘要形态凭证是块记录载荷的摘要。
         """
-        target = self._hub(self._default_hub if hub is None else hub, create=True)
+        decl = REGISTRY.table(kind) if kind else None
+        target = self._hub(self._hub_name(decl, hub), create=True)
         content = ID.of(data)
         existing = self._index.rows.bodies_by_hash(content.value_hash)
         if existing:
@@ -136,13 +158,13 @@ class Storage:
                 birth_time=existing[0].birth_time,
             )
         else:
-            self._write_body(target, content, data)
+            self._write_body(target, content, data, decl=decl)
             body_id = content
         pointer = encode_block_payload(
             BodyRef(value_uuid=body_id.value_uuid, value_hash=body_id.value_hash), attrs
         )
         block = ID.of(pointer)
-        self._write_block(target, block, pointer, kind=kind, body=body_id)
+        self._write_block(target, block, pointer, kind=kind, body=body_id, decl=decl)
         self._emit(OBJECT_PUT, block.value_uuid, {"body": body_id.value_hash, "kind": kind})
         return block
 
@@ -221,10 +243,46 @@ class Storage:
         self._index.rows.register_hub(name)
         return created
 
-    def _write_body(self, target: Hub, body: ID, data: bytes) -> None:
+    def _hub_name(self, decl: TypeDecl | None, explicit: str | None) -> str:
+        """这一次写进哪个 hub：调用方点名 > 类型声明（独占 / 指定）> 默认。"""
+        if explicit is not None:
+            return explicit
+        if decl is None:
+            return self._default_hub
+        return decl.hub_name(self._default_hub)
+
+    def _append_record(
+        self, target: Hub, raw: bytes, *, owner: str, decl: TypeDecl | None
+    ) -> Placement:
+        """把一条记录落到载体上：先判配额，再交给 hub 挑位置。
+
+        配额只管"**还许不许再开一份载体**"（`allow_new_pack`）：还有地方写就照写，
+        真到了要新开一份时才按档位处置。
+        """
+        allow_new_pack = True
+        if decl is not None and decl.pack_budget is not None:
+            used = len(target.packs_by_owner(owner))
+            if used >= decl.pack_budget:
+                allow_new_pack = self._over_budget(decl, owner)
+        return target.append(raw, owner=owner, allow_new_pack=allow_new_pack)
+
+    def _over_budget(self, decl: TypeDecl, owner: str) -> bool:
+        """配额用满之后怎么办：返回"还许不许再开一份载体"。
+
+        `deny` 不许（真到要新开时由载体层抛错）、`notify` 先发一条通知再放行、`extend` 静默放行。
+        """
+        if decl.over_budget is OverBudget.DENY:
+            return False
+        if decl.over_budget is OverBudget.NOTIFY:
+            self._emit(BUDGET_EXHAUSTED, owner, {"budget": decl.pack_budget})
+        return True
+
+    def _write_body(self, target: Hub, body: ID, data: bytes, *, decl: TypeDecl | None) -> None:
         """写内容记录，并把它落成一条内容行。"""
+        owner = "" if decl is None else decl.table
+        _check_block_size(decl, len(data))
         raw = encode(body, data)
-        placement: Placement = target.append(raw)
+        placement: Placement = self._append_record(target, raw, owner=owner, decl=decl)
         _place(body, target.name, placement)
         self._index.rows.put_body(
             BodyRow(
@@ -238,14 +296,25 @@ class Storage:
             )
         )
 
-    def _write_block(self, target: Hub, block: ID, payload: bytes, *, kind: str, body: ID) -> None:
+    def _write_block(  # noqa: PLR0913 — 一条记录要的那些东西，散开比收成结构体直白
+        self,
+        target: Hub,
+        block: ID,
+        payload: bytes,
+        *,
+        kind: str,
+        body: ID,
+        decl: TypeDecl | None,
+    ) -> None:
         """写块记录，并把它落成一条块行（指针落成两列）。
 
         类型标号**写进记录本身**（`encode(..., kind=…)`），索引那一列是它的投影：
         否则索引一重扫，全库的块就不知道自己是什么类型。
         """
+        owner = "" if decl is None else decl.table
+        _check_block_size(decl, len(payload))
         raw = encode(block, payload, kind=kind)
-        placement: Placement = target.append(raw)
+        placement: Placement = self._append_record(target, raw, owner=owner, decl=decl)
         _place(block, target.name, placement)
         self._index.rows.put_block(
             BlockRow(

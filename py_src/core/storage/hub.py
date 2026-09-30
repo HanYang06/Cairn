@@ -23,9 +23,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from core.exc import HubNotFoundError, HubShapeError, RecordFormatError, SlotError
+from core.exc import (
+    BudgetExhaustedError,
+    HubNotFoundError,
+    HubShapeError,
+    RecordFormatError,
+    SlotError,
+)
 
-from .carrier import Carrier, SlotRange
+from .carrier import Carrier, SlotRange, owner_digest
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -147,20 +153,48 @@ class Hub:
         """
         return tuple(sorted(entry.name for entry in self._packs.iterdir() if entry.is_file()))
 
-    def append(self, raw: bytes) -> Placement:
+    def packs_by_owner(self, owner: str) -> tuple[str, ...]:
+        """归属相符的载体名，按名字排序；不给归属即全部。
+
+        只读文件头，不改任何东西。它是配额判定的输入面："这个类型已经占了几份载体"。
+        """
+        if not owner:
+            return self.pack_names()
+        digest = owner_digest(owner)
+        names: list[str] = []
+        for name in self.pack_names():
+            with self.carrier(name) as carrier:
+                if not carrier.has_owner or carrier.owner == digest:
+                    names.append(name)
+        return tuple(names)
+
+    def append(self, raw: bytes, *, owner: str = "", allow_new_pack: bool = True) -> Placement:
         """写入一条记录，返回它的位置。
 
         放进"有空间的最满者"；一个都没有（或全已封口）就新开一个载体。
+
+        `owner`（表名）**只影响新开的那个载体**：既有载体的归属写在它自己的文件头里。
+        给了归属就只在"归属相符或没有归属"的载体里挑——归属只用来**优先挑**，不构成排他；
+        排他由 `own_hub` 在目录那一层给（一个 hub 一个类型）。
+
+        `allow_new_pack=False` 是配额那一路的闸：**有地方写就照写**，真到了要新开一份时才拦下。
+        闸设在这里而不是调用方，是因为"到底要不要新开"只有本层知道。
+
         **不检查封口线对单条记录的大小限制**：大于封口线的记录照样完整写入（§5.4）。
 
         Raises:
             RecordFormatError: 记录不自框定，或选中的载体尾部不在格边界（残写，不猜从哪儿接）。
+            BudgetExhaustedError: 没有可写的空间，而 `allow_new_pack` 为假。
         """
         with contextlib.ExitStack() as stack:
-            for name, carrier in self._by_size_desc(stack):
+            for name, carrier in self._by_size_desc(stack, owner=owner):
                 if not carrier.sealed(self._max_bytes):
                     return Placement(pack=name, span=carrier.append(raw))
-        return self._append_to_new_pack(raw)
+        if not allow_new_pack:
+            raise BudgetExhaustedError(
+                f"配额用完且档位为拒绝：{owner or '该类型'} 已没有可写的空间，也不许新开载体"
+            )
+        return self._append_to_new_pack(raw, owner=owner)
 
     def read(self, placement: Placement) -> bytes:
         """按位置读回一条记录的原始字节（不做解码，解码是记录层的事）。"""
@@ -191,23 +225,31 @@ class Hub:
         except (RecordFormatError, SlotError) as error:
             raise HubShapeError(f"{PACKS_DIRNAME}/ 里的 {name} 不是载体: {error}") from error
 
-    def _by_size_desc(self, stack: contextlib.ExitStack) -> tuple[tuple[str, Carrier], ...]:
+    def _by_size_desc(
+        self, stack: contextlib.ExitStack, *, owner: str = ""
+    ) -> tuple[tuple[str, Carrier], ...]:
         """载体按"从大到小"排（同大小按名字排，使判据完全确定），连同**已打开的载体**一起交出。
 
         句柄在排序时一次打开、交给调用方复用，退出时由 `stack` 统一收口：若排序开一遍、
         逐个试写再开一遍，每次 `append`（写路径上每条记录一次）的 `open` 数就是载体数的两倍。
+
+        `owner` 非空时只交出"归属相符"或"无归属"的那些：前者是这个类型的，后者是还没主的
+        （旧库里的载体全都没有归属，不该因为新机制就被冷落）。别人的载体一概不碰。
         """
+        digest = owner_digest(owner)
         sized: list[tuple[int, str, Carrier]] = []
         for name in self.pack_names():
             carrier = stack.enter_context(self.carrier(name))
+            if owner and carrier.has_owner and carrier.owner != digest:
+                continue
             sized.append((carrier.size, name, carrier))
         sized.sort(key=lambda item: (-item[0], item[1]))
         return tuple((name, carrier) for _size, name, carrier in sized)
 
-    def _append_to_new_pack(self, raw: bytes) -> Placement:
-        """新开一个载体，把记录写进去。"""
+    def _append_to_new_pack(self, raw: bytes, *, owner: str = "") -> Placement:
+        """新开一个载体，把记录写进去；归属随建载体写进它的文件头。"""
         name = self._new_pack_name()
-        with Carrier(self._packs / name, slot_bytes=self._slot_bytes) as carrier:
+        with Carrier(self._packs / name, slot_bytes=self._slot_bytes, owner=owner) as carrier:
             return Placement(pack=name, span=carrier.append(raw))
 
     def _new_pack_name(self) -> str:

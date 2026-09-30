@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,20 +45,58 @@ _RESERVED_BYTES = 8
 HEADER_BYTES = len(MAGIC) + _SLOT_FIELD_BYTES + _RESERVED_BYTES
 """载体文件头长度：魔数 8 ＋ 槽长 8 ＋ 预留 8 ＝ 24 字节。"""
 
+_NO_OWNER = bytes(_RESERVED_BYTES)
+"""无归属的写法：预留段全零。旧载体与"还没主"的新载体都是这样。"""
 
-def build_header(slot_bytes: int) -> bytes:
-    """生成载体文件头：魔数 ＋ 槽长（大端无符号）＋ 预留置零。"""
+
+def owner_digest(owner: str) -> bytes:
+    """把一个归属名算成预留段里的那份摘要；空名字即全零（无归属）。
+
+    存摘要而不是名字，是因为预留段只有 8 字节、装不下表名。它只用来判"这份载体是不是我的"，
+    **不用来还原名字**——想知道一个 hub 归谁看目录名，不看这里。
+    算法与 ID 的摘要形态同源（sha256），故同一个名字恒得同一份摘要。
+    """
+    if not owner:
+        return _NO_OWNER
+    return hashlib.sha256(owner.encode("utf-8")).digest()[:_RESERVED_BYTES]
+
+
+@dataclass(frozen=True, slots=True)
+class Header:
+    """载体文件头解出来的两件事：槽长与归属。
+
+    Attributes:
+        slot_bytes: 槽长（格算术要用）。
+        owner: 归属摘要（8 字节）；全零表示**无归属**。
+    """
+
+    slot_bytes: int
+    owner: bytes = _NO_OWNER
+
+    @property
+    def has_owner(self) -> bool:
+        """这份载体有没有归属：全零即无。"""
+        return self.owner != _NO_OWNER
+
+
+def build_header(slot_bytes: int, owner: str = "") -> bytes:
+    """生成载体文件头：魔数 ＋ 槽长 ＋ 归属摘要（那段预留）。
+
+    归属在**建载体时**写死——"分配预算即生成载体，生成时标注这份文件归谁"。
+    不给名字即全零，读回来是"无归属"：任何类型都可以用它。
+    """
     return (
         MAGIC
         + _check_slot_bytes(slot_bytes).to_bytes(_SLOT_FIELD_BYTES, "big")
-        + bytes(_RESERVED_BYTES)
+        + owner_digest(owner)
     )
 
 
-def parse_header(raw: bytes) -> int:
-    """校验并解析载体文件头，返回槽长。
+def parse_header(raw: bytes) -> Header:
+    """校验并解析载体文件头，返回槽长与归属。
 
-    只认魔数与槽长：预留段留给将来的布局增量，不校验内容（校验了反而挡住向前兼容）。
+    只认魔数与槽长：归属那段**不校验内容**——它是增量字段，旧版本的文件在那里是全零，
+    而"读出来是全零"正是"无归属"这个合法状态。
 
     Raises:
         RecordFormatError: 文件头不足，或魔数不符（不是载体，或不是第 1 版布局）。
@@ -69,7 +108,10 @@ def parse_header(raw: bytes) -> int:
         raise RecordFormatError("不是载体文件，或不是第 1 版布局")
     slot_start = len(MAGIC)
     slot_bytes = int.from_bytes(raw[slot_start : slot_start + _SLOT_FIELD_BYTES], "big")
-    return _check_slot_bytes(slot_bytes)
+    return Header(
+        slot_bytes=_check_slot_bytes(slot_bytes),
+        owner=bytes(raw[slot_start + _SLOT_FIELD_BYTES : HEADER_BYTES]),
+    )
 
 
 def slots_needed(total_len: int, slot_bytes: int) -> int:
@@ -128,12 +170,14 @@ class Carrier:
     保持打开，作上下文管理器可确保关闭。本层不做并发保护，也不管封口换不换文件。
     """
 
-    def __init__(self, path: str | Path, *, slot_bytes: int | None = None) -> None:
+    def __init__(self, path: str | Path, *, slot_bytes: int | None = None, owner: str = "") -> None:
         """打开或新建载体。
 
         Args:
-            path: 载体文件路径；父目录须已存在（建目录是桶的职责）。
+            path: 载体文件路径；父目录须已存在（建目录是 hub 的职责）。
             slot_bytes: 槽长。新建时必需；打开既有文件时若给了，必须与文件头一致。
+            owner: 归属名（表名）。**只在新建时写进文件头**；打开既有文件时以头里那份为准，
+                这里给什么都改不动它——"已落盘的东西不被新参数改写"。
 
         Raises:
             SlotError: 新建却没给槽长，或给的槽长与文件头不符。
@@ -147,10 +191,12 @@ class Carrier:
         if self._path.exists():
             handle = self._path.open("r+b")
             try:
-                self._slot_bytes = parse_header(handle.read(HEADER_BYTES))
+                header = parse_header(handle.read(HEADER_BYTES))
             except (RecordFormatError, SlotError):
                 handle.close()
                 raise
+            self._slot_bytes = header.slot_bytes
+            self._owner = header.owner
             if slot_bytes is not None and slot_bytes != self._slot_bytes:
                 handle.close()
                 raise SlotError(
@@ -161,8 +207,9 @@ class Carrier:
             if slot_bytes is None:
                 raise SlotError("新建载体必须给出槽长")
             self._slot_bytes = _check_slot_bytes(slot_bytes)
+            self._owner = owner_digest(owner)
             handle = self._path.open("w+b")
-            handle.write(build_header(self._slot_bytes))
+            handle.write(build_header(self._slot_bytes, owner))
             handle.flush()
             self._file = handle
 
@@ -175,6 +222,16 @@ class Carrier:
     def slot_bytes(self) -> int:
         """本载体的槽长（来自文件头，不是配置）。"""
         return self._slot_bytes
+
+    @property
+    def owner(self) -> bytes:
+        """归属摘要（8 字节，来自文件头）；全零即无归属。"""
+        return self._owner
+
+    @property
+    def has_owner(self) -> bool:
+        """这份载体有没有归属。"""
+        return self._owner != _NO_OWNER
 
     @property
     def size(self) -> int:
@@ -329,8 +386,10 @@ __all__ = [
     "HEADER_BYTES",
     "MAGIC",
     "Carrier",
+    "Header",
     "SlotRange",
     "build_header",
+    "owner_digest",
     "parse_header",
     "slots_needed",
 ]
