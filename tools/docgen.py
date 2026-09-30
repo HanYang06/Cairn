@@ -41,9 +41,6 @@ import core.storage.conf  # noqa: E402,F401
 from core.conf import conf  # noqa: E402
 from tools._iosafe import _say  # noqa: E402 — 见上：先补路径再导入
 
-#: 词表投影（声明现算；入库的那份副本在 `config/schema/settings.json`）
-SETTINGS_SCHEMA = ROOT / "config" / "schema" / "settings.json"
-
 #: 生成出来的参考页
 CONFIG_PAGE = ROOT / "docs" / "reference" / "config.md"
 
@@ -97,7 +94,7 @@ def read_settings() -> dict[str, Any]:
     """词表（**声明现算**，不读入库副本）：声明一份都不在就直接失败，不静默出空表。"""
     document = conf.schema_document()
     if not document.get("properties"):
-        raise FileNotFoundError("没有算到任何配置声明：检查上方 import 清单是否漏了声明模块")
+        raise RuntimeError("没有算到任何配置声明：检查上方 import 清单是否漏了声明模块")
     return document
 
 

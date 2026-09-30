@@ -26,7 +26,7 @@ def _apply_log_level() -> None:
         logging.getLogger(__name__).debug("读不到 core.log.level，退回默认级别")
         level = _DEFAULT_LEVEL
     else:
-        level = logging.getLevelNamesMapping().get(name.upper(), _DEFAULT_LEVEL)
+        level = logging.getLevelNamesMapping().get(name.strip().upper(), _DEFAULT_LEVEL)
     logging.getLogger("core").setLevel(level)
 
 

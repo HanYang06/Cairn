@@ -143,11 +143,6 @@ class Column:
     identity: bool = False
 
     @property
-    def bound(self) -> bool:
-        """是不是绑定列（值来自本行主语那个 ID 的字段）。"""
-        return self.source is ColumnSource.IDENTITY
-
-    @property
     def queryable(self) -> bool:
         """是不是"天然可当查询词"的列：绑定列与引用列都算（关系表靠它按端点查）。"""
         return self.source in {ColumnSource.IDENTITY, ColumnSource.REFERENCE}
@@ -167,12 +162,6 @@ class Column:
         if not self.qualifier:
             return self.name
         return f"{self.qualifier}_{self.name}"
-
-    def bound_field(self) -> str:
-        """绑定列取的 ID 字段名；不是绑定列即报错。"""
-        if not self.bound:
-            raise TableDeclarationError(f"列 {self.reference} 不是绑定列，取不到 ID 字段")
-        return self.name
 
     def ddl(self) -> str:
         """编译成建表语句里的一段，形如 ``"列名" TYPE NOT NULL DEFAULT …``。
@@ -246,7 +235,9 @@ class TableSpec:
         owner: 归属（`core` / 领域名）；领域表的归属由声明给出。
         rebuild_from: 重建来源；重建档为 ``SOURCE`` 时必须为空。
         doc: 说明文本；**不进签名**。
-        primary_key: 主键列名（有序，复合主键就是多个）；不给则取唯一的身份列。
+        primary_key: 主键的库内列名（有序，复合主键就是多个）；不给则取唯一的身份列。
+            声明里写 `[位置名.]字段` 或裸字段名都行，构造时统一解析成 :attr:`Column.sql_name`，
+            故建表、比对与回写用的都是同一个口径。
     """
 
     name: str
@@ -289,8 +280,15 @@ class TableSpec:
         )
 
     def __post_init__(self) -> None:
-        """把声明立起来：先查主键写的列在不在，再核类型，最后定主键并核对绑定列。"""
-        missing = [column for column in self.primary_key if self.column(column) is None]
+        """把声明立起来：先查主键项解析得到的列在不在，再核类型，最后定主键并核对绑定列。"""
+        resolved: list[str] = []
+        missing: list[str] = []
+        for item in self.primary_key:
+            column = self._key_column(item)
+            if column is None:
+                missing.append(item)
+            else:
+                resolved.append(column.sql_name)
         if missing:
             raise TableDeclarationError(f"表 {self.name} 的主键列不存在: {missing}")
         for column in self.columns:
@@ -299,9 +297,9 @@ class TableSpec:
                     f"列 {self.name}.{column.reference} 的类型 {column.type!r} 不在词表里"
                 )
         if self.primary_key:
-            primary_key = self.primary_key
+            primary_key = tuple(resolved)
         elif len(self.identity_columns) == 1:
-            primary_key = (self.identity_columns[0].name,)
+            primary_key = (self.identity_columns[0].sql_name,)
         elif len(self.identity_columns) > 1:
             names = [column.name for column in self.identity_columns]
             raise TableDeclarationError(
@@ -314,6 +312,21 @@ class TableSpec:
         object.__setattr__(self, "primary_key", primary_key)
         self._check_binding()
 
+    def _key_column(self, item: str) -> Column | None:
+        """主键项 → 列：先按 `[位置名.]字段` 精确匹配，再按库内列名（回写出的那套写法）。
+
+        两条写法都要认：声明手写限定词，而 :mod:`core.storage.tablegen` 回写的是
+        :attr:`Column.sql_name`，读回来的键只有裸名。
+        """
+        qualifier, name = _qualified(item)
+        for column in self.columns:
+            if column.qualifier == qualifier and column.name == name:
+                return column
+        for column in self.columns:
+            if column.sql_name == item:
+                return column
+        return None
+
     @property
     def identity_columns(self) -> tuple[Column, ...]:
         """本行的身份列：绑定到本行主语那个 ID 的字段（不带限定词）。
@@ -322,13 +335,6 @@ class TableSpec:
         没写 `primary_key` 时由它推出来——不再有"多身份列必须明写"的情形。
         """
         return tuple(column for column in self.columns if column.source is ColumnSource.IDENTITY)
-
-    def scopes(self) -> tuple[str, ...]:
-        """这张表引用到的**作用域名**（限定词），按出现顺序去重。
-
-        限定词就是"另一个 ID 的位置名"——它同时是一个表名（`id(name).字段` 的两个含义）。
-        """
-        return tuple(dict.fromkeys(column.qualifier for column in self.columns if column.qualifier))
 
     def resolved_indexes(self) -> tuple[IndexSpec, ...]:
         """实际要建的索引 = 显式声明 + **绑定列的兜底索引**。
@@ -355,11 +361,6 @@ class TableSpec:
             if column.name == name:
                 return column
         return None
-
-    def key_columns(self) -> tuple[Column, ...]:
-        """主键列，按声明顺序；缺列已在构造时拦下。"""
-        columns = [self.column(name) for name in self.primary_key]
-        return tuple(column for column in columns if column is not None)
 
     def _check_binding(self) -> None:
         """核对每一列的来源；列与列的规矩都在 :meth:`_check_column` 里。"""
@@ -625,7 +626,7 @@ def _columns(raw: object) -> tuple[Column, ...]:
             raise TableDeclarationError(f"列声明必须是映射或 `id(名字).字段` 字符串: {entry!r}")
         _reject_unknown(entry, _COLUMN_KEYS, "列声明")
         columns.append(_plain_column(entry))
-    names = [_column_key(column) for column in columns]
+    names = [column.sql_name for column in columns]
     if len(set(names)) != len(names):
         raise TableDeclarationError(f"列名重复: {', '.join(sorted(names))}")
     return tuple(columns)
@@ -716,11 +717,6 @@ def _plain_column(item: Mapping[str, object]) -> Column:
     )
 
 
-def _column_key(column: Column) -> str:
-    """列在表里的唯一键：限定词 + 字段名（两个 ID 的同名字段不撞）。"""
-    return f"{column.qualifier}.{column.name}" if column.qualifier else column.name
-
-
 def _default_of(item: Mapping[str, object]) -> DefaultValue | None:
     """取非绑定列的默认值；类型对不上由编译期（`_literal`）兜住。"""
     raw = item.get("default")
@@ -730,12 +726,21 @@ def _default_of(item: Mapping[str, object]) -> DefaultValue | None:
 
 
 def _key_columns(raw: object) -> tuple[str, ...]:
-    """解析表级主键（列名列表）；没写就是空元组，由 :class:`TableSpec` 去推断。"""
+    """解析表级主键（`[位置名.]字段` 列表）；没写就是空元组，由 :class:`TableSpec` 去推断。
+
+    **限定词在这里保留**：解析阶段就把它丢掉的话，`id(body).value_hash` 会退化成裸名
+    `value_hash`，既可能命中同表的另一列，落成的物理列名也跟着错。
+    统一口径（解析成库内列名）由 :meth:`TableSpec.__post_init__` 负责。
+    """
     if raw is None or raw in ((), []):
         return ()
     if not isinstance(raw, (list, tuple)):
         raise TableDeclarationError(f"主键必须是列名列表: {raw!r}")
-    return tuple(_qualified(item)[1] for item in raw)
+    keys: list[str] = []
+    for item in raw:
+        qualifier, name = _qualified(item)
+        keys.append(f"{qualifier}.{name}" if qualifier else name)
+    return tuple(keys)
 
 
 def _qualified(raw: object) -> tuple[str, str]:
@@ -781,7 +786,9 @@ def _indexes(raw: object, columns: tuple[Column, ...]) -> tuple[IndexSpec, ...]:
         by_name[column.sql_name] = column.sql_name
         by_name[column.reference] = column.sql_name
     indexes: list[IndexSpec] = []
-    seen: set[tuple[tuple[str, ...], bool]] = set()
+    # 查重键与 `TableSpec.index_name()` 同口径（只看排序后的列）：索引名里没有 unique，
+    # 把 unique 算进来会让两条同名声明双双通过，随后被 CREATE INDEX IF NOT EXISTS 静默跳过。
+    seen: set[tuple[str, ...]] = set()
     for item in raw:
         if not isinstance(item, dict):
             raise TableDeclarationError(f"索引声明必须是映射: {item!r}")
@@ -795,7 +802,7 @@ def _indexes(raw: object, columns: tuple[Column, ...]) -> tuple[IndexSpec, ...]:
             raise TableDeclarationError(f"索引列不在表内: {', '.join(missing)}")
         index_columns = tuple(by_name[name] for name in wanted)
         unique = _flag(item.get("unique", False), "unique")
-        key = (tuple(sorted(index_columns)), unique)
+        key = tuple(sorted(index_columns))
         if key in seen:
             raise TableDeclarationError(f"索引重复声明: {', '.join(index_columns)}")
         seen.add(key)
@@ -822,7 +829,7 @@ def quote_identifier(identifier: str) -> str:
     PRAGMA 语句不能带参数占位符，故开库比对处要靠它把表名与索引名拼进语句；
     名字形状由声明层把关，这里只负责引号。
     """
-    return f'"{identifier}"'
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def sql_type(column_type: ColumnType) -> str:

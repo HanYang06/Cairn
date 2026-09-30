@@ -71,7 +71,10 @@ FILE_TYPES: dict[str, str] = {"yaml": "yaml", "json": "json"}
 
 _T = TypeVar("_T")
 _CALLER_DEPTH = 3
-"""从 `__call__` 往上数几层才到调用方：`__call__` → 本模块的私有方法 → 调用方。"""
+"""从 `_call_site` 往上数几层才到调用方：`__call__` → `_assign` → 调用方。"""
+
+_REDUCE_CALLER_DEPTH = 2
+"""`reduce()` 那条链路的层数：`reduce` 只隔一层，不像 `__call__` 那样先经 `_assign`。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +160,6 @@ class Config:
         self._elsewhere: dict[str, _Item] = {}
         self._pending: dict[str, JsonValue | None] = {}
         self._seen: set[str] = set()
-        self._declared: set[str] = set()
 
     # ---- 调用面：声明 / 取值 ---- #
 
@@ -235,10 +237,6 @@ class Config:
             LOGGER.debug("强写配置项 %s = %r", path, value)
             return value
 
-        if path in self._declared and not options.force:
-            raise ConfigDuplicateError(
-                f"配置项 {path!r} 已经有值：代码不许重复赋值。改值请改配置文件，或显式 force=True"
-            )
         if options.declare_type is not MISSING:
             spec = spec_of(options.declare_type)
         else:
@@ -258,7 +256,6 @@ class Config:
             qualname=site.qualname,
         )
         self._declarations[path] = item
-        self._declared.add(path)
         self._seen.add(path)
         if declared is not MISSING:
             plain = cast("JsonValue", declared)
@@ -372,19 +369,26 @@ class Config:
 
         两段合成，次序即优先级：
 
-        1. **用户留在文件里的键**（本登记表没见过的那些）——引擎不删别人的东西；
-        2. **本会话声明的键**——声明是事实源，文件里的旧值在这里被顶掉。
+        1. **用户留在文件里的键**（:meth:`_owns_value` 判为引擎没有值可写的那些）；
+        2. **本会话声明且带默认值的键**——声明是事实源，文件里的旧值在这里被顶掉。
 
-        于是"曾声明、后已删除"的键会随本轮落盘一起消失（登记表里有、`_session` 里没有、
-        又不算用户加的），而用户自己加的键留得住。判据靠 `_seen` 这份账：谁登记过，谁归引擎管。
+        归属按"引擎手里有没有值"判，两条各堵住一类静默丢值：
 
-        **扫描登记的键（`_elsewhere`）不在这两段里**：扫描只说明"全仓有这一条声明"，
-        没有值可写——它若被当成该有的键，值文件里就会凭空多出一行编出来的数据。
+        - **只声明、没给默认值的键**（只写了 `type` / `doc` / `file`）：值只能由文件给，
+          落盘时若把它算作引擎管的键，`_flush` 会当成"应删除"清掉用户写下的那一行；
+        - **扫描登记的键（`_elsewhere`）**：扫描只说明"全仓有这一条声明"，本会话并未声明它，
+          故值同样只能由文件给；它既不进第二段（不会凭空多出一行编出来的数据），
+          也不从第一段里剔除（不会删掉用户已有的值）。
         """
         loaded = self._load()
-        user = {key: value for key, value in loaded.items() if key not in self._seen}
+        user = {key: value for key, value in loaded.items() if not self._owns_value(key)}
         merged = {**user, **self._session}
         return {key: merged[key] for key in sorted(merged)}
+
+    def _owns_value(self, key: str) -> bool:
+        """这条键的值归不归引擎管：**登记过且声明里带着可写的值**才算。"""
+        item = self._declarations.get(key)
+        return key in self._seen and item is not None and item.default is not MISSING
 
     def _schema_reference(self) -> str:
         """值文件顶部那句 `$schema`：指向词表，按仓根算相对路径（搬仓不失效）。"""
@@ -480,14 +484,13 @@ class Config:
         """
         added: list[str] = []
         for path in sorted(manifest):
-            self._seen.add(path)
             if path in self._declarations:
                 continue
             self._elsewhere[path] = _Item(
                 spec=spec_of(type(None)),
                 default=None,
                 doc="",
-                site=self._call_site(),
+                site=self._call_site(depth=_REDUCE_CALLER_DEPTH),
                 module=manifest[path],
             )
             added.append(path)
@@ -563,10 +566,10 @@ class Config:
             str(key): cast("JsonValue", value) for key, value in data.items() if key != SCHEMA_KEY
         }
 
-    def _call_site(self) -> CallSite:
-        """调用点的出处：从本帧往上找第 `_CALLER_DEPTH` 层的代码位置。"""
+    def _call_site(self, *, depth: int = _CALLER_DEPTH) -> CallSite:
+        """调用点的出处：从本帧往上找第 `depth` 层的代码位置。"""
         frame = inspect.currentframe()
-        for _ in range(_CALLER_DEPTH):
+        for _ in range(depth):
             if frame is None:
                 break
             frame = frame.f_back

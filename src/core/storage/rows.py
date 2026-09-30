@@ -17,7 +17,8 @@
 - **边身份是摘要**（§8.2）：同一关系重复写不产生第二行，主键即身份，故写入是幂等的。
 
 **提交口径**：每个写方法自己提交一次（一次写入即一次落盘）。本层不做跨行事务——
-批量写入要合并成一次提交时，由上层显式包一层（设计篇 §12 的批量与压实见未来项）。
+批量写入要合并成一次提交时，由上层显式包一层（:meth:`Rows.batch`）；
+档一重建（:func:`rebuild`）正是这样的批量场景，整轮补行只提交一次。
 
 **档一重建**（§8.5）也在此：以载体为真源，**只补缺行**，已有行一律不动；
 重扫补回的是"身份＋位置"，`kind` 与落盘时刻不在记录头里，只能给空值（未知即降级）。
@@ -27,6 +28,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -40,7 +42,7 @@ from .tables import quote_identifier
 
 if TYPE_CHECKING:
     import sqlite3
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
     from .hub import Hub
 
@@ -290,13 +292,39 @@ class Rows:
     def __init__(self, connection: sqlite3.Connection) -> None:
         """绑定一个已对齐的连接。"""
         self._connection = connection
+        self._batch_depth = 0
+
+    # ---- 批量：把一批写合并成一次提交 ----
+
+    @contextlib.contextmanager
+    def batch(self) -> Iterator[None]:
+        """进入批量：块内的写方法不再各自提交，退出时**统一提交一次**。
+
+        模块口径是"每个写方法自己提交一次"，跨行事务由上层显式包——批量场景（档一重建、
+        将来的压实与合并）正是那个上层。嵌套进入按外层记账，只有最外层退出才落盘。
+
+        中途抛出时**照样提交已写的部分**：本层的批量场景承诺"已补的行留在库里、重跑幂等"，
+        回滚反而把这次已核对过的结果一并丢掉。
+        """
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                self._connection.commit()
+
+    def _commit(self) -> None:
+        """提交一次；批量块（:meth:`batch`）内先记账，等整批退出时统一提交。"""
+        if self._batch_depth == 0:
+            self._connection.commit()
 
     # ---- 块行 ----
 
     def put_block(self, row: BlockRow) -> None:
         """写入或改写一条块行（同一 `value_uuid` 即同一身份）。"""
         self._connection.execute(_INSERT_BLOCK, _block_values(row))
-        self._connection.commit()
+        self._commit()
 
     def block(self, value_uuid: str) -> BlockRow | None:
         """按身份取一条块行；没有即 ``None``。"""
@@ -311,7 +339,7 @@ class Rows:
     def drop_block(self, value_uuid: str) -> bool:
         """摘掉一条块行；返回是否确实摘掉了一行。"""
         cursor = self._connection.execute(_DELETE_BLOCK, (value_uuid,))
-        self._connection.commit()
+        self._commit()
         return cursor.rowcount > 0
 
     def move_block(self, row: BlockRow, *, updated: int | None = None) -> bool:
@@ -324,7 +352,7 @@ class Rows:
         cursor = self._connection.execute(
             _MOVE_BLOCK, (*_coordinates(row, updated), row.value_uuid)
         )
-        self._connection.commit()
+        self._commit()
         return cursor.rowcount > 0
 
     # ---- 内容行 ----
@@ -332,7 +360,7 @@ class Rows:
     def put_body(self, row: BodyRow) -> None:
         """写入或改写一条内容行（同一 `value_uuid` 即同一身份）。"""
         self._connection.execute(_INSERT_BODY, _body_values(row))
-        self._connection.commit()
+        self._commit()
 
     def body(self, value_uuid: str) -> BodyRow | None:
         """按身份取一条内容行；没有即 ``None``。"""
@@ -347,7 +375,7 @@ class Rows:
     def move_body(self, row: BodyRow, *, updated: int | None = None) -> bool:
         """**只改坐标**：按 `row` 里的位置挪这一行；身份与两个时刻都不动。"""
         cursor = self._connection.execute(_MOVE_BODY, (*_coordinates(row, updated), row.value_uuid))
-        self._connection.commit()
+        self._commit()
         return cursor.rowcount > 0
 
     # ---- 两张表合起来看 ----
@@ -390,7 +418,7 @@ class Rows:
             _INSERT_HUB,
             (name, role, state, now_ms() if created is None else created),
         )
-        self._connection.commit()
+        self._commit()
         return cursor.rowcount > 0
 
     def hub(self, name: str) -> HubRow | None:
@@ -417,7 +445,7 @@ class Rows:
                 now_ms() if edge.created == 0 else edge.created,
             ),
         )
-        self._connection.commit()
+        self._commit()
         return cursor.rowcount > 0
 
     def edges_from(self, src: str, kind: str) -> tuple[EdgeRow, ...]:
@@ -444,7 +472,10 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
 
     进哪张表**由载荷判断**（§3.2.1）：带指针的是块记录，进 `block`；其余是内容记录，进
     `body`。判据落在载荷上，故类型为空也认得出。坏点即停：遇到读不出底来的载体即抛，
-    已补的行留在库里，重跑幂等。
+    已补的行照旧留在库里（整批提交一次），重跑幂等。
+
+    两类开销在这一层各自消掉：**已有身份集合进循环前一次预载**——逐条 `SELECT` 在大库里是
+    N+1 查询；**整轮补行包在一层 :meth:`Rows.batch` 里**——逐行提交就是逐行 fsync。
     """
     stamp = now_ms() if now is None else now
     registered: list[str] = []
@@ -452,20 +483,43 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
     bodies: list[str] = []
     scanned = 0
 
-    for hub in hubs:
-        if rows.hub(hub.name) is None:
-            rows.register_hub(hub.name, created=stamp)
-            registered.append(hub.name)
-        for pack, span, raw in hub.scan():
-            scanned += 1
-            record = decode(raw)
-            pointer = body_ref_of(record.payload)
-            if pointer is None:
-                if rows.body(record.id.value_uuid) is None:
-                    rows.put_body(
-                        BodyRow(
-                            value_uuid=record.id.value_uuid,
+    # 进循环前一次读全：判"缺不缺"用集合，O(1)；扫描中补上的身份同样记进集合，
+    # 免得同一身份在两处出现时被补成两行。
+    known_blocks = {row.value_uuid for row in rows.blocks()}
+    known_bodies = {row.value_uuid for row in rows.bodies()}
+    with rows.batch():
+        for hub in hubs:
+            if rows.hub(hub.name) is None:
+                rows.register_hub(hub.name, created=stamp)
+                registered.append(hub.name)
+            for pack, span, raw in hub.scan():
+                scanned += 1
+                record = decode(raw)
+                pointer = body_ref_of(record.payload)
+                value_uuid = record.id.value_uuid
+                if pointer is None:
+                    if value_uuid not in known_bodies:
+                        rows.put_body(
+                            BodyRow(
+                                value_uuid=value_uuid,
+                                value_hash=record.id.value_hash,
+                                hub=hub.name,
+                                pack=pack,
+                                span=span,
+                                size=len(raw),
+                                birth_time=record.id.birth_time,
+                            )
+                        )
+                        known_bodies.add(value_uuid)
+                        bodies.append(value_uuid)
+                    continue
+                if value_uuid not in known_blocks:
+                    rows.put_block(
+                        BlockRow(
+                            value_uuid=value_uuid,
                             value_hash=record.id.value_hash,
+                            body_value_uuid=pointer.value_uuid,
+                            body_value_hash=pointer.value_hash,
                             hub=hub.name,
                             pack=pack,
                             span=span,
@@ -473,23 +527,8 @@ def rebuild(rows: Rows, hubs: Iterable[Hub], *, now: int | None = None) -> Rebui
                             birth_time=record.id.birth_time,
                         )
                     )
-                    bodies.append(record.id.value_uuid)
-                continue
-            if rows.block(record.id.value_uuid) is None:
-                rows.put_block(
-                    BlockRow(
-                        value_uuid=record.id.value_uuid,
-                        value_hash=record.id.value_hash,
-                        body_value_uuid=pointer.value_uuid,
-                        body_value_hash=pointer.value_hash,
-                        hub=hub.name,
-                        pack=pack,
-                        span=span,
-                        size=len(raw),
-                        birth_time=record.id.birth_time,
-                    )
-                )
-                blocks.append(record.id.value_uuid)
+                    known_blocks.add(value_uuid)
+                    blocks.append(value_uuid)
 
     return RebuildReport(
         registered_hubs=tuple(registered),

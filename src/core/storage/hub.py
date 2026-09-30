@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -155,8 +156,8 @@ class Hub:
         Raises:
             RecordFormatError: 记录不自框定，或选中的载体尾部不在格边界（残写，不猜从哪儿接）。
         """
-        for name in self._by_size_desc():
-            with self.carrier(name) as carrier:
+        with contextlib.ExitStack() as stack:
+            for name, carrier in self._by_size_desc(stack):
                 if not carrier.sealed(self._max_bytes):
                     return Placement(pack=name, span=carrier.append(raw))
         return self._append_to_new_pack(raw)
@@ -190,13 +191,18 @@ class Hub:
         except (RecordFormatError, SlotError) as error:
             raise HubShapeError(f"{PACKS_DIRNAME}/ 里的 {name} 不是载体: {error}") from error
 
-    def _by_size_desc(self) -> tuple[str, ...]:
-        """载体按"从大到小"排；同大小按名字排，使判据完全确定。"""
-        sized: list[tuple[int, str]] = []
+    def _by_size_desc(self, stack: contextlib.ExitStack) -> tuple[tuple[str, Carrier], ...]:
+        """载体按"从大到小"排（同大小按名字排，使判据完全确定），连同**已打开的载体**一起交出。
+
+        句柄在排序时一次打开、交给调用方复用，退出时由 `stack` 统一收口：若排序开一遍、
+        逐个试写再开一遍，每次 `append`（写路径上每条记录一次）的 `open` 数就是载体数的两倍。
+        """
+        sized: list[tuple[int, str, Carrier]] = []
         for name in self.pack_names():
-            with self.carrier(name) as carrier:
-                sized.append((carrier.size, name))
-        return tuple(name for _size, name in sorted(sized, key=lambda item: (-item[0], item[1])))
+            carrier = stack.enter_context(self.carrier(name))
+            sized.append((carrier.size, name, carrier))
+        sized.sort(key=lambda item: (-item[0], item[1]))
+        return tuple((name, carrier) for _size, name, carrier in sized)
 
     def _append_to_new_pack(self, raw: bytes) -> Placement:
         """新开一个载体，把记录写进去。"""

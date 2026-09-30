@@ -4,7 +4,7 @@
 """打包入口：先用 PyInstaller 出免安装包，可选再调 Inno Setup 出安装包。
 
 **当前不可运行**：它读的 `packaging/cairn.spec` 以 `src/app` 为入口，而应用层在 2026-09-29 的
-内核重建里被整条删除（见 `.agents/skills/memory/references/progress.md`「内核重建」）。
+内核重建里被整条删除（见 `.agents/skills/memory/progress.md`「内核重建」）。
 文件留着当参考；UI 外壳回来之后修回，并把 `.github/workflows/build-windows.yml` 的标签触发一并恢复。
 
 用法：

@@ -139,4 +139,4 @@ def _int_or_zero(value: object) -> int:
         raise InvalidIdError(f"ID 记录的整数字段非法: {value!r}") from error
 
 
-__all__ = ["ID", "digest", "new_uuid", "now_ns"]
+__all__ = ["ID", "digest", "new_uuid"]

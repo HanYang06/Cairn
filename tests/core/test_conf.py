@@ -128,10 +128,15 @@ def test_plan_reports_only_real_changes(conf: Config):
     assert conf.plan() == ()
 
 
-def test_sync_drops_keys_the_declaration_no_longer_mentions(conf: Config, root: Path):
-    """曾声明、后已删除的键随落盘消失（它既不在登记表里，也不是用户加的）。"""
+def test_sync_keeps_a_key_that_is_only_scanned(root: Path):
+    """扫描登记不等于本会话声明：没 import 到声明模块的键，值文件里那份要留住。
+
+    `reduce()` 只说明"全仓有这一条声明"，本会话手里并没有可写的值；若把它计入引擎的账，
+    `_payload` 就会把它从用户段剔除，`_flush` 随即当成"应删除"清掉用户写下的那一行。
+    """
     root.mkdir(parents=True)
-    conf.settings_path().write_text(
+    settings = root / "settings.json"
+    settings.write_text(
         json.dumps({"$schema": "schema/settings.json", "old.key": 1}) + "\n", encoding="utf-8"
     )
     fresh = Config(root=root)
@@ -139,7 +144,24 @@ def test_sync_drops_keys_the_declaration_no_longer_mentions(conf: Config, root: 
 
     fresh.sync()
 
-    assert values(fresh) == {}
+    assert values(fresh) == {"old.key": 1}
+
+
+def test_declared_key_without_default_keeps_its_file_value(root: Path):
+    """只声明、没给默认值的键：值只能由文件给，落盘时不得把它当"应删除"清掉。"""
+    root.mkdir(parents=True)
+    settings = root / "settings.json"
+    settings.write_text(
+        json.dumps({"$schema": "schema/settings.json", "core.mode": "strict"}) + "\n",
+        encoding="utf-8",
+    )
+    fresh = Config(root=root)
+    fresh("core.mode", type=str, doc="运行模式")
+
+    assert fresh("core.mode") == "strict"
+    fresh.sync()
+
+    assert values(fresh) == {"core.mode": "strict"}
 
 
 # ---- 写入方向：代码 → 文件，单向 ---- #

@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Self
@@ -134,7 +135,9 @@ class Bus:
             except Exception as error:  # noqa: BLE001 — 通知路径的异常隔离就是本方法的本职
                 failures.append(HandlerError(event=event, handler=handler, error=error))
                 if self._on_error is not None:
-                    self._on_error(event, handler, error)
+                    # 钩子自身抛错同样不回流写路径：失败清单已在手上，钩子只是旁路。
+                    with contextlib.suppress(Exception):
+                        self._on_error(event, handler, error)
         return tuple(failures)
 
     def receivers(self, event_type: str) -> int:

@@ -95,10 +95,6 @@ def _element_of(element: object) -> object:
         raise ConfigTypeError(
             f"配置类型 {element!r} 嵌套过深：容器元素只能是 int / float / bool / str"
         )
-    if inner.element is not None or inner.entries is not None:
-        raise ConfigTypeError(
-            f"配置类型 {element!r} 嵌套过深：容器元素只能是 int / float / bool / str"
-        )
     return inner.scalar
 
 

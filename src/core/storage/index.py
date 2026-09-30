@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -40,6 +41,8 @@ from .tables import (
 
 if TYPE_CHECKING:
     from types import TracebackType
+
+LOGGER = logging.getLogger("cairn.storage")
 
 META_TABLE = META_TABLE_SPEC.name
 """库级登记表的名字：索引库自用，由开库流程保证存在（建表语句仍由声明编译）。"""
@@ -267,7 +270,9 @@ def _align(
         differences.append(
             Difference(DiffKind.MISSING_TABLE, META_TABLE, META_TABLE, "库级登记表未建")
         )
-    rebuilt, rebuild_statements, rebuild_warnings = _plan_rebuild(declaration, differences, rebuild)
+    rebuilt, rebuild_statements, rebuild_warnings = _plan_rebuild(
+        declaration, actual, differences, rebuild
+    )
     statements.extend(rebuild_statements)
     warnings.extend(rebuild_warnings)
 
@@ -336,6 +341,7 @@ def _plan(
 
 def _plan_rebuild(
     declaration: Declaration,
+    actual: dict[str, _ActualTable],
     differences: list[Difference],
     rebuild: RebuildPlan | None,
 ) -> _Rebuild:
@@ -352,7 +358,16 @@ def _plan_rebuild(
         spec = declaration.table(name)
         if spec is None:  # 破坏性差异只可能来自声明过的表
             raise IndexSchemaError(f"待重建的表不在声明里: {name}")
-        isolated = f"{name}{DROPPED_SUFFIX}{stamp}"
+        found = actual.get(name)
+        if found is None:  # 破坏性差异只可能来自库里确实存在的表
+            raise IndexSchemaError(f"待重建的表不在库里: {name}")
+        # 先拆掉旧表的索引：索引名**整库唯一**，而 RENAME 只改表名、不动索引名，
+        # 留着同名索引会让随后的 CREATE INDEX IF NOT EXISTS 被静默跳过。
+        # 名字取自 PRAGMA index_list 的读回结果（`actual`），不是声明推出来的那套。
+        for index_name, index in sorted(found.indexes.items()):
+            if index.origin == "c":  # 隐式唯一索引（origin='u'）随表改名走，DROP 不掉
+                statements.append(f"DROP INDEX IF EXISTS {quote_identifier(index_name)}")
+        isolated = _free_name(f"{name}{DROPPED_SUFFIX}{stamp}", actual)
         statements.append(
             f"ALTER TABLE {quote_identifier(name)} RENAME TO {quote_identifier(isolated)}"
         )
@@ -408,7 +423,7 @@ def _compare_columns(spec: TableSpec, found: _ActualTable) -> _Plan:
             destructive=True,
         )
         for column in spec.columns
-        if column.unique and not _has_unique_on(found, column.name)
+        if column.unique and not _has_unique_on(found, column.sql_name)
     )
 
     return differences, statements, warnings
@@ -499,6 +514,7 @@ def _authorize(rebuild: RebuildPlan | None, targets: tuple[str, ...]) -> None:
     missing = [name for name in targets if name not in rebuild.tables]
     if missing:
         raise IndexSchemaError("授权未覆盖这些表: " + ", ".join(missing))
+    LOGGER.warning("授权重建: %s（理由: %s）", ", ".join(targets), rebuild.reason)
 
 
 def _looks_like_ours(actual: dict[str, _ActualTable], declared: set[str]) -> bool:
@@ -546,6 +562,18 @@ def _index_columns(connection: sqlite3.Connection, name: str) -> tuple[str, ...]
     """读一个索引的列，顺序即索引定义里的顺序。"""
     rows = connection.execute(f"PRAGMA index_info({quote_identifier(name)})").fetchall()
     return tuple(str(row["name"]) for row in rows)
+
+
+def _free_name(wanted: str, actual: dict[str, _ActualTable]) -> str:
+    """隔离表名：与库内已有的表重名就逐个追加下划线，直到腾出这个名字。
+
+    时刻戳只精确到毫秒，同一毫秒内对同一张表重建两次、或与上次运行留下的隔离表撞名，
+    ``ALTER TABLE … RENAME TO`` 都会因目标表已存在而失败，开库因此中断。
+    """
+    candidate = wanted
+    while candidate in actual:
+        candidate += "_"
+    return candidate
 
 
 def _stored_signature(connection: sqlite3.Connection) -> str | None:

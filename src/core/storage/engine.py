@@ -26,12 +26,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.clock import now_ms
-from core.event.bus import Bus
 from core.event.catalog import OBJECT_DELETED, OBJECT_PUT
 from core.event.events import Event
 from core.exc import ObjectNotFoundError
 
-from .carrier import SlotRange
 from .format.block import BodyRef, encode_block_payload
 from .format.id import ID, digest
 from .format.record import decode, encode
@@ -41,6 +39,7 @@ from .rows import BlockRow, BodyRow
 if TYPE_CHECKING:
     from core.event.bus import Bus
 
+    from .carrier import SlotRange
     from .index import Index
 
 ENGINE_SOURCE = "core.storage"
@@ -239,4 +238,4 @@ class Storage:
         self._bus.emit(Event(type=event_type, source=ENGINE_SOURCE, subject=subject, data=data))
 
 
-__all__ = ["ENGINE_SOURCE", "SlotRange", "Storage"]
+__all__ = ["ENGINE_SOURCE", "Storage"]

@@ -141,7 +141,7 @@ def test_drop_and_storage_face(tmp_path: Path):
     这里同时钉住一条**当前口径**：摘块只摘行，记录仍留在载体里（追加写不动旧字节），
     故巡检会报"盘上有记录、库里没有行"。这一条要等压实回收落地才会消失（未来项）；
     在那之前，处置会把这一行补回来——等于撤销这次摘块。见 `progress.md` 的未来项与
-    `decisions.md` 的挂账。
+    `references/decisions/` 的挂账。
     """
     with Kernel.create(tmp_path / "vault") as kernel:
         block = kernel.store(b"droppable")

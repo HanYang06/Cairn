@@ -17,7 +17,7 @@
   columns:
     - id().value_uuid
     - id().value_hash
-    - id().birth_time·
+    - id().birth_time
     - id().name
     - id(body).value_uuid
     - id(body).value_hash

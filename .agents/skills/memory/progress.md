@@ -199,3 +199,8 @@
   另：`review`（第三方 OpenCodeReview）会因**安装抖动**失败（`ocr: command not found` /
   `Cannot find module '/usr/local/bin/ocr'`），与代码无关、重跑可自愈（2026-09-29 连失败两次、
   第三次通过）；该检查非 ruleset 必需项（只 `quality` 必需）。
+- [x] **PR #25 评审整改（2026-09-30）**：31 条评审逐条复核并全部修复，含上一轮错修 / 漏修的纠正
+  （以评审为准改测试、`index.py` 拆索引走 PRAGMA 真名、`_owns_value()` 归属判定、句柄泄漏真修、
+  `SlotRange` 改 `TYPE_CHECKING`）与两处既有门禁失败（`tools/spdx.py` 的 quotepath / `.on-run` 风格表）。
+  记录见 `note/25.md` 与 `fix/25.md`（成对，31 条），条目见 `references/changes/2026-09-30.md`。
+  **改动尚未提交**；`tools/review_record.py` 仍未入库，是否纳入待定。

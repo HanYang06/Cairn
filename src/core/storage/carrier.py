@@ -140,6 +140,10 @@ class Carrier:
             RecordFormatError: 文件头不足或魔数不符。
         """
         self._path = Path(path)
+        # 槽长的形状先验，再开文件：非法槽长（0 / 负数）在句柄打开之前就报，
+        # 否则 _check_slot_bytes 抛出时已打开的句柄没人收口。
+        if slot_bytes is not None:
+            _check_slot_bytes(slot_bytes)
         if self._path.exists():
             handle = self._path.open("r+b")
             try:
@@ -147,7 +151,7 @@ class Carrier:
             except (RecordFormatError, SlotError):
                 handle.close()
                 raise
-            if slot_bytes is not None and _check_slot_bytes(slot_bytes) != self._slot_bytes:
+            if slot_bytes is not None and slot_bytes != self._slot_bytes:
                 handle.close()
                 raise SlotError(
                     f"槽长与载体文件头不符: 给定 {slot_bytes}，文件头 {self._slot_bytes}"
@@ -272,13 +276,24 @@ class Carrier:
         self.close()
 
     def _read_total_len(self, offset: int) -> int:
-        """读出偏移处的记录总长，并挡掉"总长小于记录头"这种会让顺扫打转的脏值。"""
+        """读出偏移处的记录总长，并挡掉两类脏值：小于记录头（顺扫会打转）、大过文件余量。
+
+        后者正是"截断"：`total_len` 是 4 字节字段，损坏数据能解出接近 4GB 的值，
+        拿它去 `read` 会一次性申请巨量内存。
+        """
         head = self._read_at(offset, LEN_BYTES)
         if len(head) < LEN_BYTES:
             raise RecordFormatError(f"偏移 {offset} 处读不到记录总长")
         total_len = int.from_bytes(head, "big")
         if total_len < RECORD_HEADER_BYTES:
             raise RecordFormatError(f"偏移 {offset} 处的记录总长非法: {total_len}")
+        # 上界：总长是 4 字节字段，损坏的载体能解出接近 4GB 的值，照它去 read 会撑爆内存。
+        # 文件里装不下就是截断，故与"读到的字节数不足"同一口径报错。
+        remaining = self.size - offset
+        if total_len > remaining:
+            raise RecordFormatError(
+                f"记录被截断: 偏移 {offset} 处的总长 {total_len} 超过文件剩余 {remaining} 字节"
+            )
         return total_len
 
     def _read_at(self, offset: int, count: int) -> bytes:

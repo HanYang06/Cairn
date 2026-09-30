@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 
 import cbor2
 
-from core.exc import RecordFormatError
+from core.exc import InvalidIdError, RecordFormatError
 
 from .id import ID, digest
 
@@ -111,7 +111,10 @@ def decode(raw: bytes) -> Record:
     payload = raw[HEADER_BYTES + id_len :]
     if digest(payload) != checksum:
         raise RecordFormatError("载荷摘要与记录头校验和不符：内容已被改动或截断")
-    record_id = ID.from_record(mapping)
+    try:
+        record_id = ID.from_record(mapping)
+    except InvalidIdError as error:
+        raise RecordFormatError(f"ID 段身份非法: {error}") from error
     if record_id.value_hash != checksum:
         raise RecordFormatError(
             f"ID 声明的摘要与载荷不符: id={record_id.value_hash} payload={checksum}"
@@ -146,6 +149,8 @@ def _decode_section(section: io.BytesIO) -> Mapping[str, object]:
         decoded = cbor2.CBORDecoder(section).decode()
     except (cbor2.CBORDecodeError, EOFError) as error:
         raise RecordFormatError(f"ID 段不是合法 CBOR: {error}") from error
+    except Exception as error:
+        raise RecordFormatError(f"ID 段解析失败: {error}") from error
     if not isinstance(decoded, dict):
         raise RecordFormatError(f"ID 段不是映射: {type(decoded).__name__}")
     mapping: dict[str, object] = {}

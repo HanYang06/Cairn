@@ -8,11 +8,13 @@
 from __future__ import annotations
 
 import sqlite3
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 
 from core.exc import IndexNotFoundError, IndexSchemaError
+from core.storage import index as index_module
 from core.storage.index import DROPPED_SUFFIX, DiffKind, Index, RebuildPlan
 from core.storage.tables import Declaration, TableSpec, kernel_tables
 
@@ -333,6 +335,52 @@ def test_rebuild_isolates_the_old_table_and_keeps_its_rows(tmp_path: Path):
     assert kept == [("1",)]
     assert [row[1] for row in fresh] == ["id", "tag"]
     assert [str(row[2]) for row in fresh] == ["TEXT", "INTEGER"]
+
+
+def test_rebuild_drops_the_old_index_before_the_rename(tmp_path: Path):
+    """重建前先拆旧表的索引：索引名整库唯一，留着会让新表那条 ``CREATE INDEX`` 被静默跳过。"""
+    path = tmp_path / "catalog.db"
+    Index.open(path, _decl(), create=True).close()
+
+    changed = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "from": "prog", "type": "integer"}])
+    plan = RebuildPlan(tables=("thing",), reason="测试：改列型")
+    with Index.open(path, changed, rebuild=plan) as index:
+        assert index.alignment.rebuilt == ("thing",)
+        assert any(entry.startswith("DROP INDEX") for entry in index.alignment.applied)
+
+    found = [str(row[1]) for row in _query(path, 'PRAGMA index_list("thing")')]
+    assert "idx_thing_tag" in found
+
+
+def test_rebuild_isolation_name_avoids_a_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """隔离名与库内已有表撞名时逐个让名：时刻戳只精确到毫秒，同一毫秒撞得上第二次。"""
+    path = tmp_path / "catalog.db"
+    Index.open(path, _decl(), create=True).close()
+    stamp = 1_700_000_000_000
+    monkeypatch.setattr(index_module, "time", SimpleNamespace(time=lambda: stamp / 1000))
+
+    changed = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "from": "prog", "type": "integer"}])
+    with Index.open(
+        path, changed, rebuild=RebuildPlan(tables=("thing",), reason="测试：改列型")
+    ) as index:
+        assert index.alignment.rebuilt == ("thing",)
+
+    # 同一毫秒再来一次：不撞名就 RENAME 失败、开库中断
+    again = _decl(columns=[_BASE_COLUMNS[0], {"name": "tag", "from": "prog", "type": "text"}])
+    with Index.open(
+        path, again, rebuild=RebuildPlan(tables=("thing",), reason="测试：同一毫秒再来一次")
+    ) as index:
+        assert index.alignment.rebuilt == ("thing",)
+
+    isolated = _query(
+        path,
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'thing__dropped_%' "
+        "ORDER BY name",
+    )
+    assert [str(row[0]) for row in isolated] == [
+        f"thing{DROPPED_SUFFIX}{stamp}",
+        f"thing{DROPPED_SUFFIX}{stamp}_",
+    ]
 
 
 def test_rebuild_authorization_must_cover_every_table(tmp_path: Path):

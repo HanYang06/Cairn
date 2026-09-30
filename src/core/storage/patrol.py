@@ -26,7 +26,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from core.clock import now_ms
-from core.exc import HubShapeError, RecordFormatError, SlotError
+from core.exc import HubShapeError, InvalidIdError, RecordFormatError, SlotError
 
 from .format.block import BodyRef, body_ref_of
 from .format.record import decode
@@ -164,7 +164,7 @@ def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) 
     rows = index.rows
     on_disk = {hub.name: hub for hub in find_hubs(root, policy=policy)}
     registered = {item.name for item in rows.hubs()}
-    finds, occurrences, records_scanned = _scan_disk(on_disk, registered)
+    finds, occurrences, records_scanned, corrupt_packs = _scan_disk(on_disk, registered)
 
     blocks = rows.blocks()
     bodies = rows.bodies()
@@ -175,7 +175,7 @@ def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) 
         Find(FindKind.MISSING_HUB, name, name, "登记或行指向的 hub 目录不在")
         for name in sorted(missing)
     )
-    finds.extend(_row_finds(blocks, bodies, missing, occurrences))
+    finds.extend(_row_finds(blocks, bodies, missing, occurrences, corrupt_packs))
     finds.extend(_missing_row_finds(blocks, bodies, occurrences))
 
     ordered = tuple(sorted(finds, key=lambda item: (item.kind.value, item.hub, item.subject)))
@@ -188,7 +188,7 @@ def patrol(index: Index, root: str | Path, *, policy: PackPolicy | None = None) 
 
 def _scan_disk(
     on_disk: dict[str, Hub], registered: set[str]
-) -> tuple[list[Find], dict[str, list[_Occurrence]], int]:
+) -> tuple[list[Find], dict[str, list[_Occurrence]], int, set[tuple[str, str]]]:
     """盘 → 库：登记缺的 hub、坏载体，以及各身份在盘上的出现。
 
     坏载体**按载体捕捉**（`_scan` 一次只扫一个），故一个坏了不影响其余的照扫。
@@ -196,15 +196,17 @@ def _scan_disk(
     finds: list[Find] = []
     occurrences: dict[str, list[_Occurrence]] = {}
     records_scanned = 0
+    corrupt_packs: set[tuple[str, str]] = set()
     for name, hub in on_disk.items():
         if name not in registered:
             finds.append(Find(FindKind.UNREGISTERED_HUB, name, name, "hub 目录在、登记缺"))
         for pack in hub.pack_names():
             try:
                 records_scanned += _scan(hub, pack, occurrences)
-            except (RecordFormatError, SlotError, HubShapeError) as error:
+            except (InvalidIdError, RecordFormatError, SlotError, HubShapeError) as error:
                 finds.append(Find(FindKind.CORRUPT_CARRIER, name, pack, f"载体读不到底: {error}"))
-    return finds, occurrences, records_scanned
+                corrupt_packs.add((name, pack))
+    return finds, occurrences, records_scanned, corrupt_packs
 
 
 def _row_finds(
@@ -212,14 +214,19 @@ def _row_finds(
     bodies: tuple[BodyRow, ...],
     missing: set[str],
     occurrences: dict[str, list[_Occurrence]],
+    corrupt_packs: set[tuple[str, str]],
 ) -> list[Find]:
     """库 → 盘：逐行比位置与摘要。"""
     finds: list[Find] = []
     for block in blocks:
+        if (block.hub, block.pack) in corrupt_packs:
+            continue
         find = _compare(block, missing, occurrences)
         if find is not None:
             finds.append(find)
     for body in bodies:
+        if (body.hub, body.pack) in corrupt_packs:
+            continue
         find = _compare(body, missing, occurrences)
         if find is not None:
             finds.append(find)

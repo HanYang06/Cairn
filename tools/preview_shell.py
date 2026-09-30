@@ -4,7 +4,7 @@
 """离屏把壳渲染成 PNG，用于自检外观（开发工具，不参与产品）。
 
 **当前不可运行**：它依赖的 `app` 与 `ui_tools` 两层在 2026-09-29 的内核重建里被整条删除
-（见 `.agents/skills/memory/references/progress.md`「内核重建」）。文件留着当参考，
+（见 `.agents/skills/memory/progress.md`「内核重建」）。文件留着当参考，
 待 UI 外壳重建后修回；`pyproject.toml` 的 mypy 覆盖里为它开了豁免，修回时请一并摘掉。
 """
 

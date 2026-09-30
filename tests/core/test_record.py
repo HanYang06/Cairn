@@ -126,10 +126,10 @@ def test_decode_rejects_unparsable_id_section():
 
 
 def test_decode_rejects_bad_birth_time():
-    """可选字段形态非法即抛，不静默吞掉脏字节。"""
+    """可选字段形态非法即抛，不静默吞掉脏字节（记录层统一抛记录错，见 `decode`）。"""
     section = _credentials(birth_time="not-a-number")
 
-    with pytest.raises(InvalidIdError, match="整数"):
+    with pytest.raises(RecordFormatError, match="整数"):
         decode(_frame(_PAYLOAD, section))
 
 
@@ -151,11 +151,13 @@ def test_decode_does_not_invent_birth_time():
 
 
 def test_decode_requires_both_credentials():
-    """两套凭证缺一即抛 InvalidIdError。"""
+    """两套凭证缺一即报错；`decode` 对外只暴露记录错，`InvalidIdError` 在此归一并保留原因链。"""
     section = cbor2.dumps({"value_uuid": "u-1"}, canonical=True)
 
-    with pytest.raises(InvalidIdError):
+    with pytest.raises(RecordFormatError) as caught:
         decode(_frame(_PAYLOAD, section))
+
+    assert isinstance(caught.value.__cause__, InvalidIdError)
 
 
 def test_decode_rejects_non_ascii_checksum_field():
@@ -189,7 +191,7 @@ def test_from_record_rejects_empty_credentials():
     """凭证存在但为空串（例如显式 null 被写成空）同样不是合法身份。"""
     section = cbor2.dumps({"value_uuid": "", "value_hash": digest(_PAYLOAD)}, canonical=True)
 
-    with pytest.raises(InvalidIdError):
+    with pytest.raises(RecordFormatError):
         decode(_frame(_PAYLOAD, section))
 
 
