@@ -53,11 +53,18 @@ function render(tokens) {
     "",
     ...scale("font", { ...tokens.fontFamily, ...tokens.fontSize }),
     "",
-    ...scale("leading", tokens.lineHeight),
+    // 行高：默认档写成 `--leading`（不带后缀）。
+    // 不用 `scale` 是因为它的 `-DEFAULT` 后缀会撞上 stylelint 的 kebab-case 判据——
+    // 那是给**自定义属性名**定的规矩，没必要为它把门禁放宽。
+    ...Object.entries(tokens.lineHeight).map(([name, value]) =>
+      name === "DEFAULT" ? `  --leading: ${value};` : `  --leading-${name}: ${value};`,
+    ),
     "",
     ...scale("dur", tokens.duration),
     "",
     ...scale("shadow", tokens.shadow),
+    "",
+    ...scale("size", tokens.size),
     "}",
     "",
     "@media (prefers-color-scheme: dark) {",

@@ -41,11 +41,18 @@ dev = [
     "pre-commit>=4.6.2",
     "modelscope>=1.40.1",
     "mkdocs-material>=9.7",
-    "mkdocstrings[python]>=0.30",
+    "mkdocstrings[python]>=1.0.6",
     # mypy strict 下 PyYAML 需要类型存根
     "types-pyyaml>=6.0.12",
     "deptry>=0.25.1",
     "import-linter>=2.15",
+    # 依赖 CVE 扫描（CI 的 security-scan 用）。与 import-linter 同类：
+    # 只是"跑一次看看"的命令行工具，不由代码 import。
+    "pip-audit>=2.10.1",
+    # 传递依赖的下限，只为把 CVE 顶掉：`pre-commit` 会拉 `virtualenv`，
+    # 而 21.7.10 有四个已知漏洞（PYSEC-2026-4011/4012/4013/4014，修复版 21.7.13）。
+    # 写在这里比"等 pre-commit 自己放开"可靠——它是 CI 门禁真会拦的那条线。
+    "virtualenv>=21.7.13",
 ]
 
 [build-system]

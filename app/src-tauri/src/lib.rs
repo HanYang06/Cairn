@@ -205,19 +205,25 @@ fn kernel_call(
     sidecar.call(&method, payload.unwrap_or(Value::Null))
 }
 
+mod system_fonts;
+
 /// 启动桌面外壳。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let vault = std::env::var(VAULT_ENV).unwrap_or_else(|_| "vault".to_string());
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_system_fonts::init())
         .setup(move |app| {
             let sidecar = Sidecar::start(&vault, Some(app.handle().clone()))
                 .map_err(std::io::Error::other)?;
             app.manage(SidecarState(Mutex::new(sidecar)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![kernel_call])
+        .invoke_handler(tauri::generate_handler![
+            kernel_call,
+            system_fonts::list_system_fonts
+        ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
 }
