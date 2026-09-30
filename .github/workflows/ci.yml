@@ -115,7 +115,7 @@ jobs:
   #   它不因既有漏洞把每个 PR 都判红，这才是 PR 门禁该有的口径。
   # · 主分支与手动触发上跑**全量**：`pip-audit`（Python 依赖 CVE）、`pnpm audit`、
   #   `gitleaks`（提交历史里的密钥）。全量扫描放这里，免得历史遗留问题卡住无关的 PR。
-  # · **CodeQL** 单独一个 workfow（`codeql.yml`）：它要写 Security 标签，权限特殊。
+  # · **CodeQL** 单独一个 workflow（`codeql.yml`）：它要写 Security 标签，权限特殊。
   security-deps:
     runs-on: ubuntu-latest
     permissions:
@@ -125,6 +125,9 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # ⚠️ 前置条件（仓库设置，文件里改不了）：**Dependency graph 必须开启**，
+      # 否则这个 action 直接报 "Dependency review is not supported on this repository"。
+      # 公开仓库通常默认开启；未开启时去 Settings → Security → Code security 打开。
       - name: Dependency review（新增依赖漏洞）
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
@@ -135,8 +138,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # 全量扫描：主分支推送与手动触发。PR 不跑——见上面那条的分工理由。
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # 全量扫描：**只在主分支推送与手动触发**。不给分支推送——
+    # 那会让每个功能分支都跑一遍全量（慢），而且一旦有既有问题，红的是无关的 PR。
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -150,8 +156,9 @@ jobs:
       - name: Sync dependencies
         run: uv sync
 
-      # Python 依赖的 CVE。已实测当前依赖零命中，故直接设成阻断。
-      # （`bandit` 不单独引：ruff 的 `S` 规则族覆盖同一批检查，见 rules/references/quality.md）
+      # Python 依赖的 CVE。**必须走全新 `uv sync` 的环境**：本机旧 `.venv` 会漏
+      # （实测它漏掉了 virtualenv 21.7.10 的四个漏洞，CI 才报出来）。
+      # `bandit` 不单独引：ruff 的 `S` 规则族覆盖同一批检查，见 quality.md。
       - name: Python dependency audit (pip-audit)
         run: uv run pip-audit --progress-spinner off
 

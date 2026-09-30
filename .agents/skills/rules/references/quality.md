@@ -102,6 +102,10 @@
   它没实现 audit 端点，裸跑直接报 `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`。
 - **`pip-audit` 断言的是"已装环境"**：本仓 `pip-audit` 报 `cairn ... not found on PyPI` 是
   **正常**的（自身未发布 PyPI），不是失败；它扫的是依赖树。
+- **要按 CI 的路径验，别只看本机**：本机 `.venv` 往往是旧的，会漏掉"锁文件里已经有的 CVE"。
+  实测一次：本地报零漏洞，CI 上全新 `uv sync` 报出 `virtualenv 21.7.10` 的四个已知漏洞
+  （PYSEC-2026-4011/4012/4013/4014）。**传递依赖的下限也要盯**——已把 `virtualenv>=21.7.13`
+  写进 dev 依赖把洞顶掉（写显式下限比等上游放开可靠，因为它是 CI 真会拦的那条线）。
 
 **不引 `bandit`**：ruff 的 `S` 规则族（`select = ["ALL"]` 已含）覆盖同一批检查，
 再引一个只是多一套配置与一份噪音。
