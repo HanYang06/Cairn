@@ -55,6 +55,7 @@ path = [
   "app/biome.json",
   "app/.vscode/**",
   "app/src/assets/**",
+  "app/src-tauri/Cargo.lock",
   "app/src-tauri/Cargo.toml",
   "app/src-tauri/tauri.conf.json",
   "app/src-tauri/capabilities/**",
