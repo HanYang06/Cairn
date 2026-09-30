@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Self
 from core.conf import conf
 from core.event.bus import Bus
 from core.storage import tables as _tables
+from core.storage.attrindex import build as _build_attrindex
 from core.storage.compact import compact as _compact
 from core.storage.compact import survey as _survey
 from core.storage.conf import PACK_MAX_BYTES, SLOT_BYTES
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from core.event.events import Event
+    from core.storage.attrindex import AttributeIndex
     from core.storage.compact import CompactReport, SurveyReport
     from core.storage.format.id import ID
     from core.storage.patrol import PatrolReport, RepairReport
@@ -289,6 +291,18 @@ class Kernel:
     def repair(self, report: PatrolReport) -> RepairReport:
         """按巡检报告处置：**只补不删**。"""
         return _repair(self._index, report)
+
+    def reindex(self) -> AttributeIndex:
+        """重建属性速查表并返回它。
+
+        它是**整份重算**的纯派生：顺扫块，按类型声明里 `__indexed__` 的那些属性建倒排。
+        不落盘、不进备份、不在写路径上维护——丢了重建即可，故不会有"增量维护漏了一处"
+        那种不报错、只查不到的事故。
+
+        **UI 需求**：全库顺扫，耗时随库体量增长；界面应在启动或按需重建时放进后台线程
+        并给进度。查表本身是内存操作，随便调。
+        """
+        return _build_attrindex(self._index, self._root, policy=self._policy)
 
     def survey(self) -> SurveyReport:
         """勘察整库：算出整理计划与显示用的全部数字（**只读**，一个字节都不动）。

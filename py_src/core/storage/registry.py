@@ -114,6 +114,9 @@ class TypeDecl:
         pack_budget: 载体份数配额；用满之后的处置见 `over_budget`。
         max_block_bytes: 单块体积上限（字节，已把分档位相加归一）；超限即拒写。
         over_budget: 配额用满之后的行为。
+        indexed: 这个类型里**要建速查**的属性名。速查是倒排（值 → 块身份），
+            它**不落盘**：从块整份重算即可，故领域只在这里声明"哪些可查"。
+            只收标量属性——容器值不可哈希，按它查只能是"包含"式，不值当。
     """
 
     name: str
@@ -132,6 +135,7 @@ class TypeDecl:
     pack_budget: int | None = None
     max_block_bytes: int | None = None
     over_budget: OverBudget = OverBudget.EXTEND
+    indexed: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """校验登记的字段名：能绑的只有落盘子集，指针只带两套凭证。
@@ -166,6 +170,19 @@ class TypeDecl:
         ):
             if value is not None and value < 1:
                 raise TableDeclarationError(f"类型 {self.name} 的 {label} 必须为正: {value}")
+        known = dict(self.attrs)
+        unknown = [name for name in self.indexed if name not in known]
+        if unknown:
+            raise TableDeclarationError(
+                f"类型 {self.name} 声明要建速查的属性 {unknown} 不是它的属性："
+                f"它有的是 {sorted(known)}"
+            )
+        bulky = [name for name in self.indexed if known[name].scalar in {list, dict}]
+        if bulky:
+            raise TableDeclarationError(
+                f"类型 {self.name} 的 {bulky} 是容器：容器值不可哈希，按它查只能是"
+                "「包含」式，不值当——要查就拆成标量属性"
+            )
 
     def referenced_tables(self) -> tuple[str, ...]:
         """本类型引用到的表名（去重、按出现顺序）。"""

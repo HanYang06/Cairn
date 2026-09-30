@@ -313,6 +313,7 @@ def _decl_of(
         pack_budget=_budget_field(cls, "__pack_budget__"),
         max_block_bytes=_max_block_bytes(cls),
         over_budget=_enum_field(cls, "__over_budget__", OverBudget, OverBudget.EXTEND),
+        indexed=_texts_field(cls, "__indexed__"),
     )
 
 
@@ -365,6 +366,19 @@ def _budget_field(cls: type[object], dunder: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TableDeclarationError(f"{cls.__name__} 的 {dunder} 必须是整数: {value!r}")
     return value
+
+
+def _texts_field(cls: type[object], dunder: str) -> tuple[str, ...]:
+    """读一串名字的声明（如 `__indexed__`）：本类没写即空。
+
+    只收字符串序列——写成单个字符串是最常见的笔误，故不让它"看起来也能用"。
+    """
+    value = cls.__dict__.get(dunder)
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
+        raise TableDeclarationError(f"{cls.__name__} 的 {dunder} 必须是字符串序列: {value!r}")
+    return tuple(value)
 
 
 def _max_block_bytes(cls: type[object]) -> int | None:
