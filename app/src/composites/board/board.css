@@ -1,0 +1,81 @@
+/*
+ * SPDX-FileCopyrightText: 2026 HanYang06
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * 卡片板：**整数格的网格**（`by-design.md` §8.1）。
+ *
+ * 网格线是画出来的（两层 repeating-linear-gradient），因为"看得见格子"是这个形态的一部分：
+ * 用户直接对着格子摆放，吸附才有依据。所有值走令牌，字面量由 stylelint 拦。
+ */
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(var(--board-cols), 1fr);
+  grid-template-rows: repeat(var(--board-rows), 1fr);
+  gap: var(--space-sm);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--space-sm);
+  border: var(--size-hairline) solid var(--color-border-faint);
+  border-radius: var(--radius-xl);
+  background-color: var(--color-bg);
+  background-image:
+    repeating-linear-gradient(
+      to right,
+      var(--color-border-faint) 0 var(--size-hairline),
+      transparent var(--size-hairline) calc(100% / var(--board-cols))
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      var(--color-border-faint) 0 var(--size-hairline),
+      transparent var(--size-hairline) calc(100% / var(--board-rows))
+    );
+}
+
+/* 槽是按钮：键盘可达性（Tab / Enter / 方向键）由它承担，
+   故这里只把按钮的默认外观抹平，观感仍归 `atoms/card`。 */
+.board-slot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  padding: var(--space-0);
+  border: none;
+  background: var(--color-transparent);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-slot > .card {
+  flex: 1;
+}
+
+/* 缩放把手：右下角一小段折角。命中区比图形大，免得难抓 */
+.board-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: var(--space-xl);
+  height: var(--space-xl);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.board-grip::after {
+  content: "";
+  position: absolute;
+  right: var(--space-xs);
+  bottom: var(--space-xs);
+  width: var(--space-sm);
+  height: var(--space-sm);
+  border-right: var(--size-mark) solid var(--color-accent);
+  border-bottom: var(--size-mark) solid var(--color-accent);
+  opacity: 0.75;
+}
+
+.board-raw {
+  color: var(--color-accent);
+}

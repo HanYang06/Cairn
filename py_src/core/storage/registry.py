@@ -59,19 +59,6 @@ class Tier(Enum):
     """档三：真源就在库里，重建不成立，只能靠备份。**禁止**写重建来源。"""
 
 
-class Nature(Enum):
-    """类型性质：它是业务数据，还是内核自己的机制。"""
-
-    DATA = "data"
-    """业务数据：列举里看得见，备份覆盖它。"""
-
-    TOOL = "tool"
-    """工具型：内核自己的机制（索引、登记一类），不是业务。
-
-    它在库里是必要的，在界面上不是给人看的东西，故**不出现在列举里**。
-    """
-
-
 class OverBudget(Enum):
     """配额用满之后怎么办。"""
 
@@ -103,7 +90,6 @@ class TypeDecl:
     与表的列形状无关，故**不进声明文件**（`tables.yaml` 只描述库的形状）。
 
     Attributes:
-        nature: 类型性质（业务 / 工具型）；工具型不出现在列举里。
         owner: 归属（领域名 / `core`）；写进它那张表的声明。
         tier: 重建档；流进它那张表的声明。
         backup: 是否纳入备份。**当前只登记**，备份动作尚未实现。
@@ -125,7 +111,6 @@ class TypeDecl:
     ids: tuple[str, ...] = ID_FIELDS
     refs: Mapping[str, str] = field(default_factory=dict)
     attrs: tuple[tuple[str, TypeSpec], ...] = ()
-    nature: Nature = Nature.DATA
     owner: str = "core"
     tier: Tier = Tier.DERIVED
     backup: bool = False
@@ -307,7 +292,6 @@ __all__ = [
     "POINTER_FIELDS",
     "REGISTRY",
     "TABLES_FILENAME",
-    "Nature",
     "OverBudget",
     "Registry",
     "Tier",

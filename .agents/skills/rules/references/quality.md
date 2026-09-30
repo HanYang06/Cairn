@@ -47,6 +47,9 @@
 - **CI**（`.github/workflows/ci.yml`，Python 侧十道 + 前端一组 `pnpm check`）：
   SPDX → 书面语 → 标点 → 文档防漂移 → docstring 覆盖（报告）→ ruff → deptry →
   import-linter → `uv lock --check` → mypy → pytest + 覆盖率门禁。
+  **输出编码统一 UTF-8**（workflow 级 `PYTHONIOENCODING: utf-8`）：Windows runner 的 stdout
+  默认不是 UTF-8，而 `lint-imports` 的报告里含中文契约名，打印即 `UnicodeEncodeError`。
+  实测复现：`PYTHONIOENCODING=cp1252 uv run lint-imports`。
 - **架构校验**（`uv run lint-imports`）：契约写在 `pyproject.toml` 的 `[tool.importlinter]`——
   `core` 不许依赖上层（`model` / `feature` / `app` / `net` / `server`）且必须 Qt-free。
   配置放 pyproject 而非 `.importlinter`：后者按系统默认编码读，Windows 下遇中文即失败。
@@ -76,9 +79,52 @@
 `conf/registry.py` 的 `PLR0913`（声明与取值共用一个签名），`storage/tables.py` 的 `PLC0415`
 （"配置在哪"延后问），以及测试 / 工具脚本的整组豁免。
 
+## 安全扫描（与质量门禁同等地位）
+
+威胁模型与报告渠道见 [`SECURITY.md`](../../../../SECURITY.md)；此处只记**怎么接线、为什么这么接**。
+
+| 检查 | 何时跑 | 拦什么 | 阻断？ |
+|---|---|---|---|
+| **CodeQL**（`codeql.yml`） | push/PR 到 main · 每周一 | **跨文件污点传播**（Python / JS-TS） | ✅ |
+| **dependency-review**（`ci.yml`） | **每个 PR** | 本次改动**新增**的有漏洞依赖 | ✅（moderate 起） |
+| **pip-audit**（`ci.yml`） | push 到 main · 手动 | Python 依赖的已知 CVE | ✅（实测零命中） |
+| **pnpm audit**（`ci.yml`） | push 到 main · 手动 | 前端依赖的已知 CVE | ✅（实测零命中） |
+| **gitleaks**（`ci.yml`） | push 到 main · 手动 | 提交历史里的密钥 / 令牌 | ✅ |
+| **ruff `S` 族**（`ci.yml`） | 每个 PR | 单文件里的危险写法 | ✅ |
+
+**为什么要分"PR 跑"与"主分支跑"**：PR 上只判**新增**风险（dependency-review），
+主分支上跑**全量**（audit / gitleaks）。反过来会让一堆历史遗留问题把无关的 PR 卡死，
+而门禁一旦常年红，人就会开始绕它——那比没有门禁更糟。
+
+**两条实现要点（都是踩过的）**：
+
+- **`pnpm audit` 必须显式指官方 registry**：本仓 npm 源配的是 `registry.npmmirror.com`，
+  它没实现 audit 端点，裸跑直接报 `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`。
+- **`pip-audit` 断言的是"已装环境"**：本仓 `pip-audit` 报 `cairn ... not found on PyPI` 是
+  **正常**的（自身未发布 PyPI），不是失败；它扫的是依赖树。
+- **要按 CI 的路径验，别只看本机**：本机 `.venv` 往往是旧的，会漏掉"锁文件里已经有的 CVE"。
+  实测一次：本地报零漏洞，CI 上全新 `uv sync` 报出 `virtualenv 21.7.10` 的四个已知漏洞
+  （PYSEC-2026-4011/4012/4013/4014）。**传递依赖的下限也要盯**——已把 `virtualenv>=21.7.13`
+  写进 dev 依赖把洞顶掉（写显式下限比等上游放开可靠，因为它是 CI 真会拦的那条线）。
+
+**不引 `bandit`**：ruff 的 `S` 规则族（`select = ["ALL"]` 已含）覆盖同一批检查，
+再引一个只是多一套配置与一份噪音。
+
+**`pull_request_target` 是本仓的一条红线**：它能在 fork PR 上拿到 secret，
+而"不执行 PR 代码"这条保证**只在 composite action 内部成立**——一旦那个 action 变了、
+或有人在工作流里加一句 `checkout` PR 分支，密钥即泄露。
+故**用它的工作流一律不放进 `.github/workflows/*.yml`**（当前 `ocr-review` 就停在
+`.on-run` 后缀上，等于停用），要用须先写清"为什么不执行 PR 代码"。
+
+**仓库设置里还应打开（不在文件里，故记此处）**：
+
+1. **Secret scanning + Push protection**（公开仓库免费）：与 gitleaks 的区别是**推送时**就挡。
+2. **Dependabot alerts / security updates**：`dependabot.yml` 管的是**版本更新**，
+   这两项管的是**漏洞告警**，互不替代。
+
 ## 升级到「全企业级」
 
 - 打开 `D103`（公共函数）与 `D102`（方法）的 docstring 要求。
 - 覆盖率阈值提到 90%+。
-- `pip-audit`（CVE 扫描）作为 CI 门禁：它需要网络，**不放本机钩子**。
-  `bandit` 不再单独引入：ruff 的 `S` 规则族已覆盖同一批检查。
+- **依赖审计已是门禁**（上表）；若要再加一层，候选是 `osv-scanner`（跨生态、可扫锁文件本身）
+  与 `actionlint`（工作流 YAML 的语法与语义检查；`zizmor` 更偏安全审计，两者不冲突）。

@@ -1,0 +1,80 @@
+/*
+ * SPDX-FileCopyrightText: 2026 HanYang06
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * 卡片的观感。**只引用令牌**（`rules/references/frontend.md` §一）：
+ * 颜色 / 圆角 / 间距 / 字号全部走 var(--…)，字面值由 stylelint 拦。
+ *
+ * 阴影走 `--shadow`：卡片在纸上"轻轻浮起"——看得见边界，但不觉得它在飘
+ * （`ui-theme.md` §3.3 的冻结口径）。
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-md);
+  background: var(--color-surface);
+  border: var(--size-hairline) solid var(--color-border-faint);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow);
+  transition: box-shadow var(--dur-fast) linear;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.card-selected {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: none;
+}
+
+.card-kind {
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  letter-spacing: 0.12em;
+  color: var(--color-faint);
+}
+
+.card-selected .card-kind {
+  color: var(--color-accent);
+}
+
+.card-title {
+  margin: 0;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  color: var(--color-text);
+}
+
+.card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  font-size: var(--font-xs);
+  line-height: var(--leading);
+  color: var(--color-muted);
+}
+
+.card-meta {
+  margin-top: auto;
+  flex: none;
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--font-2xs);
+  color: var(--color-faint);
+}
