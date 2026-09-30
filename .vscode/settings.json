@@ -71,4 +71,5 @@
     "files.simpleDialog.enable": true,
     "python.terminal.activateEnvironment": false,
     "python.analysis.typeCheckingMode": "off",
+    "python.terminal.shellIntegration.enabled":true
 }
