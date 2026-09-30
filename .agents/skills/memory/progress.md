@@ -103,8 +103,8 @@
 - [ ] **领域层重建**（`py_src/model/`）：**架构已定**（见 `references/decisions/领域.md`），
   **接入面已通**（`attr` 声明 → 类型登记 → 块记录载荷 → 读回）。待落：中间层基座
   （延伸概念登记 / 命令装饰器）→ `Note` + `NoteData` → 命令面接边车；类型词表随领域层再定。
-- [ ] `domains.md` / `note-model.md` / `access.md` / `network.md` / `ecosystem.md` 随各层回写。
-  `note-model.md` §2「链接是独立的关系行」与现行口径冲突（**关系由块自己表达**），须删改。
+- [ ] `domains.md` / `note-model.md` / `access.md` / `network.md` / `ecosystem.md` 随各层回写
+  （2026-10-01 的领域 / 笔记定稿尚未进文档；文风与事实纠错已完成）。
 
 ## 五、工程债
 
