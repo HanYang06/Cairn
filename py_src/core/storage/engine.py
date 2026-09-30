@@ -29,7 +29,14 @@ from core.event.catalog import BUDGET_EXHAUSTED, OBJECT_DELETED, OBJECT_PUT
 from core.event.events import Event
 from core.exc import BlockTooLargeError, ObjectNotFoundError
 
-from .format.block import BlockPayload, BodyRef, block_payload_of, encode_block_payload
+from .format.block import (
+    BlockPayload,
+    BodyRef,
+    Tombstone,
+    block_payload_of,
+    encode_block_payload,
+    encode_tombstone,
+)
 from .format.id import ID, digest
 from .format.record import decode, encode
 from .hub import Hub, PackPolicy, Placement
@@ -201,14 +208,45 @@ class Storage:
         raise ObjectNotFoundError(f"内容不在: {address}")
 
     def drop(self, value_uuid: str) -> bool:
-        """摘掉块那一行，返回是否确实摘掉了一行。
+        """删掉一个块：**先留墓碑，再摘索引行**；返回是否确实删掉了一个。
 
-        **内容面不动**（等压实回收，§12）：同内容可能还有别的块在用，删内容要判引用。
+        载体是追加写，旧字节删不掉，所以删除的落法是一条**墓碑记录**（指向被删记录的位置）。
+        巡检认识墓碑，不会再把被删的那条记录报成"盘上有、库里没行"。
+
+        顺序不能反：先摘行、后写墓碑的话，中途失败就留下一条盘上有、库里没行的块，
+        巡检会把它当缺行补回来（等于撤销这次删除）。先写墓碑，中途失败最多多一条指着
+        空处的墓碑——无害，也不影响任何一次巡检。
+
+        **内容面不动**（等压实回收）：同内容可能还有别的块在用，删内容要判引用。
         """
+        block = self._index.rows.block(value_uuid)
+        if block is None:
+            return False
+        self._write_tombstone(block)
         if not self._index.rows.drop_block(value_uuid):
             return False
         self._emit(OBJECT_DELETED, value_uuid)
         return True
+
+    def _write_tombstone(self, block: BlockRow) -> None:
+        """在被删记录所在的 hub 里追加一条墓碑。
+
+        墓碑**不带归属**：它是内核自己的机制，不占任何类型的配额——否则"删得多"会挤掉
+        "写得多"的额度，两件事不该互相牵连。
+
+        它**不进索引**：索引里不该有它的行（它在盘上，顺扫即得），故位置段也不写回它。
+        """
+        payload = encode_tombstone(
+            Tombstone(
+                value_uuid=block.value_uuid,
+                value_hash=block.value_hash,
+                hub=block.in_hub,
+                pack=block.in_hub_pack,
+                span=(block.in_pack_slot[0], block.in_pack_slot[1]),
+            )
+        )
+        hub = self._hub(block.in_hub, create=False)
+        hub.append(encode(ID.of(payload), payload))
 
     def locate(self, value_uuid: str) -> BlockRow | None:
         """按身份取块那一行（诊断用；读数据走 :meth:`load`）。"""

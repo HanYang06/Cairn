@@ -49,6 +49,18 @@ ATTRS_KEY = "\x00cairn.attrs"
 也不靠数据库列承载（库只是索引）。顺扫读出载荷即得属性，故它可重建。
 """
 
+TOMBSTONE_KEY = "\x00cairn.tombstone"
+"""记录载荷里的保留键：**这一条是墓碑**，指向被删记录的身份与位置。
+
+墓碑是删除留下的标记。载体是追加写，旧字节删不掉，故用一条标记说"那份不算数了"。
+它**不进索引**——索引里不该有它的行（它是盘上的事实，顺扫即得）；巡检认识它，
+不会再把被删的那条记录报成"盘上有、库里没行"。
+
+**它破例落一个位置**：记录自己从不写"我在哪"（扫到它时那个位置就已知），
+但墓碑说的是**别人**的位置，不说就无从判断哪一条已被删除。
+这个位置是可重建的（顺扫一遍墓碑即得），故不破"库只做索引"。
+"""
+
 UUID_KEY = "value_uuid"
 """指针里的分配形态凭证键名。"""
 
@@ -148,6 +160,78 @@ def body_ref_of(payload: bytes) -> BodyRef | None:
     """只取 body 指针（块身份核对与巡检的常用面）；不是块载荷即 ``None``。"""
     parsed = block_payload_of(payload)
     return None if parsed is None else parsed.ref
+
+
+@dataclass(frozen=True, slots=True)
+class Tombstone:
+    """一块墓碑：被删记录的身份，与它躺在哪儿。
+
+    Attributes:
+        value_uuid: 被删记录的身份（分配形态）。
+        value_hash: 被删记录的摘要形态（内容地址）。
+        hub: 被删记录所在的 hub。
+        pack: 被删记录所在的载体。
+        span: 被删记录占的格区间（头格，末格），闭区间。
+    """
+
+    value_uuid: str
+    value_hash: str
+    hub: str
+    pack: str
+    span: tuple[int, int]
+
+    def to_record(self) -> dict[str, object]:
+        """编进载荷的映射形态：位置写成两格号，与 `SlotRange` 同一口径。"""
+        return {
+            UUID_KEY: self.value_uuid,
+            HASH_KEY: self.value_hash,
+            "hub": self.hub,
+            "pack": self.pack,
+            "span": [self.span[0], self.span[1]],
+        }
+
+    @classmethod
+    def from_record(cls, raw: Mapping[str, object]) -> Tombstone:
+        """由载荷里的映射还原墓碑；任一项不合法即抛，不补。"""
+        span = raw.get("span")
+        if not isinstance(span, (list, tuple)) or len(span) != 2:
+            raise ValueError(f"墓碑的格区间不合法: {span!r}")
+        first, last = span
+        if not isinstance(first, int) or not isinstance(last, int) or isinstance(first, bool):
+            raise TypeError(f"墓碑的格区间不是两个整数: {span!r}")
+        return cls(
+            value_uuid=_required_text(raw, UUID_KEY),
+            value_hash=_required_text(raw, HASH_KEY),
+            hub=_required_text(raw, "hub"),
+            pack=_required_text(raw, "pack"),
+            span=(first, last),
+        )
+
+
+def encode_tombstone(tombstone: Tombstone) -> bytes:
+    """把一块墓碑编成记录载荷（canonical CBOR）。"""
+    return cbor2.dumps({TOMBSTONE_KEY: tombstone.to_record()}, canonical=True)
+
+
+def tombstone_of(payload: bytes) -> Tombstone | None:
+    """从记录载荷里取出墓碑；**不是墓碑**即返回 ``None``。
+
+    判据与块载荷同一套：带保留键、且键下解得出来。解不出就算"这不是墓碑"，
+    不猜、不降级——按内容读它是巡检那一侧的事。
+    """
+    try:
+        decoded = cbor2.loads(payload)
+    except cbor2.CBORDecodeError:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    raw = decoded.get(TOMBSTONE_KEY)
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return Tombstone.from_record(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def register_type(cls: type[object]) -> TypeDecl:
@@ -409,14 +493,18 @@ __all__ = [
     "ATTRS_KEY",
     "BODY_REF_KEY",
     "HASH_KEY",
+    "TOMBSTONE_KEY",
     "UUID_KEY",
     "Block",
     "BlockPayload",
     "Body",
     "BodyRef",
+    "Tombstone",
     "block_attrs",
     "block_payload_of",
     "body_ref_of",
     "encode_block_payload",
+    "encode_tombstone",
     "register_type",
+    "tombstone_of",
 ]

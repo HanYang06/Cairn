@@ -138,10 +138,9 @@ def test_custom_declaration_is_forwarded(tmp_path: Path):
 def test_drop_and_storage_face(tmp_path: Path):
     """摘块走内核短面；`storage` 给的是同一个引擎。
 
-    这里同时钉住一条**当前口径**：摘块只摘行，记录仍留在载体里（追加写不动旧字节），
-    故巡检会报"盘上有记录、库里没有行"。这一条要等压实回收落地才会消失（未来项）；
-    在那之前，处置会把这一行补回来——等于撤销这次摘块。见 `progress.md` 的未来项与
-    `references/decisions/` 的挂账。
+    这里钉住**删除的终局**：摘掉之后记录仍留在载体里（追加写不动旧字节），但它旁边多了
+    一条墓碑，故巡检**不再**把那条记录报成"缺行"，处置也就不会把它补回来。
+    墓碑落地之前，这里会报 `missing_row`、处置又把行补回来——那次删除等于没删。
     """
     with Kernel.create(tmp_path / "vault") as kernel:
         block = kernel.store(b"droppable")
@@ -150,7 +149,12 @@ def test_drop_and_storage_face(tmp_path: Path):
         assert kernel.drop(block.value_uuid) is True
         assert kernel.drop(block.value_uuid) is False
         assert kernel.locate(block.value_uuid) is None
-        assert {item.kind for item in kernel.patrol().finds} == {FindKind.MISSING_ROW}
+
+        report = kernel.patrol()
+        assert report.clean, "墓碑让删除有终局：巡检不该再报缺行"
+
+        kernel.repair(report)
+        assert kernel.locate(block.value_uuid) is None, "处置也不该把它补回来"
 
 
 # ---- 日志联动 ----
