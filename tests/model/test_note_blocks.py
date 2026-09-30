@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""笔记载体的契约：登记与建表、属性跟着块走、标签表与分组载荷的形状。
+"""笔记载体的契约：登记与建表、属性跟着块走、各载体载荷的形状。
 
 载体是**一写就登记、开库即建表**的那一类，故这里既钉声明（登记表里长什么样），
-也钉结果（库里真有那几张表、属性真能往返一趟）。
+也钉结果（库里真有那几几张表、属性真能往返一趟）。
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from model.note.types import (
     Chunk,
     DiffStep,
     Figure,
-    LineContent,
+    LineAction,
     NoteAsset,
     NoteAssetBody,
     NoteCanvas,
@@ -52,7 +52,7 @@ def test_the_carriers_register_themselves_under_note_prefixed_tables():
 
 
 def test_note_data_declares_exactly_its_own_attributes():
-    """跟着块走的就是这几个：标题 / 副标题 / 标签 / 两个时间 / 待办，一个不多。"""
+    """类体里列的只有它**自己新增**的属性：`id` 与 `body` 来自基类 `Block`。"""
     decl = REGISTRY.get("NoteData")
     assert decl is not None
     assert [name for name, _ in decl.attrs] == [
@@ -136,26 +136,23 @@ def test_attributes_ride_on_the_block_record_and_come_back_unchanged(tmp_path: P
 # ---- 标签表 ----
 
 
-def test_the_tag_table_sorts_entries_and_finds_members():
-    """标签表按名排序（同一份逻辑内容编出的字节唯一），成员查得出来。
-
-    排序是**码点序**：中文标签按码点排，不按拼音——这只需"唯一且稳定"，不需要"好看"。
-    """
-    table = NoteTagTable.of({"#b": ("n2",), "#a": ("n1", "n2")})
-    assert table.names == ("#a", "#b")
-    assert table.notes_of("#a") == ("n1", "n2")
-    assert table.notes_of("#b") == ("n2",)
-    assert table.notes_of("#c") == ()
+def test_the_tag_table_maps_a_tag_to_its_notes_and_is_editable():
+    """标签表：标签 → 笔记 ID 的列表，且增删就地做。"""
+    table = NoteTagTable(entries={"#a": ["n1", "n2"]})
+    table.entries["#b"] = ["n2"]
+    assert table.notes_of("#a") == ["n1", "n2"]
+    assert table.notes_of("#b") == ["n2"]
+    assert table.notes_of("#c") == []
+    assert sorted(table.names) == ["#a", "#b"]
     assert len(table) == 2
 
 
 def test_an_empty_tag_table_is_falsy_and_a_memberless_tag_still_exists():
     """空表与'没人用的标签'是两件事：后者留着，回收由领域另判。"""
-    assert not NoteTagTable()
-    assert NoteTagTable.of(None) == NoteTagTable()
-    table = NoteTagTable.of({"#空": ()})
-    assert table.names == ("#空",)
-    assert table.notes_of("#空") == ()
+    assert len(NoteTagTable()) == 0
+    table = NoteTagTable(entries={"#空": []})
+    assert table.names == ["#空"]
+    assert table.notes_of("#空") == []
 
 
 # ---- 分组 ----
@@ -163,9 +160,10 @@ def test_an_empty_tag_table_is_falsy_and_a_memberless_tag_still_exists():
 
 def test_a_group_keeps_both_lists_in_order():
     """一个组一个块：成员与子组都以 ID 出现；顺序即用户摆的顺序，故不排序。"""
-    body = NoteGroupBody(notes=("n2", "n1"), groups=("g2", "g1"))
-    assert body.notes == ("n2", "n1")
-    assert body.groups == ("g2", "g1")
+    body = NoteGroupBody(notes=["n2", "n1"], groups=["g2", "g1"])
+    body.notes.append("n3")
+    assert body.notes == ["n2", "n1", "n3"]
+    assert body.groups == ["g2", "g1"]
 
 
 def test_a_group_names_itself_through_a_title_not_a_name():
@@ -197,61 +195,65 @@ def test_an_asset_declares_the_metadata_and_has_no_chunk_switch():
 
 
 def test_an_asset_body_is_a_chunk_manifest_and_its_size_is_summed():
-    """本体是分片清单：字节总数由清单算出来，不另存一份。"""
-    body = NoteAssetBody(chunks=(Chunk("c1", 10), Chunk("c2", 32)))
-    assert len(body) == 2
-    assert body.size == 42
-    assert [chunk.id for chunk in body.chunks] == ["c1", "c2"]
+    """本体是分片清单（列表）：字节总数由清单算出来，不另存一份。"""
+    body = NoteAssetBody(chunks=[Chunk("c1", 10), Chunk("c2", 32)])
+    body.chunks.append(Chunk("c3", 8))
+    assert len(body) == 3
+    assert body.size == 50
+    assert [chunk.id for chunk in body.chunks] == ["c1", "c2", "c3"]
     assert NoteAssetBody().size == 0
 
 
-# ---- 变更链 ----
+# ---- 变更日志 ----
 
 
-def test_a_diff_step_keeps_the_line_id_on_the_key_only():
-    """行 id 只写在键上：值是 `LineContent`（内容），故同一条事实不写两处。"""
-    content = LineContent(data="改过的一行")
-    step = DiffStep(hash="h1", lines=(("line-1", content),))
-    assert step.lines[0][0] == "line-1"
-    assert step.lines[0][1] is content
-    assert not hasattr(step.lines[0][1], "id")
+def test_a_diff_step_records_actions_only_never_content():
+    """一步只记 `(行 id, 动作)`——**内容一个字节都不写**：按行 id 回正文里取。
+
+    这就是"diff 不是文档"在结构上的落点；把内容写进来，它就成了正文的副本。
+    """
+    step = DiffStep(
+        hash="h1",
+        lines=[("line-1", LineAction.CHANGE), ("line-2", LineAction.INSERT)],
+    )
+    assert step.lines[0] == ("line-1", LineAction.CHANGE)
+    assert step.lines[1][1] is LineAction.INSERT
+    assert not hasattr(step.lines[0][1], "data")
 
 
 def test_a_diff_chain_is_ordered_and_lookup_is_by_hash():
     """链是有序的若干步；按哈希取一步——哈希的用处就是这条连续性。"""
-    first = DiffStep(hash="h1", lines=(("line-1", LineContent(data="一")),))
-    second = DiffStep(
-        hash="h2",
-        lines=(("line-1", LineContent(data="二")), ("line-2", LineContent(data="新"))),
-    )
-    body = NoteDiffBody(steps=(first, second))
+    first = DiffStep(hash="h1", lines=[("line-1", LineAction.INSERT)])
+    second = DiffStep(hash="h2", lines=[("line-1", LineAction.CHANGE)])
+    body = NoteDiffBody(steps=[first, second])
     assert len(body) == 2
     assert [step.hash for step in body.steps] == ["h1", "h2"]
     assert body.step("h2") is second
     assert body.step("没有这一步") is None
-    assert NoteDiffBody().steps == ()
+    assert NoteDiffBody().steps == []
 
 
-def test_a_diff_keeps_the_new_content_of_a_real_line():
-    """一步里装的是**新内容**：拿一行真造一遍，内容对得上。"""
-    line = NoteLine(data="原文")
-    changed = NoteLine(id=line.id, data="改后")
-    step = DiffStep(hash="h1", lines=((line.id, changed.content),))
-    assert step.lines[0][1].data == "改后"
+def test_a_line_deleted_in_a_step_leaves_only_its_id():
+    """删除形式只剩 ID：那一行已经不在正文里了，故内容无从可写。"""
+    line = NoteLine(data="要删的行")
+    step = DiffStep(hash="h1", lines=[(line.id, LineAction.DELETE)])
+    assert step.lines[0][0] == line.id
+    assert step.lines[0][1] is LineAction.DELETE
 
 
 # ---- 画板 ----
 
 
-def test_a_canvas_keeps_shapes_by_identifier_and_in_painting_order():
-    """图编号 → 那一枚图；顺序就是画的先后。"""
+def test_a_canvas_keeps_shapes_in_painting_order():
+    """图编号 → 那一枚图；它是**列表**，因为画的先后是内容（映射的键序会被规范 CBOR 排掉）。"""
     body = NoteCanvasBody(
-        shapes=(
-            ("1", PlacedShape(figure=Figure(kind="rect", path=(("M", (0.0, 0.0)),)))),
+        shapes=[
+            ("1", PlacedShape(figure=Figure(kind="rect", path=[("M", (0.0, 0.0))]))),
             ("2", PlacedShape(figure=Figure(kind="arrow"))),
-        ),
+        ]
     )
-    assert [key for key, _ in body.shapes] == ["1", "2"]
+    body.shapes.append(("3", PlacedShape(figure=Figure(kind="ellipse"))))
+    assert [key for key, _ in body.shapes] == ["1", "2", "3"]
     second = body.shape("2")
     assert second is not None
     assert second.figure.kind == "arrow"
@@ -260,23 +262,24 @@ def test_a_canvas_keeps_shapes_by_identifier_and_in_painting_order():
 
 def test_a_canvas_link_is_semantic_only():
     """连线只记语义（连哪些图 / 怎么连 / 标签 / 线型）：几何归自动布局，故不存折点。"""
-    link = CanvasLink(figures=("1", "2"), mode="折线", label="依赖", line="虚线")
-    body = NoteCanvasBody(links=(("L1", link),))
-    assert body.link("L1") == link
+    link = CanvasLink(figures=["1", "2"], mode="折线", label="依赖", line="虚线")
+    body = NoteCanvasBody(links={"L1": link})
+    assert body.link("L1") is link
     assert body.link("L2") is None
     assert not hasattr(link, "points")
 
 
 def test_a_placed_shape_carries_the_figure_and_its_placement():
-    """一枚图 = 图 + 摆放：缩放 / 旋转 / 坐标 / 样式。"""
+    """一枚图 = 图 + 摆放：缩放 / 旋转 / 坐标 / 样式；**没有"关系"字段**（关系由连线表达）。"""
     placed = PlacedShape(
         figure=Figure(kind="bitmap", ref="asset-1"),
         scale=2.0,
         rotation=90.0,
         at=(10.0, 20.0),
-        style=(("stroke", "var(--color-text)"),),
+        style={"stroke": "var(--color-text)"},
     )
     assert placed.figure.ref == "asset-1"
     assert placed.at == (10.0, 20.0)
-    assert placed.style == (("stroke", "var(--color-text)"),)
+    assert placed.style == {"stroke": "var(--color-text)"}
+    assert not hasattr(placed, "relation")
     assert NoteCanvas().body.data is None

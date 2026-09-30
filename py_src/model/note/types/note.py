@@ -23,7 +23,10 @@ __all__ = ["NoteData"]
 
 @dataclass(slots=True)
 class NoteData(Block[NoteBody]):
-    """一篇笔记：正文 + 跟着块走的那几个小字段。
+    """一篇笔记。
+
+    **``id`` 与 ``body`` 来自基类 ``Block[NoteBody]``，故不写在这里**——
+    类体里只列它自己新增的那几个属性。``body`` 那一份是**已编码的正文**（按内容地址去重）。
 
     ``__table__`` 带 ``note`` 前缀是刻意的：领域专属的类型以域名开头，
     于是 ``project`` 那边可以做出同名概念而互不相干，两张表也不会撞。

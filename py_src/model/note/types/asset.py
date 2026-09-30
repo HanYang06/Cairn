@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core.attr import attr
 from core.storage.format.block import Block
@@ -21,25 +21,25 @@ from core.storage.format.block import Block
 __all__ = ["Chunk", "NoteAsset", "NoteAssetBody"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Chunk:
     """一片：片块的 ID，以及它有多少字节。
 
-    顺序即拼回来的顺序，故不排序。
+    顺序即拼回来的顺序，故清单是个列表、不排序。
     """
 
     id: str = ""
     size: int = 0
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class NoteAssetBody:
     """资产的载荷：分片清单。
 
     一份媒体一个容器、整份塞二进制、存时切片（作者口径），故载荷就是这张清单。
     """
 
-    chunks: tuple[Chunk, ...] = ()
+    chunks: list[Chunk] = field(default_factory=list)
 
     @property
     def size(self) -> int:

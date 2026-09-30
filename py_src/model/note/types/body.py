@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,14 +23,15 @@ if TYPE_CHECKING:
 __all__ = ["NoteBody"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class NoteBody:
     """笔记正文：行序列。
 
-    整份不可变：编辑一次就是造一份新的（落盘也随之产生新的块身份）。
+    用可变列表而不是元组：行要就地增删改，盘上那条记录本来就是追加写的，
+    内存里冻结换不来任何好处，只会逼着每次编辑整份复制。
     """
 
-    lines: tuple[NoteLine, ...] = ()
+    lines: list[NoteLine] = field(default_factory=list)
 
     def __len__(self) -> int:
         """有多少行。"""

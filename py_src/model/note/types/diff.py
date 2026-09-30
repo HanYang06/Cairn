@@ -1,52 +1,55 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""变更记录：**只记新信息的补丁链**。
+"""变更记录：**只记动作，不记内容**。
 
-三件事先说清：
+正文的变更有三种形式（作者口径）：**新增 / 修改 / 删除**。三种都只要"行 ID + 一个动作"，
+内容一个字节都不写：
 
-- **是补丁，不是快照**：只记"这一步把哪几行改成了什么"，**不记旧值**。要比对就拿两个
-  历史节点比（上一个对下一个，或当前对 first commit）。
-- **哈希是"连续性"**（作者口径）：与 git 一样，用哈希把一步接上一步，除此之外没别的意思。
-- **线性历史，不分叉**：多分支由**派生关系**承担（跨作者改写 = 新节点 + 派生边），
-  同一节点长不出多条支线；硬要分叉等于把 git 嵌进来。
+- **修改**：行 ID + ``change`` → 新内容按行 ID 回当前正文里取；
+- **新增**：行 ID + ``insert`` → 内容与位置都在当前正文里（正文的顺序就是最终顺序）；
+- **删除**：行 ID + ``delete`` → 那一行已不在正文里，故只剩 ID。
 
-结构是**列表套字典**：外层列表就是链（有序），每个元素是 `{这一步的哈希: {行 id: 新内容}}`。
-故行 id 只写在键上，值是 :class:`~model.note.types.line.LineContent`——同一条事实不写两处。
+**故 diff 不是文档，是动作日志。** 把内容也写进来，它就成了正文的一份副本：
+既冗余，又不好发送、不好分享——要分享得先压一遍，而"不可变"还逼着先复制一遍才能压。
 
-**一处代价要认**：若一条链整份装在一个块里，那么每保存一次都要把整条链重写一遍——
-第 n 次保存的记录里含 n 步，总存储随步数平方增长，且每步的摘要都不复用。
-逃法有两条（**待裁**）：① 一步一个块、用 `prev` 串起来；② 链块只装"步的 ID 列表"。
+结构是**列表套字典**：外层列表就是链（有序），每个元素是
+``{这一步的哈希: [(行 id, 动作), …]}``。哈希的用处是**连续性**（与 git 一致），
+不是行内容的摘要。
+
+**线性历史，不分叉**：多分支由派生关系承担（跨作者改写 = 新节点 + 派生边），
+同一节点长不出多条支线。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from core.storage.format.block import Block
 
 if TYPE_CHECKING:
-    from model.note.types.line import LineContent
+    from model.note.types.kinds import LineAction
 
 __all__ = ["DiffStep", "NoteDiff", "NoteDiffBody"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class DiffStep:
-    """一步变更：它的哈希，以及这一步把哪些行改成了什么。
+    """一步变更：它的哈希，以及这一步动了哪些行、怎么动的。
 
     ``hash`` 是这一步的摘要，用来把链串起来（**不是行内容的哈希**）。
+    每一项是 ``(行 id, 动作)``——**定长两项，故用元组**；内容不在这里。
     """
 
     hash: str = ""
-    lines: tuple[tuple[str, LineContent], ...] = ()
+    lines: list[tuple[str, LineAction]] = field(default_factory=list)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class NoteDiffBody:
-    """变更链：有序的若干步。"""
+    """变更日志：有序的若干步。"""
 
-    steps: tuple[DiffStep, ...] = ()
+    steps: list[DiffStep] = field(default_factory=list)
 
     def step(self, step_hash: str) -> DiffStep | None:
         """按哈希取一步；不在链上即 ``None``。
@@ -69,7 +72,7 @@ class NoteDiffBody:
 
 @dataclass(slots=True)
 class NoteDiff(Block[NoteDiffBody]):
-    """一篇笔记的变更链。"""
+    """一篇笔记的变更日志。"""
 
     __table__ = "notediff"
     __owner__ = "note"

@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""笔记数据结构的契约。
+"""笔记数据结构的契约：词表、行载荷的判别联合、区间、可变容器。
 
-钉四件事：① 行类型落盘是短名，且引用落点只有一处定义；② 样式只存非默认值、键有序，
-且两个作用域互不相等；③ 行载荷是判别联合，与行类型必须始终配套；④ 正文保序且不可变。
+钉四件事：① 行类型与变更动作都是短名闭集，引用落点只有一处定义；
+② 行载荷是判别联合，与行类型必须始终配套；③ 区间半开且有序；
+④ 变长的容器是**列表**——编辑就地做，不必整份复制。
 """
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import fields
 
 import pytest
 
@@ -17,7 +18,7 @@ from model.note.types import (
     REFERENCE_TABLES,
     Code,
     Heading,
-    LineContent,
+    LineAction,
     LineKind,
     Link,
     ListItem,
@@ -25,7 +26,6 @@ from model.note.types import (
     NoteLine,
     Ref,
     Span,
-    SpanStyle,
     Todo,
     reference_table,
 )
@@ -48,6 +48,11 @@ def test_line_kind_values_are_short_names_without_prefix():
     }
 
 
+def test_line_action_has_exactly_the_three_forms_of_a_change():
+    """正文的变更只有三种形式：新增 / 修改 / 删除。"""
+    assert {action.value for action in LineAction} == {"insert", "change", "delete"}
+
+
 def test_reference_tables_cover_only_the_kinds_with_one_target():
     """落点表只收目标唯一的那些：链接两可、内容类无目标，都不进去。
 
@@ -61,32 +66,6 @@ def test_reference_tables_cover_only_the_kinds_with_one_target():
     assert reference_table(LineKind.TEXT) is None
 
 
-# ---- 样式 ----
-
-
-def test_span_style_drops_empty_values_and_sorts_keys():
-    """规范形态：空值等于不写，键按名排序——同一份逻辑样式必须编出同一段字节。"""
-    assert SpanStyle.of({"b": "", "a": "1", "c": "2"}).values == (("a", "1"), ("c", "2"))
-    assert SpanStyle.of({"b": "2", "a": "1"}).values == SpanStyle.of({"a": "1", "b": "2"}).values
-
-
-def test_an_empty_style_is_falsy_and_all_empty_forms_agree():
-    """没写属性就是空样式，三种造法得到同一个东西。"""
-    assert not SpanStyle()
-    assert not SpanStyle.of()
-    assert not SpanStyle.of({})
-    assert not SpanStyle.of(None)
-    assert SpanStyle.of({"a": ""}) == SpanStyle()
-
-
-def test_the_body_carries_lines_and_nothing_else():
-    """正文里只有行：笔记级样式与标题一类小字段都是**属性**，跟着块走，故不在这里。
-
-    这条不是形式主义——放进来就等于"改一次背景把整篇重存一遍"，而正文按内容地址去重。
-    """
-    assert {item.name for item in fields(NoteBody)} == {"lines"}
-
-
 # ---- 区间 ----
 
 
@@ -98,9 +77,11 @@ def test_span_refuses_a_backwards_or_negative_range():
         Span(start=-1, end=2)
 
 
-def test_an_empty_span_is_allowed_and_carries_a_default_style():
-    """零宽区间合法（它在编辑中间态里是常见的），缺省样式是空样式。"""
-    assert Span(start=2, end=2).style == SpanStyle()
+def test_a_span_carries_a_plain_kv_style():
+    """行内样式就是一份 KV：CSS 属性名 → CSS 值。"""
+    span = Span(start=0, end=2, style={"font-weight": "bold"})
+    assert span.style["font-weight"] == "bold"
+    assert Span(start=2, end=2).style == {}
 
 
 # ---- 行：载荷的判别联合 ----
@@ -110,11 +91,11 @@ _KIND_PAYLOADS = [
     (LineKind.HEADING, Heading("标题", level=2)),
     (LineKind.LIST, ListItem("条目", level=2, ordered=True)),
     (LineKind.CODE, Code("print(1)", language="python")),
-    (LineKind.TODO, Todo("买菜", done=False)),
+    (LineKind.TODO, Todo("买菜")),
     (LineKind.LINK, Link(target="https://example.com", label="站点")),
-    (LineKind.ASSET, Ref(ids=("a", "b"))),
-    (LineKind.CANVAS, Ref(ids=("c",))),
-    (LineKind.NOTE, Ref(ids=("d",))),
+    (LineKind.ASSET, Ref(ids=["a", "b"])),
+    (LineKind.CANVAS, Ref(ids=["c"])),
+    (LineKind.NOTE, Ref(ids=["d"])),
 ]
 
 
@@ -142,7 +123,7 @@ def test_every_kind_refuses_a_payload_of_another_kind(kind, wrong):
     """把别人的载荷塞进来一律拒绝。
 
     静态类型这一步是过得去的（`wrong` 也在 `LineData` 里），**拦住它的是运行期的判别**——
-    这正是这条测要钉的东西：读 `data` 之前必须按 `kind` 分支。
+    这正是这条要钉的东西：读 `data` 之前必须按 `kind` 分支。
     """
     with pytest.raises(LineShapeError):
         NoteLine(kind=kind, data=wrong)
@@ -153,59 +134,44 @@ def test_a_plain_text_line_is_the_default_and_its_id_is_issued_per_instance():
     first, second = NoteLine(), NoteLine()
     assert first.kind is LineKind.TEXT
     assert first.data == ""
-    assert first.spans == ()
+    assert first.spans == []
     assert first.id
     assert second.id
     assert first.id != second.id
 
 
-def test_spans_ride_on_the_line_and_keep_their_order():
-    """样式挂在行上：读一行即得它的区间，顺序即书写顺序（后写覆盖前写靠它）。"""
-    line = NoteLine(
-        data="加粗的字",
-        spans=(Span(start=0, end=2, style=SpanStyle.of({"font-weight": "bold"})), Span(2, 4)),
-    )
+# ---- 变长容器：列表，可就地编辑 ----
+
+
+def test_line_spans_are_a_list_so_they_can_be_edited_in_place():
+    """行内区间是**列表**：编辑就地做，不必整份复制。"""
+    line = NoteLine(data="加粗的字")
+    line.spans.append(Span(start=0, end=2, style={"font-weight": "bold"}))
+    line.spans.append(Span(start=2, end=4))
     assert [span.start for span in line.spans] == [0, 2]
+    line.spans.clear()
+    assert line.spans == []
 
 
-def test_line_content_is_the_line_minus_its_identity():
-    """行内容 = 行去掉身份：三样都在，`id` 不在。"""
-    line = NoteLine(data="正文", spans=(Span(start=0, end=1),))
-    content = line.content
-    assert content.kind is LineKind.TEXT
-    assert content.data == "正文"
-    assert content.spans == line.spans
-    assert not hasattr(content, "id")
-
-
-def test_line_content_holds_the_same_shape_rule_as_the_line():
-    """内容那一层同样守着判别联合：载荷与类型对不上照样当场报错。"""
-    with pytest.raises(LineShapeError):
-        LineContent(kind=LineKind.HEADING, data="纯文本")
-
-
-# ---- 正文 ----
-
-
-def test_note_body_keeps_line_order_and_counts_lines():
-    """正文外层是有序列表：行序就是它，不靠任何排序键。"""
-    body = NoteBody(lines=(NoteLine(data="一"), NoteLine(data="二"), NoteLine(data="三")))
-    assert [line.data for line in body.lines] == ["一", "二", "三"]
+def test_note_body_lines_can_be_edited_in_place_and_keep_their_order():
+    """正文外层是有序列表：行序就是它，且增删就地做。"""
+    body = NoteBody(lines=[NoteLine(data="一"), NoteLine(data="二")])
+    body.lines.append(NoteLine(data="三"))
+    body.lines.insert(0, NoteLine(data="零"))
+    body.lines.pop(2)
+    assert [line.data for line in body.lines] == ["零", "一", "三"]
     assert len(body) == 3
+
+
+def test_the_body_carries_lines_and_nothing_else():
+    """正文里只有行：笔记级样式与标题一类小字段都是**属性**，跟着块走，故不在这里。
+
+    这条不是形式主义——放进来就等于"改一次背景把整篇重存一遍"，而正文按内容地址去重。
+    """
+    assert {item.name for item in fields(NoteBody)} == {"lines"}
 
 
 def test_an_empty_body_is_empty():
     """空正文合法：新建的笔记还没有行。"""
     assert len(NoteBody()) == 0
-    assert NoteBody().lines == ()
-
-
-def test_note_body_is_immutable():
-    """整份不可变：编辑一次就是造一份新的（落盘也随之产生新的块身份）。
-
-    属性名走变量，故这是**运行期**的写尝试，不是静态检查能提前挡下的那种违例。
-    """
-    body = NoteBody()
-    attribute = "lines"
-    with pytest.raises(FrozenInstanceError):
-        setattr(body, attribute, ())
+    assert NoteBody().lines == []

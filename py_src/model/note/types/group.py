@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core.attr import attr
 from core.storage.format.block import Block
@@ -20,15 +20,15 @@ from core.storage.format.block import Block
 __all__ = ["NoteGroup", "NoteGroupBody"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class NoteGroupBody:
     """组的载荷：成员笔记 ID + 子组 ID。
 
-    两张表都只装 ID；顺序即用户摆的顺序，故不排序（顺序是内容的一部分）。
+    两张表都只装 ID；顺序即用户摆的顺序，故是个**列表**、不排序（顺序是内容的一部分）。
     """
 
-    notes: tuple[str, ...] = ()
-    groups: tuple[str, ...] = ()
+    notes: list[str] = field(default_factory=list)
+    groups: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
