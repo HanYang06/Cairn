@@ -40,7 +40,7 @@ Cairn 把使用者的内容存成一个**内容寻址对象池**：所有内容�
 
 ## 文档来源
 
-1. **手写文档** —— `docs/**/*.md` 与 `src/**` 的 docstring 是事实源，随代码一起提交、一起评审。
+1. **手写文档** —— `docs/**/*.md` 与 `py_src/**` 的 docstring 是事实源，随代码一起提交、一起评审。
 2. **自动生成** —— 「[API 参考](api/index.md)」里的签名、类型、docstring 全部由
    [mkdocstrings](https://mkdocstrings.github.io/) 从源码抽取；生成物无第二份拷贝。
    站点本身（`site/`）是构建产物，不入库。

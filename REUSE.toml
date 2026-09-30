@@ -43,6 +43,32 @@ path = [".fileTemplates.json"]
 SPDX-FileCopyrightText = "2026 HanYang06"
 SPDX-License-Identifier = "Apache-2.0"
 
+# —— 桌面外壳工程（`app/`）：装不下内联头的那些 ——
+# 本项目的工程文件（JSON / 数据格式 / 锁文件）与自有图形资源。
+# 前端源码本身（`.tsx` / `.ts` / `.css`）与 Rust（`.rs`）走内联头，由 `tools/spdx.py` 校验。
+[[annotations]]
+path = [
+  "app/package.json",
+  "app/pnpm-lock.yaml",
+  "app/tsconfig.json",
+  "app/tsconfig.node.json",
+  "app/biome.json",
+  "app/.vscode/**",
+  "app/src/assets/**",
+  "app/src-tauri/Cargo.toml",
+  "app/src-tauri/tauri.conf.json",
+  "app/src-tauri/capabilities/**",
+]
+SPDX-FileCopyrightText = "2026 HanYang06"
+SPDX-License-Identifier = "Apache-2.0"
+
+# `app/src-tauri/icons/**` 由 `pnpm tauri icon ../assets/logo/cairn-icon.png` 生成，
+# 源头是项目自有图形（`assets/logo/**`），故与项目同档。
+[[annotations]]
+path = ["app/src-tauri/icons/**"]
+SPDX-FileCopyrightText = "2026 HanYang06"
+SPDX-License-Identifier = "Apache-2.0"
+
 # —— 法律文书本身（不给自己加头）——
 [[annotations]]
 path = [

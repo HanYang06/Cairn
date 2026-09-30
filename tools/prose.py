@@ -122,8 +122,12 @@ _LEXICON: tuple[Term, ...] = (
     _term(r"233+", "网络用语，删除"),
 )
 
-#: 不扫描的目录：按**仓库相对路径**的组成部分判定；构建产物、本地数据、依赖缓存
-_SKIP_DIRS = frozenset({".git", ".venv", "build", "dist", "site", "vault", "__pycache__"})
+#: 不扫描的目录：按**仓库相对路径**的组成部分判定；构建产物、本地数据、依赖缓存。
+#: `node_modules` 与 `target` 是前端 / Rust 的依赖与编译产物——第三方更新日志里
+#: 满是词典命中项（提交短哈希会撞进数字类词条），扫它们只会制造噪音。
+_SKIP_DIRS = frozenset(
+    {".git", ".venv", "build", "dist", "site", "vault", "__pycache__", "node_modules", "target"}
+)
 
 #: 可扫描的文本类型
 _SUFFIXES = frozenset({".md", ".py"})

@@ -1,81 +1,112 @@
 <!-- SPDX-FileCopyrightText: 2026 HanYang06 -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# UI 边界规则（Widgets 宿主 + QML 岛）
+# UI 边界规则（Tauri 壳 + Web 前端）
 
-决定：`references/decisions/` 的「UI 技术路线（2026-09-18）」。本文件是**可执行约定**，新增 / 改 UI 前先读。
+决定见 `references/decisions/`「[UI 技术路线（2026-09-30 重定）](../../memory/references/decisions/UI-技术路线-2.md)」。
+本文件是**可执行约定**，新增 / 改 UI 前先读。
+
+> **2026-09-30 前的旧版**（Widgets 宿主 + QML 岛、QSS 编译、`ui_tools` 工具箱）随 Qt 一并作废。
+> 作废的是**材质与层名**；`docs/architecture/ui-kernel.md` §8 的八条架构红线继续有效。
 
 ## 一、技术归属
 
-- **Widgets（QtWidgets，Python）**：工作台外壳、菜单 / 工具栏 / 状态栏 / 停靠、列表 / 树、
-  表单 / 检查器、**编辑器**、对话框 / 弹层、命令面板。
-- **QML（Qt Quick）**：只做**岛**——画布 / 墨迹、大规模关系图、特殊视觉 / 过渡。
-  判据命中才开：① 高频重绘 / GPU 场景图 / 着色器；② 大规模图可视化；
-  ③ 独立的声明式动画画面；④ 高度自定义、非标准控件的视觉面。
-- 原因①：Qt 只支持 **Widgets 里嵌 Quick**（`QQuickWidget` / `createWindowContainer`），
-  不支持 Quick 里嵌 Widgets。**宿主只能是 Widgets。**
+| 层 | 技术 | 管什么 |
+|---|---|---|
+| **壳** `src-tauri/` | Rust（Tauri 2） | 窗口、菜单、托盘、系统集成、IPC 命令、能力（capabilities）声明、Python 边车生命周期 |
+| **前端** `frontend/` | React + TypeScript + Vite | 全部界面：外壳、列表 / 树、检查器、编辑器、对话框、命令面板 |
+| **边界** | Tauri IPC | 前端与 Python 内核之间**唯一**的通路 |
+| **内核** `src/core/` | Python（Qt-free） | 存储 / 事件 / 配置 / 异常 |
 
-## 二、命名分层
+- **Rust 的边界要守住**：壳只做"窗口与系统"这一摊——**不许在 Rust 里实现业务**。
+  判断句：若一段逻辑换掉 UI 之后仍然该存在，它就不属于壳。
+- **不许把 Node 当运行时**：Node 只在构建期出现（Vite / Biome / Vitest）。
+  应用运行时是 Tauri 壳 + Python 边车，没有第三个常驻进程。
 
-| 名 | 职责 |
-|---|---|
-| `App` | QObject **组合根**：拥有 Session / facade / 命令表，被 UI 注入 |
-| `MainWindow` | `QMainWindow`：OS 窗口 + 菜单 / 工具栏 / 状态栏 / 停靠 / 中央区 |
-| `Component` | 所有部件的薄基类（令牌访问、`objectName` 约定） |
-| `Panel` / `Page` | 可停靠侧栏 / 中央内容页 |
+## 二、分层与依赖方向
+
+```
+frontend/  React 组件 · 页面组合 · 视图模型
+   │  ↕ ① Tauri IPC（invoke / 事件；JSON 序列化，Tauri 自带）
+src-tauri/ Rust 壳：窗口 · 系统能力 · 边车管理 · **一个转发口**
+   │  ↕ ② stdio + 分帧 JSON（子进程，长度头分帧，与 LSP 同款）
+src/core/  Python 内核（Qt-free、传输无关）
+```
+
+> **第②跳的形态已于 2026-09-30 定案**（见记忆的「UI 技术路线（2026-09-30 重定）」§6.1）：
+> 壳把 Python 边车当子进程起，走标准输入输出、长度头分帧。
+> **本地内核不开任何网络端口**——网络这一层留给 server 与 P2P 那条线，两条线不共用同一个面。
+> 前端 → 内核是**调用**；内核 → 前端是**通知**（推送通道带订阅标识，Rust 只转发、不做决策）。
+
+**前端不许做的事**（与 Qt 时代同向，只是换了语言）：
+
+- 不 import 任何存储词汇：`block` / `body` / `hub` / `pack` / `carrier` / `catalog` / `checksum`
+  / `type=notedata` 等字眼**不得出现在前端源码里**（含类型名与文件名）。
+- 不理解"两份凭证 / 内容记录 / 块记录 / 槽区间"这类存储机制；前端的心智模型只有
+  **领域对象 → 契约 → 界面**。
+- 不直接读磁盘、不直接开库：一切经 IPC 到内核。**前端没有文件系统权限**（Tauri 的
+  capabilities 不授予 fs 范围）。
+- 不绕过契约直接构造内核请求：跨边界的形状必须由契约生成或校验，不许手写第二份。
+
+**边界判据（验收问句）**：若理解某个前端组件需要先掌握存储实现，则边界已失效。
 
 ## 三、硬约定
 
-1. **显式依赖注入**：`def __init__(self, app: App, parent=None)`；不用全局单例 / context property。
-2. **部件只发意图信号**（`noteActivated(str)`、`renameRequested(str)`），业务由装配层转给 facade。
-3. **UI 不 import `feature` / 不碰 `Vault`**，只经 facade / Session。
-4. **样式只来自令牌**：`ui/theme` 是唯一真源，由 `tokens → QSS` 全局应用；
-   组件内禁止硬编码颜色 / 间距 / 圆角。
-5. **`objectName` 必填**，QSS 按它选；一文件一主类，文件名 `snake_case`、类名 `PascalCase`。
-6. 布局用 Qt 现成的 `QVBoxLayout` / `QHBoxLayout` / `QGridLayout` / `QSplitter`。
-7. **不要造绑定框架**：不把 QML 的声明式魔法搬进 Python，保持朴素对象组合。
+1. **单向数据流**：内核 → 投影 → 视图；视图 → 意图 → 命令 → 内核。
+   **不引入响应式魔法**：状态变更走显式命令与显式失效，不用"到处是副作用"的写法。
+2. **组件只发意图**：按钮 / 列表项不自己发请求，向上抛意图（`onRename` / `onActivate`），
+   由页面级组合交给 IPC 客户端。
+3. **样式只来自令牌**：外观唯一真源是令牌词表（`docs/architecture/ui-theme.md`）。
+   组件内**禁止硬编码颜色 / 间距 / 圆角**；令牌的落地形态待定（CSS 自定义属性或等价物）。
+4. **类型不得逃逸**：跨边界的数据必须有 TypeScript 类型；禁止 `any`（Biome 与 `tsc strict` 双拦）。
+   **契约只有一份**：领域的形状来自 Python 侧声明并**生成**给 TS（与 Rust），
+   **不许在前端手写 `interface` 当第二份事实**（生成链见记忆的「UI 技术路线（2026-09-30 重定）」§6.2）。
+5. **一文件一主组件**，文件名 `kebab-case.tsx`、组件名 `PascalCase`；目录按"层"分，不按"类型"分。
+6. **不新增分层概念**：`frontend/` 内部只有三层——原子（atom）/ 组合（composite）/ 页面（page）。
+   增长只在原子与页面。
 
-## 四、QML 岛接入范式
+## 四、禁止项（防回退）
 
-- 每个岛有一个 `QWidget` 外壳（如 `CanvasView(QWidget)` 内含 `QQuickWidget`），
-  对外只暴露 QWidget 的信号 / 槽 + 类型化 VM；宿主只认这个壳。
-- 岛内**禁止**：持应用状态、读 / 写 Vault、直接耦合 Widgets、承担业务。
-- 弹层 / z-order 一律走 Widgets（原生子窗口叠放有限制）。
+- **不许把业务写进 Rust 壳**（见 §一）；壳里出现领域词汇即是越界。
+- **不许绕过 IPC 直连内核**：不经命令而直接开 socket / 起子进程去碰内核，一律禁止。
+- **不许给本地内核开网络端口**：内核与壳之间只走 stdio 分帧；网络留给 server 与 P2P 那条线，
+  两条线不共用同一个面（否则运维与排查互相干扰）。
+- **不许在 Rust 壳里解构领域字段**：转发口就用一个 `kernel_call(method, payload)` 这一形的入口；
+  壳一旦开始认领域字段名，业务就漏进壳了。
+- **不许把大载荷当 JSON 内容传**：正文 / 附件一律传**不可解读的句柄**（如 `value_uuid`），
+  由内核按句柄取；二进制走原始字节通道，不必全域 base64。
+- **不许在前端持有权威状态**：选中集、折叠集、编辑中 id 可以持；**对象本身与业务规则不行**。
+- **不许为省事放开 capabilities**：给前端开 `fs` / `shell` 的宽范围，等同于放弃这层边界。
+- **不许引第二个 lint / 格式化工具链**（Biome 已是定案）；规则不够用就补 Biome 规则或加专项检查。
+- **不许引 GPL / AGPL 依赖**（`licensing.md` 红线）；前端生态是重灾区，
+  画布 / 富文本 / 表格库**先核实许可再评估功能**。
 
-## 五、禁止项（防回退）
+## 五、组件 / 布局 / 主题建造规则
 
-- 在 QML 里用 `ListModel.append/clear` 手工重建受管列表 → 必须走 `QAbstractItemModel`。
-- 在 QML 里持有 App 状态（选中集 / 折叠集 / 拖拽载荷 / 编辑中 id）。
-- 用 QML JS 现算富文本 / 序号 / 展示字符串 → 放 Python 视图模型。
-- 新增 `Property(list[dict])` 这类无类型跨边界结构 → 用 `rows.py` 的类型化 DTO。
+- **联动在控制器，不在组件之间**：组合式组件用共享状态对象协调零件；零件只发意图，
+  **禁止组件互相直接改对方**（否则成蜘蛛网、无法复用）。
+- **布局靠原语嵌套组合**：`flex / grid` 加间距与伸缩拼出复杂结构，**不新增布局原语**。
+- **组合可递归**：组合类型可以再组合，深度不设限；再组合出来的类型仍归"组合"，不新增层级概念。
+- **主题 = 令牌单一真源**：令牌只覆盖"能集中管理的观感"（色 / 圆角 / 间距 / 字号 / 字体 / 动效时长）；
+  阴影、模糊等由组件按令牌值实现，**逐条加、可测、有边界**。
+- **动效只做功能性**（淡入、位移），并按令牌时长取值；提供"减少动效"开关。
 
-## 六、组件 / 布局 / 主题建造规则（2026-09-18）
+### 主题令牌的归属
 
-- **联动在控制器，不在控件之间**：组合式组件（compound components）用共享控制器 / 状态对象协调
-  零件；零件只发意图，**禁止控件间直接互连**（否则成蜘蛛网、无法复用）。
-- **布局靠原语嵌套组合**：底层只 `VBox / HBox / Grid / Split / Stack`（配伸缩 / 对齐 / 跨行列）；
-  复杂 / 异形 / 非对称结构由嵌套 + 权重拼出，**不新增原语**。
-- **组合可递归**：组合类型可以再组合，深度不设限；再组合出来的**类型仍归为组合类型本身**，
-  不引入新的层级概念。组合只增复杂度，不增概念。
-- **增长只在原子与页面**：加控件只改原子目录；加功能只改页面组合；内核与外壳保持稳定。
-- **主题 = 点分配置 → QSS 编译**：配置只覆盖 QSS 能表达的（token / widget / 伪状态 / 页面作用域）；
-  阴影 / 动效等落到代码侧（`QGraphicsDropShadowEffect` / `QPropertyAnimation`），
-  增强**逐条加、可测、有边界**，不模拟整个 CSS。
+- 令牌词表与色板**继续以 `docs/architecture/ui-theme.md` 描述为准**（该页 Qt 机制部分待改写）。
+- 深浅两套值、组件只引用令牌、切换即换值——**这条口径不变**。
+- **落地机制待定**：Qt 时代的 `token → QSS 编译` 与 QML 单例都不存在了，
+  替代形态（CSS 自定义属性 / 生成的主题模块）在动主题代码前必须先定，并在 `ui-theme.md` 回写。
 
-### 主题包约定（2026-09-18）
+## 六、前端工程门禁（与 Python 七道同等地位）
 
-- 主题文件放 `config/theme/*.json`，**文件名即主题名**；`CAIRN_THEME_DIR` 可覆盖目录。
-- 主题文件**两段式**：全局 `token` 块 + `style` 块（**CSS 式选择器 → 声明块**，选择器点名目标，
-  声明块写属性）：
-  ```json
-  { "token": { "accent": "#2F81F7" },
-    "style": {
-      "widget.Button":       { "background": "token.elevated" },
-      "widget.Button:hover": { "border_color": "token.accent" } } }
-  ```
-  选择器为 `widget.<类型>[:<状态>]`；声明键取该部件的可样式属性。
-- 加载时展开为点分路径（`token.<字段>` / `widget.<类型>[.<状态>].<属性>`）并由 schema 自动校验；
-  未知段 / 选择器 / 属性**报错**（不静默失效）。
-- 供 IDE 校验的 JSON Schema 落 `config/schema/theme.json`（**随 UI 重建**：生成器
-  `tools/gen_theme_schema.py` 与漂移用例随界面工具箱一并删除，回来时同款两段式重建）。
-- 只有 `cairn.ui.components` 下的部件进主题词汇表；外壳 / 页面 / 测试类不入，保证 schema 确定。
+| 面 | 命令 | 判据 |
+|---|---|---|
+| 类型 | `tsc --noEmit` | strict；`any` 视为错误 |
+| lint + 格式 | `biome check` | 一个工具、一份配置、一个退出码 |
+| 单测 | `vitest run` | 与 Vite 同源 |
+| 依赖 | `pnpm install --frozen-lockfile` | 锁文件即事实源；幽灵依赖进不来 |
+| 分层边界 | 待定（`eslint-plugin-boundaries` 或 `dependency-cruiser`） | 机器拦"前端出现存储词汇 / 绕过契约" |
+
+- 具体命令名与脚本入口在**壳第一次落地时**写进 `package.json` 与本文件的表格（不许只写在文档里）。
+- pre-commit 与 CI 要**同时**跑 Python 与 Node 两套门禁；这是本轮新增的常驻成本。

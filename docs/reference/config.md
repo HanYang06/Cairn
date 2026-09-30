@@ -20,10 +20,10 @@
 
 | 键 | 类型 | 默认值 | 说明 | 声明处 |
 |---|---|---|---|---|
-| `core.log.level` | `string` | `WARNING` | 内核日志级别：导入内核时设到 core.* 这族记录器 | `src/core/conf/params.py:16` |
-| `storage.block.max_bytes` | `integer` | `1048576` | 单个块的字节上限，超过即分片（预留，尚未接线） | `src/core/storage/conf.py:39` |
-| `storage.pack.max_bytes` | `integer` | `2147483648` | 单个载体的字节上限，写满即封口（只管封口线，不定槽长） | `src/core/storage/conf.py:33` |
-| `storage.pack.slot_bytes` | `integer` | `512` | 槽长：载体内的定长分配与定位单位，写进文件头 | `src/core/storage/conf.py:32` |
+| `core.log.level` | `string` | `WARNING` | 内核日志级别：导入内核时设到 core.* 这族记录器 | `py_src/core/conf/params.py:16` |
+| `storage.block.max_bytes` | `integer` | `1048576` | 单个块的字节上限，超过即分片（预留，尚未接线） | `py_src/core/storage/conf.py:39` |
+| `storage.pack.max_bytes` | `integer` | `2147483648` | 单个载体的字节上限，写满即封口（只管封口线，不定槽长） | `py_src/core/storage/conf.py:33` |
+| `storage.pack.slot_bytes` | `integer` | `512` | 槽长：载体内的定长分配与定位单位，写进文件头 | `py_src/core/storage/conf.py:32` |
 
 ## 另见
 
@@ -31,5 +31,5 @@
 - 值文件 `config/settings.json`、词表 `config/schema/settings.json`——**跑一遍程序就生成**
   （引擎退出时落盘，不需要专门的生成脚本）。
 - 格式常量（载体魔数、文件头长度、记录头布局这类改了会坏库的）**故意不进配置**，留在实现处。
-- 想加一条配置：在**用到它的那个包**里声明（例：`src/core/storage/conf.py`），
+- 想加一条配置：在**用到它的那个包**里声明（例：`py_src/core/storage/conf.py`），
   再跑一次 `uv run python tools/docgen.py --write` 把这一页更新。

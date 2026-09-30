@@ -1,0 +1,39 @@
+/*
+ * SPDX-FileCopyrightText: 2026 HanYang06
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * 外壳占位样式。**这不是主题的落地形态**——令牌机制以 `config/theme/tokens.json`
+ * 为唯一手写处、由 `app/scripts/gen-tokens.mjs` 生成 CSS 自定义属性
+ * （见 `.agents/skills/memory/references/decisions/界面.md` §三）。
+ * 故这里只引用 `var(--…)`，不写字面值——由 stylelint 拦。
+ */
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font);
+  line-height: var(--leading);
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.shell h1 {
+  margin: 0;
+  font-size: var(--font-2xl);
+}
+
+.shell p {
+  margin: 0;
+  color: var(--color-muted);
+}
