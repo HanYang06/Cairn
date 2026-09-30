@@ -3,12 +3,12 @@
 
 # AGENTS.md
 
-Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.13；内核 Qt-free。**当前只有内核一层在位**（`src/core/`）；领域、界面工具箱与外壳（`feature` / `ui_tools` / `app`）随 2026-09-29 的重建被整条删除、待重建——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
+Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.13；内核 Qt-free。**当前只有内核一层在位**（`src/core/`）；领域与界面（`feature` / `ui_tools` / `app`）随 2026-09-29 的重建被整条删除、待重建，且界面材质已于 2026-09-30 由 Qt 改为 **Tauri 壳 + Web 前端**——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
 
 ## 开工前 SOP（每个任务都先做）
 
 1. **先看规则**：判断当前任务命中哪条规则，只读相关的那条；没有命中的规则就跳过。
-2. **再看记忆**：读与本次任务相关的项目记忆（变更 / 决策 / 进度 / TODO），摸清现状。
+2. **再看记忆**：读与本次任务相关的**决策**与**进度**，摸清现状。
 3. **再动手**。
 
 细则都在 `.agents/skills/`；本文件只做**索引与红线**，不要把长规则堆在这里。
@@ -34,9 +34,10 @@ uv run python tools/docgen.py --write     # 重新生成配置参考页（改了
 uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的公共成员会从 API 页消失）
 ```
 
-> 桌面入口 `uv run cairn`、打包（`tools/build.py` 与 `build-windows.yml`）分别在 UI 与应用层
-> 重建后恢复：那两个工具当前依赖已删除的层，`pyproject.toml` 里为它们留了 mypy 豁免，
-> 修回时一并摘掉。
+> 桌面外壳（Tauri 壳 + Web 前端）尚未落地：`src-tauri/` 与 `frontend/` 都还不存在；
+> 旧打包脚本（`tools/build.py` 与 `build-windows.yml`）依赖 Qt 时代已删除的层级，**待重做**。
+> 前端工具链已定（pnpm + Biome + TypeScript + Vitest），但**门禁尚未接线到 CI**——
+> 见 `.agents/skills/rules/references/ui-boundary.md` §六。
 >
 > 配置投影**没有生成脚本**：跑一遍程序即可（值文件与词表在退出时落盘），
 > 入库产物与声明是否分叉由 `tests/core/test_conf_projection.py` 拦。
@@ -52,7 +53,9 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
   vendored）走 `REUSE.toml` 集中声明。细则见 `rules/references/spdx.md`。
 - Apache-2.0 项目：**禁止引入 GPL/AGPL 依赖**（传染红线）；第三方主题/画布库先核实许可。
 - 文档、注释、commit message 用中文；commit 用 Conventional Commits（`feat(ui): …`、`fix(core): …`）。
-- 不写 C++。Rust（PyO3 + maturin）仅在性能热点被证实后启用。
+- 不写 C++。Rust 已正式进入技术栈：桌面外壳用 **Tauri**（壳本身就是 Rust），
+  另保留"把 Python 性能热点下沉到 Rust（PyO3 + maturin）"这条路，触发条件是热点被证实。
+  **壳里不写业务**——判断句：换掉界面之后仍然该存在的逻辑，不属于壳。
 - 未实现的设计标为「预留/草案」，不要假装已存在。
 - **文档分两类，别混**：手写事实源在 `docs/**/*.md`（跟代码一起评审）；
   `docs/api/` 下的 API 参考与 `site/` 站点由 `mkdocs` + `mkdocstrings` 从 docstring **自动生成**，
@@ -62,6 +65,10 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
 
 **现状**：`src/` 下只有 `core` 一层；`feature` / `ui_tools` / `app` 三层已在 2026-09-29 的重建里删除，
 下面是它们的**目标形态**（回来时按此落，别在 core 里提前实现它们）。
+
+> **2026-09-30 起界面材质为 Tauri 壳 + Web 前端**（React / TypeScript），Python 内核以边车运行。
+> 故下面按 `src/` 描述的分层只覆盖 Python 一侧；`frontend/` 与 `src-tauri/` 的边界见
+> `rules/references/ui-boundary.md`。**`ui_tools` 这个层名随 Qt 作废**，其职责由前端共享组件承担。
 
 - 顶层包在 `src/` 下、**一律去 `cairn.` 前缀**（`from core.storage import …`）。
 - `src/core/`（L0）是公共底座：**必须 Qt-free、传输无关**。当前装着三件事：
@@ -75,8 +82,9 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
   新 `type` 或新关系 `kind`。
 - 类型词表（`Kind` 一类）随领域层重建再定：plain `Enum`、值即落盘字符串（如 `notedata`），
   第三方类型用自有前缀。
-- `src/app/`（界面载体，按平台）与 `src/ui_tools/`（界面工具层）**待重建**；
-  界面工具箱**不认识领域**，也不碰 `core.storage`。
+- `src/app/`（Python 侧入口：命令行等）与 `frontend/`（React 界面）+ `src-tauri/`（Rust 壳）**待落地**；
+  原 `src/app/<平台>/` 的平台分目录**随 Qt 作废**（壳是跨平台的同一份 Tauri 工程）。
+  界面侧**不认识领域内部、也不碰 `core.storage`**，只经契约与命令过边界。
 - `src/net/`、`src/server/` 曾为 P2P / 服务端实验顶层包，**当前已删除、待重设**。
 - 存储的路径约定只在 `core/init.py` 定：`<root>/catalog.db` 是索引库、`<root>/<hub>/packs/` 是载体。
 - `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源），
@@ -110,7 +118,7 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
   来源记在 `skills-lock.json`。
 - 索引分工：
   - `rules` —— **规则总入口**，按场景分发到自己的 `references/`。规则只写这里。
-  - `memory` —— **项目记忆本体**（可变、活文件）：变更（`references/changes/`，按日期分）/ 决策（`references/decisions/`，按主题分）/ 进度（`progress.md`）。
+  - `memory` —— **项目记忆本体**（可变、活文件）：**决策**（`references/decisions/`，一个主题一个文件、**只写现状态**）与**进度 / TODO**（`progress.md`，只记"还没做"）。**不记变更流水账**（那是 `git log` 的事），也不留废弃版本文档。
   - `git-commit` —— 提交规范（Conventional Commits）；来自 `github/awesome-copilot`（MIT）。
   - `skill-creator` —— 写 / 改 skill；来自 `anthropics/skills`（Apache-2.0）。
 - 现状：`rules`、`memory` 为自建骨架（备注待补）；`git-commit`、`skill-creator` 为第三方安装。
@@ -118,7 +126,11 @@ uv run python tools/docgen.py --coverage  # docstring 覆盖报告（没写的�
 
 ### 记忆的清理机制（硬性）
 
-- `memory` 会过期失真：每条记忆标注**日期 + 状态**（进行中 / 已定 / 已废弃）。
-- 每次任务收尾一并清理：**过期、已废弃、与代码或文档不符**的记忆要删除或改写——
-  只增不减会腐化失真。
+- **决策文件只写现状态**：一个主题一个文件；新决定**改写同一份**，不新建 `<主题>-2.md`、
+  不按日期堆版本。同一件事有多份"旧版本"，读者就得自己比对，等于没有文档。
+- **不记变更流水账**：那是 `git log` 的事（有 diff、有作者、有日期）。记忆只留
+  **"为什么否掉"与"为什么只能这样"**——这些在代码与历史里找不到，才是记忆存在的理由。
+- **进度文件只记"还没做"**：做完的条目**删掉**，不改 `[x]` 留作历史。
+- 每次任务收尾一并清理：过期、已废弃、与代码或文档不符的条目 → **删除或改写**。
+  只增不减会腐化失真；记忆必须比代码更短、更新更快。
 - 冲突时以代码与 `docs/architecture/*.md` 为准，记忆服从事实。

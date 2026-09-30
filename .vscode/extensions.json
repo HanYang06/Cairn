@@ -4,7 +4,6 @@
         "ms-python.vscode-pylance",
         "charliermarsh.ruff",
         "ms-python.mypy-type-checker",
-        "theqtcompany.qt-python",
         "EditorConfig.EditorConfig",
         "TrevorNesbitt.smart-file-templates"
     ],

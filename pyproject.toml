@@ -22,12 +22,13 @@ dependencies = [
     "cbor2>=6.1.4",
     "cryptography>=50.0.1",
     "fastcdc>=1.7.0",
-    "pyside6>=6.8",
     "pyyaml>=6.0.3",
     "tomli-w>=1.2.0",
 ]
 
-# 桌面入口（`cairn = "ui.app:main"`）待 UI 重建后恢复。
+# 桌面外壳与前端不在本文件里：壳是 Tauri（`src-tauri/` 的 Cargo 工程），
+# 前端是 `frontend/` 的 pnpm 工程。原先的 `pyside6` 随 2026-09-30「Qt 退场」一并移除。
+# 命令入口的脚本声明见下方 `[project.scripts]`。
 
 [dependency-groups]
 dev = [
@@ -129,13 +130,10 @@ plugins = ["tools/mypy_plugin.py"]
 # 报错数看着不少，判据却已经失效。指路之后单独跑 `mypy tests` 也是同一口径。
 mypy_path = "src"
 
-# 退役工具：它依赖的层（`app` / `ui_tools`）在本次重建里被整条删除，
-# 故现在既跑不起来、也过不了类型检查。文件留着当参考（docstring 写明了状态），
-# 这里显式放行以免整仓 mypy 门禁被它拖红；不放进 `exclude` 是为了让它仍在检查范围内
-# ——一旦被谁 import，或被修回可运行，就该把它从这个豁免里摘出去。
-[[tool.mypy.overrides]]
-module = ["tools.preview_shell"]
-ignore_errors = true
+# 原先这里给 `tools.preview_shell` 开了豁免（它依赖已删除的 `app` / `ui_tools`）。
+# 2026-09-30「Qt 退场」之后该文件已删除：它按新材质**永远不会恢复**，
+# 留着会一直让 `ruff check .` 报 I001（import 分块顺序），故与 Qt 一并清掉。
+# 打包脚本 `tools/build.py` 的豁免同批摘除，见该文件 docstring 的状态说明。
 
 # 测试纳入扫描，但不强求函数签名注解（与 ruff 对 `tests/**` 豁免 `ANN` 同一口径）：
 # 236 个 `def test_*` 补 `-> None` 属机械改动，带来的常驻摩擦大于收益。
