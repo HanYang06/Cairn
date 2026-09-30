@@ -41,7 +41,7 @@ dev = [
     "pre-commit>=4.6.2",
     "modelscope>=1.40.1",
     "mkdocs-material>=9.7",
-    "mkdocstrings[python]>=0.30",
+    "mkdocstrings[python]>=1.0.6",
     # mypy strict 下 PyYAML 需要类型存根
     "types-pyyaml>=6.0.12",
     "deptry>=0.25.1",

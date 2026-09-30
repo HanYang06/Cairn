@@ -279,7 +279,7 @@ dev = [
     { name = "deptry", specifier = ">=0.25.1" },
     { name = "import-linter", specifier = ">=2.15" },
     { name = "mkdocs-material", specifier = ">=9.7" },
-    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.30" },
+    { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.6" },
     { name = "modelscope", specifier = ">=1.40.1" },
     { name = "mypy", specifier = ">=1.13" },
     { name = "pip-audit", specifier = ">=2.10.1" },
