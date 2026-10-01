@@ -43,7 +43,7 @@
 | **Storage** | 存储引擎：`store` / `load` / `body` / `drop` / `locate`（`core/storage/engine.py`） |
 | **异常层** | `core/exc.py` 的层级：`CairnError` 兜底，存储 / 配置 / 属性各族细分；与日志的联动点在 `Bus` 的失败钩子 |
 | **配置 conf** | `core/conf/` 的声明引擎：声明即事实（声明期校验、类型判据），值落单份值文件 | 不是配置文件本身；取用点不抄默认值 |
-| **属性 attr** | `core/attr/` 的块字段声明（`attr[str]` 标注才落盘），按属性查询走可重建索引 | 不是数据库列定义 |
+| **属性 attr** | `core/attr/` 的块字段声明（`self.x = attr(default=…)` 才落盘），按属性查询走可重建索引 | 不是数据库列定义 |
 | **命令面 Api** | `core/api.py` 的方法表：内核短面暴露给边车 / CLI / 测试 | 不是 RPC 框架，也不含界面代码 |
 | **表声明** | `TableSpec` / `Declaration`：表名、列、类型、约束、索引、重建档；建表语句由它编译 |
 | **重建档 Tier** | 表级只有两项：`DERIVED`（可重建，必写来源）/ `SOURCE`（真源在库内，禁写来源） |

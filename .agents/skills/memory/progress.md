@@ -57,6 +57,12 @@
 
 ## 三、内核余项
 
+- [ ] **块范式再往前一步（目标形态已写成文档，待新对话执行）**：见
+  [`docs/architecture/block-model.md`](../../docs/architecture/block-model.md)（草案）。
+  要点：声明即赋值（删 `attr` 标记与 `indexed=`）、`ID(self)` 带持有者且**表名取自 ID**、
+  `Body` 退成值（绑定靠取值）、`AttrIndex` 改成登记在册的块并新增同构的 `BodyIndex`
+  （`derived`、只在索引库）。**当前代码是"零参探针 + 标记分类"那一版**（见
+  [`内核.md`](references/decisions/内核.md) §七）；差异逐条列在该文 §6，执行顺序见 §7，三项待裁见 §9。
 - [ ] **变更记录 / 版本（预留 · 已砍，等调用方）**：diff 那一摊已整条删除
   （`types/diff.py`、动作词表、`notediff` 表点名淘汰），判据是**零调用方即脚手架**。
   素材没丢：正文每次保存都是一份完整的、按内容地址去重的记录。重启时先答三问，见
@@ -74,16 +80,14 @@
 - [ ] **版本与可变身份（方向已定，细节未定）**：**不新增内核机制**，锚写在领域数据类自己的
   `attr` 里（与 `docs/architecture/storage-design.md` §9.1「版本不属于存储」一致）。
   细节待定：`prev` 链 / 取 `birth_time` 最大 / 领域真源表。口径见 `references/decisions/领域.md` §三、§五。
+- [ ] **"用 ID 的角色"目前只用到一半**：形状收下了块上所有持有 `ID` 的字段名（`_Shape.ids`），
+  但引擎只用 `id` 那一条决定"这个类型建不建表"；其余角色（指向别处的指针）要落成引用列，
+  得先有"这个 ID 指向哪张表"的声明。等第一个真调用方出现再做（不预埋）。
+- [ ] **块一律零参构造再赋值**：声明在 `__init__` 里、形状由零参探针现算，故
+  `NoteData(title=…)` 这类带参构造不成立。要更便捷须另想一条"声明与传值分离"的路子（不预埋）。
 - [ ] **待裁 · 列举仍会读全库正文**：先把"块记录判据落成索引里的一列"。
 - [ ] 未来项：压实回收（删内容要判引用）、跨行事务与崩溃恢复、批量写入合并通知、
   大正文分片、检索、P2P / 服务端（顶层包待重设）。
-- [ ] **删除 `Nature`（工具 / 业务两分）**：作者已裁——**全砍掉**，所有实体块一律可查，
-  不再有"这类块不进列举"的类别。它本来就是**零消费的声明**（`decl.nature` 全仓无人读、
-  不进声明文件），文档写的"工具型不出现在列举里"从未有过行为。
-  删除范围（已核实）：`core/storage/registry.py` 的 `Nature` 枚举、`TypeDecl.nature`、
-  `__all__` 条目与相关 docstring；`core/storage/format/block.py` 的 import 与 `__nature__` 读取；
-  `tests/core/test_type_decl.py` 的 import、`__nature__` 声明与两处断言。
-  **文档 / 配置 / 生成页零引用**，故不动它们。
 - [ ] **陈旧 docstring 与口径不符**（改实现时漏回写，属"文档回写是任务的一部分"这条债）：
   ① `core/storage/rows.py` 与 `index.py` 里仍有提"关系边"的措辞，而 `edge` 表已于 2026-09-30 删除；
   ② `core/init.py` 的 docstring 说领域表"不进声明文件"，而 `tablegen.sync` 实际会把
@@ -95,21 +99,26 @@
 
 ## 四、界面层与领域层重建（待壳落地）
 
-- [ ] **笔记的内容模型**（布局见 `references/decisions/笔记.md`）：媒体块（图片 / 视频 / 音频三字段）、
-  正文行序列 + 区间样式、画板（矢量 / 位图 / 文字三层，**ID 引用不嵌套**）、
-  工具型结构（diff / group / edge）。**两项待裁**见该文 §六：媒体字段装**引用**还是**内容**、
-  画板要不要**动画**。
+- [ ] **笔记的内容模型**：**数据结构已落**（`model/note/types/`，口径见
+  `references/decisions/笔记.md` §四）——五个载体（`NoteData` / `NoteTag` / `NoteGroup` /
+  `NoteAsset` / `NoteCanvas`）＋值对象（`NoteLine` / `Span` / `Figure` …），一律"继承 `Block`
+  + 在 `__init__` 里声明"。**待落**：`model/note/format/`（载荷的规范化字节——
+  没有它，`Body(...)` 声明的字段还只停在内存里，落盘仍走 `kernel.store(bytes…)`）。
 - [ ] **多模态的硬缺口**：二进制通道**未接线**（今天所有载荷走 base64 JSON 帧）。
   按 `ui-boundary.md` §四"大载荷传句柄不传内容"，正解是前端持句柄、由壳侧按句柄取字节
   （原生资源协议 / 文件句柄），而非把内容塞进 JSON 帧。
 - [ ] 跨行选区 + 拖拽出视窗自动滚动；撤销 / 重做栈。
 - [ ] 添加型底层（表格 / 画板 / 多媒体）；查询型（查找替换）。
 - [ ] 工具重排与持久化；笔记列表形态；画板绘制；多媒体拖入。
-- [ ] **领域层重建**（`py_src/model/`）：**架构已定**（见 `references/decisions/领域.md`），
-  **接入面已通**（`attr` 声明 → 类型登记 → 块记录载荷 → 读回）。待落：中间层基座
-  （延伸概念登记 / 命令装饰器）→ `Note` + `NoteData` → 命令面接边车；类型词表随领域层再定。
-- [ ] `domains.md` / `note-model.md` / `access.md` / `network.md` / `ecosystem.md` 随各层回写
-  （2026-10-01 的领域 / 笔记定稿尚未进文档；文风与事实纠错已完成）。
+- [ ] **领域层重建**（`py_src/model/`）：**架构与数据结构都已落**（见 `references/decisions/领域.md`
+  与 [`内核.md`](references/decisions/内核.md) §七）——块声明范式换成"继承 + 在 `__init__` 里声明"，
+  笔记五个载体与值对象已迁；接入面已通（`attr` / `Body` 声明 → 形状探针 → 类型登记 → 块记录载荷）。
+  待落：中间层基座（延伸概念登记 / 命令装饰器）→ `Note` + `NoteData` 服务 → 载荷编解码
+  （`model/note/format/`）→ 命令面接边车。
+- [ ] **文档回写余项**：`note-model.md`（仍是草案，正文模型那一套已由
+  `references/decisions/笔记.md` 取代）/ `access.md` / `network.md` / `ecosystem.md` 随各层回写。
+  2026-10-01 已回写：`domains.md`（数据标准形）、`data-model.md`（扩展方式两条）、
+  `reference/glossary.md`、`api/core.md`、`guides/development.md`。
 
 ## 五、工程债
 
