@@ -82,8 +82,8 @@ jobs:
       - name: Run OpenCodeReview
         uses: alibaba/open-code-review@bccbc15f785269400735d5255540c231e6c02b6d # v1.12.9
         with:
-          llm_url: https://api.deepseek.com
-          llm_auth_token: ${{ secrets.DEEPSEEK_API_KEY }}
+          llm_url: https://api-inference.modelscope.cn/v1
+          llm_auth_token: ${{ secrets.ModelScope_Token }}
           llm_model: deepseek-flash
           llm_use_anthropic: 'false'
           language: Chinese
