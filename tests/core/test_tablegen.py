@@ -5,21 +5,24 @@
 这一组用例钉住的是"表会自己诞生"这条链的每一段：
 **类型定义 → 登记表 → 表声明 → 声明文件 → 库**。任何一段断开，本文件都会红。
 
-登记是**进程内**的，故每个用例自带一份干净的登记：内核那两张表按定义处的形状重放，
-用例自己定义的类型则在用例里诞生、随用例结束消失。
+登记是**进程内**的，故每个用例自带一份干净的登记：内核那两张表由 `install_core_types()`
+静态装回，用例自己定义的类型则在用例里诞生、随用例结束消失。
+
+**形状是探出来的**：类定义时基座只是接管它（排一次零参探针），形状与登记发生在第一次
+问形状的时候——故本文件里"定义完就有"的那些断言，取的时候都已经探过一遍。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
 
+from core.attr import attr
 from core.exc import TableDeclarationError
 from core.storage import tablegen
-from core.storage.format.block import Block, Body, register_type
-from core.storage.format.id import ID_FIELDS
+from core.storage.format.block import Block, install_core_types
+from core.storage.format.id import ID, ID_FIELDS
 from core.storage.index import Index
 from core.storage.registry import REGISTRY, TypeDecl
 from core.storage.tables import Declaration, kernel_tables, load_tables
@@ -40,25 +43,27 @@ def _registered(name: str) -> TypeDecl:
 
 @pytest.fixture(autouse=True)
 def clean_registry() -> None:
-    """每个用例一份干净的登记：内核那两张表按定义处的形状重放。"""
+    """每个用例一份干净的登记：内核那两张表由 `install_core_types()` 静态装回。"""
     REGISTRY.clear()
-    register_type(Body)
-    register_type(Block)
+    install_core_types()
 
 
 # ---- 反查：谁用了 ID ----
 
-# 类定义时 `__init_subclass__` 就会跑，故这里定义完，登记表里就该有它。
+# 类定义时 `__init_subclass__` 就跑：它接管这个类、排一次探针；
+# 第一次问形状（下面的 `REGISTRY.get`）时探针跑掉，登记随之发生。
 
 
 def test_defining_a_type_registers_itself():
     """类型定义即登记：名字、表名与它持有的 ID 字段都记下来了。"""
 
-    @dataclass(slots=True)
-    class Notedata(Block[str]):
+    class Notedata(Block):
         """测试用的领域类型：它一被定义，`notedata` 那张表就诞生了。"""
 
-        title: str = ""
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
+            self.title = attr(default="")
 
     decl = _registered("Notedata")
 
@@ -70,25 +75,31 @@ def test_defining_a_type_registers_itself():
 
 
 def test_a_subclass_gets_its_own_table_instead_of_inheriting_the_parent_name():
-    """继承不等于共用表：子类没写 `__table__` 就按类名推，绝不顶掉父类那张表。"""
+    """继承不等于共用表：子类没写 `__table__` 就按类名推，绝不顶掉基座那张表。"""
 
-    @dataclass(slots=True)
-    class Plain(Body[int]):
+    class Plain(Block):
         """不带表的覆盖：表名由类名给出。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     assert REGISTRY.get("Plain") is not None
     assert REGISTRY.table("plain") is not None
-    assert _registered("Body").table == "body", "父类那张表还在"
+    assert _registered("Block").table == "block", "基座那张表还在"
 
 
 def test_an_explicit_table_name_wins():
     """本类自己写下 `__table__` 时以它为准（继承来的不算）。"""
 
-    @dataclass(slots=True)
-    class Curated(Block[str]):
+    class Curated(Block):
         """显式指定表名。"""
 
         __table__ = "curated_table"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     decl = _registered("Curated")
 
@@ -96,8 +107,8 @@ def test_an_explicit_table_name_wins():
     assert decl.table == "curated_table"
 
 
-def test_the_two_kernel_types_are_registered_by_their_own_definitions():
-    """`Body` / `Block` 两张内核表也是定义出来的，不是手写的。"""
+def test_the_two_kernel_types_are_registered_by_the_installer():
+    """`Body` / `Block` 两张内核表由 `install_core_types()` 静态登记，不由类型诞生。"""
     body = REGISTRY.table("body")
     block = REGISTRY.table("block")
 
@@ -121,9 +132,12 @@ def test_registration_rejects_a_duplicate_table_name():
 
 
 def test_re_registering_the_same_shape_is_a_replay():
-    """同一个类被登记两次（`slots=True` 会重建类）算重放，不算冲突。"""
-    assert register_type(Body) == _registered("Body")
-    assert register_type(Block) == _registered("Block")
+    """同一份形状再登记一次算重放，不算冲突（装载入口可以被调很多遍）。"""
+    body = _registered("Body")
+    install_core_types()
+
+    assert _registered("Body") == body
+    assert _registered("Block").table == "block"
 
 
 def test_registration_rejects_an_unbindable_field():
@@ -235,9 +249,12 @@ def test_a_registered_type_is_written_into_the_file(tmp_path: Path):
     tablegen.sync(target)
     before = target.read_text(encoding="utf-8")
 
-    @dataclass(slots=True)
-    class Fresh(Block[str]):
+    class Fresh(Block):
         """刚定义的领域类型：它一诞生，下一轮就多一张表。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     tablegen.sync(target)
 
@@ -397,9 +414,12 @@ def test_a_fresh_type_becomes_a_table_in_the_database(tmp_path: Path):
     """**这一条就是"加了类型，表就自己诞生"**：登记之后开库，库与文件都多出那张表。"""
     target = tmp_path / "tables.yaml"
 
-    @dataclass(slots=True)
-    class Reported(Block[str]):
+    class Reported(Block):
         """刚定义的领域类型。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     tablegen.sync(target)
     declaration = Declaration(kernel_tables())

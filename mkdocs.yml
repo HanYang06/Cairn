@@ -57,6 +57,7 @@ nav:
       - architecture/index.md
       - 总纲（数据结构）: architecture/data-model.md
       - L0 存储设计: architecture/storage-design.md
+      - 块范式（草案）: architecture/block-model.md
       - 内核: architecture/kernel.md
       - 领域: architecture/domains.md
       - 配置引擎: architecture/config.md

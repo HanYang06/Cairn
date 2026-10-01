@@ -9,10 +9,9 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
-
 import pytest
 
+from core.storage.registry import REGISTRY
 from model.note.exc import LineShapeError, SpanRangeError
 from model.note.types import (
     REFERENCE_TABLES,
@@ -21,7 +20,7 @@ from model.note.types import (
     LineKind,
     Link,
     ListItem,
-    NoteBody,
+    NoteData,
     NoteLine,
     Ref,
     Span,
@@ -147,25 +146,31 @@ def test_line_spans_are_a_list_so_they_can_be_edited_in_place():
     assert line.spans == []
 
 
-def test_note_body_lines_can_be_edited_in_place_and_keep_their_order():
+def test_note_lines_can_be_edited_in_place_and_keep_their_order():
     """正文外层是有序列表：行序就是它，且增删就地做。"""
-    body = NoteBody(lines=[NoteLine(data="一"), NoteLine(data="二")])
-    body.lines.append(NoteLine(data="三"))
-    body.lines.insert(0, NoteLine(data="零"))
-    body.lines.pop(2)
-    assert [line.data for line in body.lines] == ["零", "一", "三"]
-    assert len(body) == 3
+    note = NoteData()
+    note.lines.extend([NoteLine(data="一"), NoteLine(data="二")])
+    note.lines.append(NoteLine(data="三"))
+    note.lines.insert(0, NoteLine(data="零"))
+    note.lines.pop(2)
+    assert [line.data for line in note.lines] == ["零", "一", "三"]
+    assert len(note) == 3
 
 
-def test_the_body_carries_lines_and_nothing_else():
-    """正文里只有行：笔记级样式与标题一类小字段都是**属性**，跟着块走，故不在这里。
+def test_the_payload_carries_lines_and_nothing_else():
+    """载荷里只有行：笔记级样式与标题一类小字段都是**属性**，跟着块走，故不进载荷。
 
-    这条不是形式主义——放进来就等于"改一次背景把整篇重存一遍"，而正文按内容地址去重。
+    这条不是形式主义——放进来就等于"改一次背景把整篇重存一遍"，而载荷按内容地址去重。
+    判据取自登记表：`payload` 是载荷字段，`attrs` 是属性字段。
     """
-    assert {item.name for item in fields(NoteBody)} == {"lines"}
+    decl = REGISTRY.get("NoteData")
+    assert decl is not None
+    assert decl.payload == ("lines",)
+    assert "lines" not in {name for name, _ in decl.attrs}
 
 
-def test_an_empty_body_is_empty():
+def test_an_empty_note_has_no_lines():
     """空正文合法：新建的笔记还没有行。"""
-    assert len(NoteBody()) == 0
-    assert NoteBody().lines == []
+    note = NoteData()
+    assert len(note) == 0
+    assert note.lines == []

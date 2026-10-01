@@ -18,9 +18,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from core.storage.format.block import Block
+from core.storage.format.block import Block, Body
+from core.storage.format.id import ID
 
-__all__ = ["CanvasLink", "Figure", "NoteCanvas", "NoteCanvasBody", "PlacedShape"]
+__all__ = ["CanvasLink", "Figure", "NoteCanvas", "PlacedShape"]
 
 
 @dataclass(slots=True)
@@ -80,23 +81,24 @@ class CanvasLink:
     """链接线形式（实线 / 虚线 / 粗细…）。"""
 
 
-@dataclass(slots=True)
-class NoteCanvasBody:
-    """画板的载荷：一枚枚图，加上一条条连线。
+class NoteCanvas(Block):
+    """一张画板。
 
-    ``shapes`` 是**列表**而不是映射：**画的先后是内容**，而规范 CBOR 会给映射的键排序，
-    顺序一排序就丢了。故它是一串 `(编号, 那一枚图)`——外层列表保序，内层定长两项。
+    载荷是两样：一枚枚图、一条条连线。``shapes`` 是**列表**而不是映射——
+    **画的先后是内容**，而规范 CBOR 会给映射的键排序，顺序一排序就丢了。
+    故它是一串 `(编号, 那一枚图)`：外层列表保序，内层定长两项。
     ``links`` 用映射即可（连线的顺序不是内容）。
 
     编号一律是**字符串**：它要当映射的键，而 JSON 的键只能是字符串——
     契约面（Python → JSON → TS）过不去的东西，不该在存储面里先埋下。
     """
 
-    shapes: list[tuple[str, PlacedShape]] = field(default_factory=list)
-    """图编号 → 那一枚图，顺序即画的先后。"""
-
-    links: dict[str, CanvasLink] = field(default_factory=dict)
-    """链接编号 → 那一条连线。"""
+    def __init__(self) -> None:
+        """声明字段。"""
+        super().__init__()
+        self.id = ID()
+        self.shapes = Body(factory=list[tuple[str, PlacedShape]])
+        self.links = Body(factory=dict[str, CanvasLink])
 
     def shape(self, identifier: str) -> PlacedShape | None:
         """按编号取一枚图；没有即 ``None``。
@@ -113,20 +115,5 @@ class NoteCanvasBody:
         return None
 
     def link(self, identifier: str) -> CanvasLink | None:
-        """按编号取一条连线；没有即 ``None``。
-
-        Args:
-            identifier: 链接编号。
-
-        Returns:
-            那一条连线；编号不在板上时返回 ``None``。
-        """
+        """按编号取一条连线；没有即 ``None``。"""
         return self.links.get(identifier)
-
-
-@dataclass(slots=True)
-class NoteCanvas(Block[NoteCanvasBody]):
-    """一张画板。"""
-
-    __table__ = "notecanvas"
-    __owner__ = "note"

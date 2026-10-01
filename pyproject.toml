@@ -119,17 +119,18 @@ known-first-party = ["app", "core", "model"]
 convention = "google"
 
 [tool.ruff.lint.flake8-type-checking]
-# `Block` / `Body` 的子类在**类定义时**就调 `get_type_hints` 做类型登记（"类型定义即登记"），
-# 故它们注解里引用的名字（`attr`、`ID`、别的登记类型）必须是**运行期**可解析的。
-# 挪进 `TYPE_CHECKING` 会让那句 `get_type_hints` 抛 `NameError`，而登记那条路对
-# `NameError` 是**静默跳过**的——属性于是悄悄不落盘。故这两个基底声明为"运行期求值"，
-# 免得 ruff 的 TC001 一步步把它们推成静默数据丢失。
+# 块类型在**类定义时**被基座接管（`__init_subclass__` → `adopt`），它的 `__init__` 体在
+# **构造时**执行；`attr(...)` / `Body(...)` / `ID()` 都是那里的**运行期表达式**，
+# 不是注解，故凡在 `__init__` 里用的名字本来就不能只活在 `TYPE_CHECKING` 里。
+# 这里只钉住基类本身：子类定义处也真的要用到它。
 runtime-evaluated-base-classes = [
     "core.storage.format.block.Block",
-    "core.storage.format.block.Body",
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# `Body(...)` 是载荷**声明标记**，与属性那边的 `attr(...)` 对称：全小写入口之外，
+# 它是本层唯一一个以大写开头的调用面（作者定名，跟 `Block` 的读法一致）。
+"py_src/core/storage/format/block.py" = ["N802"]
 # 表名/列名来自声明层（tables.py）并经 quote_identifier 加引号，值全部参数化（无注入面）。
 "py_src/core/storage/rows.py" = ["S608"]
 "py_src/core/storage/index.py" = ["S608"]
@@ -149,7 +150,9 @@ runtime-evaluated-base-classes = [
 python_version = "3.13"
 # 企业级-ε：类型按静态语言口径，未注解 / 隐式 Any / Any 泄漏一律报错。
 strict = true
-plugins = ["tools/mypy_plugin.py"]
+# **不再需要 mypy 插件**：`attr(default=…)` / `Body(default=…)` 的签名直接声明成
+# "返回缺省值的类型"，故 `self.title = attr(default="")` 在 mypy 眼里就是 `str`。
+# 原先那个改写类体注解可见类型的 `tools/mypy_plugin.py` 随类体声明一起删除。
 # 源码根要显式指给 mypy：它不读 pytest 的 `pythonpath`，不指路时 `core` 会被认成
 # site-packages 里缺 `py.typed` 的第三方包，于是测试侧的 `core.*` 全成 Any——
 # 报错数看着不少，判据却已经失效。指路之后单独跑 `mypy tests` 也是同一口径。
@@ -180,7 +183,7 @@ extend_exclude = ["app", "site", "docs", ".agents"]
 # 已声明、尚未接线：这些依赖随各自模块重建才会用上（`progress.md` 有记录）。
 # 冻结已知项，门禁便能拦住**新增**的未用依赖——这才是它存在的意义。
 DEP002 = ["argon2-cffi", "blake3", "cryptography", "fastcdc", "tomli-w"]
-# `tools/mypy_plugin.py` 是 mypy 插件，本就依赖开发依赖。
+# `mypy` 是类型门禁本身要用的开发依赖，产品代码不 import 它。
 DEP004 = ["mypy"]
 
 [tool.importlinter]

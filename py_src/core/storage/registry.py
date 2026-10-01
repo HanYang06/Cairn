@@ -8,8 +8,9 @@
 
 三条口径：
 
-- **登记发生在类型定义时**，不是运行时扫描全书。定义量小、确定、可复查；
-  扫描要靠导入全仓模块，那既慢又会把"没被导入的类型"悄悄漏掉。
+- **定义时接管、形状首次被问到时探**：类型定义的那一刻基座就接管它（挂一次零参探针，
+  见 `format/block.py` 的 `adopt`），形状则由**那一次探针**现收。仍然不是"运行时扫描全书"——
+  探的是一个已经登记在册的类，不是去导入全仓模块找类型；定义量小、确定、可复查。
 - **一张表一个类型**：谁登记在先谁定这张表的形状；后登记的同名者当场报错，
   不静默合并——两处写同一张表的列，等于两处事实。
 - **登记是投影的输入，不是投影本身**：它交出列与主键，落地文件与建表语句由
@@ -27,7 +28,7 @@ from core.exc import TableDeclarationError
 from .format.id import ID_FIELDS
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from core.conf.types import TypeSpec
 
@@ -85,6 +86,9 @@ class TypeDecl:
         attrs: 本类型声明的属性，字段名 → 类型判据，顺序即类里书写的顺序。
             属性**不是列**：它跟着块记录走，这里登记只为了让「哪些字段该落盘、
             各是什么类型」有确定答案。判据与配置共用（`core.conf.types`）。
+        payload: 本类型声明的**载荷字段名**，顺序即声明顺序。它进 body 记录
+            （按内容地址去重的那一份），故也不是列；登记它是为了让"哪些字段属于载荷"
+            有确定答案——编码器按它遍历，属性面按它排除。
 
     以下是**类型级声明**：它们描述"这个类型的块怎么被存储、被怎么对待"，
     与表的列形状无关，故**不进声明文件**（`tables.yaml` 只描述库的形状）。
@@ -111,6 +115,7 @@ class TypeDecl:
     ids: tuple[str, ...] = ID_FIELDS
     refs: Mapping[str, str] = field(default_factory=dict)
     attrs: tuple[tuple[str, TypeSpec], ...] = ()
+    payload: tuple[str, ...] = ()
     owner: str = "core"
     tier: Tier = Tier.DERIVED
     backup: bool = False
@@ -125,8 +130,8 @@ class TypeDecl:
     def __post_init__(self) -> None:
         """校验登记的字段名：能绑的只有落盘子集，指针只带两套凭证。
 
-        属性不在这里校验：它只有 `register_type` 一个来源（受控的注解扫描），
-        而同一个名字在注解里只会出现一次，不存在"两处写同一张表"的可能。
+        属性与载荷不在这里校验类型：它们的来源只有一个（`format/block.py` 里的声明扫描），
+        同一个名字在类体里只会出现一次，不存在"两处写同一张表"的可能；这里只查两者不撞名。
         """
         unknown = [name for name in self.ids if name not in BINDABLE_FIELDS]
         if unknown:
@@ -156,6 +161,11 @@ class TypeDecl:
             if value is not None and value < 1:
                 raise TableDeclarationError(f"类型 {self.name} 的 {label} 必须为正: {value}")
         known = dict(self.attrs)
+        clash = sorted(set(self.payload) & set(known))
+        if clash:
+            raise TableDeclarationError(
+                f"类型 {self.name} 的 {clash} 既是属性又是载荷：一条字段只有一个落点"
+            )
         unknown = [name for name in self.indexed if name not in known]
         if unknown:
             raise TableDeclarationError(
@@ -191,13 +201,45 @@ class Registry:
         """建一张空表。"""
         self._types: dict[str, TypeDecl] = {}
         self._tables: dict[str, str] = {}
+        self._probes: list[tuple[object | None, Callable[[], None]]] = []
+        self._probe_keys: set[object] = set()
+
+    def add_probe(self, probe: Callable[[], None], *, key: object = None) -> None:
+        """排一次"待探形状"；同一个 `key` 只排一次（重复接管同一个类不该越排越多）。
+
+        形状是**在 `__init__` 里声明、由零参探针现算**的（见 `format/block.py` 的 `adopt`），
+        故登记不是定义那一刻完成的：待探清单挂在这里，谁第一次问形状谁把它跑掉。
+        """
+        if key is not None:
+            if key in self._probe_keys:
+                return
+            self._probe_keys.add(key)
+        self._probes.append((key, probe))
+
+    def drop_probe(self, key: object) -> None:
+        """撤掉一个待探项。
+
+        形状立不起来的类型（例如 `__init__` 要参数）**不该每次查登记都再炸一遍**——
+        那会让一个坏类型毒掉无关的查询。探针在这里撤掉，类本身仍然没有形状、没有表。
+        """
+        self._probe_keys.discard(key)
+        self._probes = [(item, probe) for item, probe in self._probes if item is not key]
+
+    def _run_probes(self) -> None:
+        """把待探的都探一遍；探针自己把登记写进来。
+
+        **先弹出再跑**：探针里再定义类型、再排探针都不会把这一轮拖长或漏掉。
+        """
+        while self._probes:
+            _key, probe = self._probes.pop(0)
+            probe()
 
     def register(self, decl: TypeDecl) -> TypeDecl:
         """登记一个类型；同名或同表重复登记即报错（不静默合并两处事实）。
 
-        **同一个类可能被登记两次**：`@dataclass(slots=True)` 会重建一次类对象来加
-        `__slots__`，于是 `__init_subclass__` 跑第二遍。这种情况按形状判：形状一样就是
-        同一件事实的重放，放过；形状不同就是两处写同一张表，照样报错。
+        **同一个类型会被登记多次**：探针每问一次形状就登记一次，`install_core_types()`
+        也可能被重复调用。这种情况按形状判：形状一样就是同一件事实的重放，放过；
+        形状不同就是两处写同一张表，照样报错。
 
         Returns:
             登记进去的那份声明，便于调用点直接持有。
@@ -224,27 +266,37 @@ class Registry:
 
     def get(self, name: str) -> TypeDecl | None:
         """按类型名反查；没有即 ``None``。"""
+        self._run_probes()
         return self._types.get(name)
 
     def table(self, name: str) -> TypeDecl | None:
         """按表名反查；没有即 ``None``。"""
+        self._run_probes()
         owner = self._tables.get(name)
         return None if owner is None else self._types[owner]
 
     def declarations(self) -> tuple[TypeDecl, ...]:
         """全部登记，按表名排序（书写顺序确定，投影才可复现）。"""
+        self._run_probes()
         ordered = sorted(self._tables.values(), key=self._table_of)
         return tuple(self._types[name] for name in ordered)
 
     def referenced_tables(self) -> tuple[str, ...]:
         """全部被引用到的表名，按名排序（投影前查断链用）。"""
+        self._run_probes()
         referenced = {table for decl in self._types.values() for table in decl.refs.values()}
         return tuple(sorted(referenced))
 
     def clear(self) -> None:
-        """清空（工具与测试用；内核本身不清）。"""
+        """清空（工具与测试用；内核本身不清）。**待探清单也一并清掉。**
+
+        注意：清掉之后形状与探针都没了，领域类要重新 `adopt` 一次才回得来——
+        这正是测试夹具在做的事（见 `tests/model/conftest.py`）。
+        """
         self._types.clear()
         self._tables.clear()
+        self._probes.clear()
+        self._probe_keys.clear()
 
     def _table_of(self, type_name: str) -> str:
         """取一个类型对应的表名（排序用）。"""

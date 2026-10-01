@@ -18,9 +18,17 @@ class InvalidIdError(CairnError, ValueError):
 
 
 class AttrTypeError(CairnError, ValueError):
-    """属性声明非法：写了 `attr` 却没写类型实参，或实参不在类型词表里。
+    """属性声明非法：缺省值给重了或没给，或类型不在词表里。
 
     判据与配置共用（`core.conf.types`），异常分开只为报错时说得准是哪一侧。
+    """
+
+
+class BlockShapeError(CairnError, ValueError):
+    """块形状立不起来：载荷声明非法，或这个类型的 `__init__` 没法零参探针。
+
+    参见 `core/storage/format/block.py`：形状是**在 `__init__` 里声明、由零参探针现算**的，
+    故"探不动"与"声明写歪了"都算这一类。
     """
 
 
@@ -116,6 +124,7 @@ class InvalidParamsError(CallError):
 
 __all__ = [
     "AttrTypeError",
+    "BlockShapeError",
     "BlockTooLargeError",
     "BudgetExhaustedError",
     "CairnError",

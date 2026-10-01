@@ -4,18 +4,26 @@
 
 与 `test_tablegen.py` 的分工：那一支钉"类型 → 表"这条链；这一支钉**存储行为**这一层
 （归属、配额、体积上限）。后者**不进声明文件**——流进去的只有档位与归属。
+
+**声明要进登记，类型就得有自己的 ID**：字段按新范式写在 `__init__` 里，而那一层的判据是
+"有 ID 才有表"——没有 ID 的类型只活在别人的载荷里，登记表里没有它，类体那组 `__…__`
+也就没有落点。故下面每个测试类型都写上 `self.id = ID()`。
+
+**形状由零参探针现算**：类定义只排一次待探，登记发生在第一次问形状时
+（`REGISTRY.get(…)` 或开库算表）。故"声明写歪了"这类错误抛在**问形状**那一步，
+不在类定义那一步——下面几支报错用例因此在定义之后触发探针。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
 
 from core.exc import TableDeclarationError
 from core.storage import tablegen
-from core.storage.format.block import Block, Body, register_type
+from core.storage.format.block import Block, install_core_types
+from core.storage.format.id import ID
 from core.storage.registry import REGISTRY, OverBudget, Tier, TypeDecl
 from core.storage.tables import load_tables
 
@@ -27,7 +35,7 @@ _KIB = 1024
 
 
 def _decl(name: str) -> TypeDecl:
-    """取一个已登记的声明；没登记就当场失败。"""
+    """取一个已登记的声明；没登记就当场失败（顺带把待探的形状探掉）。"""
     decl = REGISTRY.get(name)
     assert decl is not None, name
     return decl
@@ -35,14 +43,15 @@ def _decl(name: str) -> TypeDecl:
 
 @pytest.fixture(autouse=True)
 def clean_registry() -> Iterator[None]:
-    """每个用例一份干净的登记，**用完还原**（与 `test_attr.py` 同一套）。"""
+    """每个用例一份干净的登记，**用完还原**（与 `test_attr.py` 同一套）。
+
+    内核那两张表按 `install_core_types()` 重放——它们不由用户类型的构造声明而来。
+    """
     REGISTRY.clear()
-    register_type(Body)
-    register_type(Block)
+    install_core_types()
     yield
     REGISTRY.clear()
-    register_type(Body)
-    register_type(Block)
+    install_core_types()
 
 
 # ---- 声明进登记 ----
@@ -51,8 +60,7 @@ def clean_registry() -> Iterator[None]:
 def test_declared_storage_fields_land_in_the_declaration():
     """类体里那组 `__…__` 各有其位：归属、档位、配额、体积上限。"""
 
-    @dataclass(slots=True)
-    class AttrIndex(Block[None]):
+    class AttrIndex(Block):
         """测试用的块。"""
 
         __table__ = "attrindex"
@@ -64,6 +72,10 @@ def test_declared_storage_fields_land_in_the_declaration():
         __pack_budget__ = 4
         __over_budget__ = OverBudget.DENY
         __max_block_mbyte__ = 1
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     decl = _decl("AttrIndex")
 
@@ -80,9 +92,12 @@ def test_declared_storage_fields_land_in_the_declaration():
 def test_storage_fields_default_to_the_quiet_choices():
     """一档都不写时的默认：可重建、不独占、无配额、静默续份。"""
 
-    @dataclass(slots=True)
-    class Plain(Block[None]):
+    class Plain(Block):
         """最朴素的测试类型。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     decl = _decl("Plain")
 
@@ -96,38 +111,67 @@ def test_storage_fields_default_to_the_quiet_choices():
     assert decl.over_budget is OverBudget.EXTEND
 
 
+def test_a_type_without_its_own_id_is_not_registered():
+    """没有 `self.id` 的类型是**只活在载荷里的结构**：不登记、不建表，类体声明也没有落点。
+
+    这条替代旧范例里"定义即登记"的断言：登记与否由**形状**决定，而不是由类定义这一动作决定。
+    """
+
+    class Structure(Block):
+        """没有自己 ID 的测试类型。"""
+
+        __own_hub__ = True
+
+    assert REGISTRY.get("Structure") is None
+
+
 def test_own_hub_and_hub_cannot_both_be_given():
-    """独占与指定是两回事，同时给就没有答案，登记期报错。"""
+    """独占与指定是两回事，同时给就没有答案，问形状时报错。"""
+
+    class Both(Block):
+        """同时声明独占与指定的测试类型。"""
+
+        __own_hub__ = True
+        __hub__ = "idx"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
+
     with pytest.raises(TableDeclarationError, match="互斥"):
-
-        @dataclass(slots=True)
-        class Both(Block[None]):
-            """同时声明独占与指定的测试类型。"""
-
-            __own_hub__ = True
-            __hub__ = "idx"
+        _decl("Both")
 
 
 def test_non_positive_budget_is_rejected():
     """配额写成零等于"一开始就没有"，那是没写，不是配额，故当场报错。"""
+
+    class Zero(Block):
+        """配额写成零的测试类型。"""
+
+        __pack_budget__ = 0
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
+
     with pytest.raises(TableDeclarationError, match="必须为正"):
-
-        @dataclass(slots=True)
-        class Zero(Block[None]):
-            """配额写成零的测试类型。"""
-
-            __pack_budget__ = 0
+        _decl("Zero")
 
 
 def test_non_integer_budget_is_rejected():
     """配额只收整数：字符串不会静默变成数字。"""
+
+    class Text(Block):
+        """配额写成字符串的测试类型。"""
+
+        __pack_budget__ = "4"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
+
     with pytest.raises(TableDeclarationError, match="必须是整数"):
-
-        @dataclass(slots=True)
-        class Text(Block[None]):
-            """配额写成字符串的测试类型。"""
-
-            __pack_budget__ = "4"
+        _decl("Text")
 
 
 # ---- 体积上限：分档归一 ----
@@ -136,20 +180,26 @@ def test_non_integer_budget_is_rejected():
 def test_max_block_units_add_up_and_normalise():
     """分档相加归一成**字节数**：只写一档就是它，四档都写就是它们的和。"""
 
-    @dataclass(slots=True)
-    class One(Block[None]):
+    class One(Block):
         """只写一档的测试类型。"""
 
         __max_block_mbyte__ = 1
 
-    @dataclass(slots=True)
-    class All(Block[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
+
+    class All(Block):
         """四档都写的测试类型。"""
 
         __max_block_byte__ = 8
         __max_block_kbyte__ = 1
         __max_block_mbyte__ = 1
         __max_block_gbyte__ = 1
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     assert _decl("One").max_block_bytes == 1 * _KIB**2
     assert _decl("All").max_block_bytes == 8 + 1 * _KIB + 1 * _KIB**2 + 1 * _KIB**3
@@ -161,12 +211,15 @@ def test_max_block_units_add_up_and_normalise():
 def test_table_spec_takes_tier_and_owner_from_the_declaration():
     """档位与归属流进表声明；真源档不写重建来源（写反了构造校验会拦）。"""
 
-    @dataclass(slots=True)
-    class Owned(Block[None]):
+    class Owned(Block):
         """带归属、声明为真源档的测试类型。"""
 
         __owner__ = "note"
         __tier__ = Tier.SOURCE
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     spec = tablegen.table_spec(_decl("Owned"))
 
@@ -178,9 +231,12 @@ def test_table_spec_takes_tier_and_owner_from_the_declaration():
 def test_derived_tier_still_writes_its_rebuild_source():
     """可重建那一档必须写明来路——这条旧行为不因新字段而丢。"""
 
-    @dataclass(slots=True)
-    class Rebuildable(Block[None]):
+    class Rebuildable(Block):
         """可重建档的测试类型。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     spec = tablegen.table_spec(_decl("Rebuildable"))
 

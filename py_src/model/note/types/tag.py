@@ -11,22 +11,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from core.storage.format.block import Block, Body
+from core.storage.format.id import ID
 
-from core.storage.format.block import Block
-
-__all__ = ["NoteTag", "NoteTagTable"]
+__all__ = ["NoteTag"]
 
 
-@dataclass(slots=True)
-class NoteTagTable:
-    """标签表：标签 → 笔记 ID 的列表。
+class NoteTag(Block):
+    """标签表的载体：**一张表一个块**。
 
-    用**可变映射**：标签与成员都会被就地增删。键序与去重归编码那一侧，
-    不在这里排——排序是落盘那一层的规范化，不是这张表的日常形态。
+    载荷是 KV（标签 → 笔记 ID 的列表）。键序与去重归编码那一侧，不在这里排——
+    排序是落盘那一层的规范化，不是这张表的日常形态。
     """
 
-    entries: dict[str, list[str]] = field(default_factory=dict)
+    def __init__(self) -> None:
+        """声明字段。"""
+        super().__init__()
+        self.id = ID()
+        self.entries = Body(factory=dict[str, list[str]])
 
     def notes_of(self, name: str) -> list[str]:
         """用了这个标签的笔记 ID；标签不在表里即空。
@@ -47,11 +49,3 @@ class NoteTagTable:
     def __len__(self) -> int:
         """有多少个标签。"""
         return len(self.entries)
-
-
-@dataclass(slots=True)
-class NoteTag(Block[NoteTagTable]):
-    """标签表的载体：**一张表一个块**。"""
-
-    __table__ = "notetag"
-    __owner__ = "note"

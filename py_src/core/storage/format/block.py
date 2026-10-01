@@ -1,9 +1,24 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""块与载荷：块是身份壳，body 是块自带的载荷；类型在这里登记自己。
+r"""块与载荷：块是身份壳，body 是块自带的载荷；类型在这里登记自己。
 
-块不携带领域语义词，承载类型由继承类给出；body 的承载结构不收窄，
-但落盘前必须能给出确定性编码，否则同一逻辑内容会算出不同地址、去重失效。
+**块的形状在 ``__init__`` 里声明**——声明与构造写在一处：
+
+    class NoteGroup(Block):
+        def __init__(self) -> None:
+            super().__init__()
+            self.name = attr(default="")
+            self.notes = Body(factory=list[str])
+
+三种声明各有各的落点：
+
+- ``attr(...)`` —— **属性**，跟着块记录走（`\\x00cairn.attrs`）；
+- ``Body(...)`` —— **载荷**，落成 body 记录（按内容地址去重）；
+- 其余赋值 —— 普通实例状态，**不落盘**。
+
+基座把子类的 ``__init__`` 包一层：用户的声明跑完之后扫一遍实例，把这些标记收成**类型形状**
+（谁用了 ID、有哪些属性、哪些是载荷），并把标记换成真实默认值。形状**由一次零参探针现算**，
+故 ``__init__`` 必须能零参调用；形状**不许依赖运行期条件**，否则同一张表的列会随环境变。
 
 **一块落成两条记录**（设计篇 §3.2.1、§4.4）：
 
@@ -14,30 +29,28 @@
 业务数据不可能占用它。若拿一个业务可能用到的普通键（例如 ``body_addr``）当判据，
 一份形如 ``{"body_addr": …}`` 的正文就会被误判成块记录，去重失效、列举整体报错。
 
-**类型定义即登记**（设计篇 §8.2 的"表会自己诞生"）：`:class:`Body`` 与 :class:`Block`
-在定义时就往登记表里写下自己的名字与 ID 字段，于是"谁用了 ID"这件事有确定答案——
-表的形状由登记表现算，不必手写。领域类只消继承 `Block`、写上自己的 `__table__`，
-那张表就会在那一次运行里诞生。
+**继承即登记**：定义时把类排进待探清单，形状第一次被问到时（开库算表、按类型查行）
+探一次、登记一次；表随之诞生。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, get_args, get_type_hints
+from functools import wraps
+from typing import TYPE_CHECKING, Any, overload
 
 import cbor2
 
-from core.attr import attr_type_of
-from core.exc import AttrTypeError, TableDeclarationError
+from core.attr import AttrDecl, attr_decl
+from core.conf.types import MISSING
+from core.exc import AttrTypeError, BlockShapeError, TableDeclarationError
 
-from ..registry import BINDABLE_FIELDS, REGISTRY, OverBudget, Tier, TypeDecl
+from ..registry import REGISTRY, OverBudget, Tier, TypeDecl
 from .id import ID, ID_FIELDS
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
-
-    from core.conf.types import TypeSpec
+    from collections.abc import Callable, Mapping
 
 BODY_REF_KEY = "\x00cairn.body_ref"
 """块记录载荷里的保留键：指向 body 的两套凭证。前缀即"业务数据不可能占用"的命名空间。"""
@@ -234,76 +247,293 @@ def tombstone_of(payload: bytes) -> Tombstone | None:
         return None
 
 
-def register_type(cls: type[object]) -> TypeDecl:
-    """把一个类型登记进登记表：名字取它的 `__table__`，列取它持有的 ID 字段。
+# ---- 载荷声明：`Body(...)` ----
 
-    扫描的是**类的注解**（`get_type_hints`），四种注解各有归宿：
 
-    - `id: ID` —— 身份，落成整整一套身份列；
-    - 名字本身就是 `ID` 的字段（`name` / `birth_time` …）—— 那一列；
-    - `field: attr[T]` —— **属性**：跟着块记录走，登记下来只为「哪些字段该落盘、
-      各是什么类型」有确定答案（判据与 `conf` 共用）；
-    - 另一个已登记的类型（如 `body: Body[T]`）—— 指向那张表的指针。
+def _fresh(value: object) -> object:
+    """把缺省值取一份：容器现拷，标量原样。理由与属性那边同一条（实例之间不串）。"""
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, dict):
+        return dict(value)
+    return value
 
-    其余的注解（如裸的 `title: str`）**不算数**：没声明过的字段不落盘，内核也不替它猜。
+
+@dataclass(frozen=True, slots=True)
+class BodyDecl:
+    """一条载荷声明：这个字段进 body 记录（按内容地址去重的那一份）。
+
+    Attributes:
+        default: 字面缺省值；写工厂时是 ``None``。
+        factory: 缺省值的工厂；写字面值时是 ``None``。
+    """
+
+    default: object = None
+    factory: Callable[[], object] | None = None
+
+    def make(self) -> object:
+        """造一个缺省值：有工厂就现调一次，否则把字面值拷一份。"""
+        if self.factory is not None:
+            return self.factory()
+        return _fresh(self.default)
+
+
+@overload
+def Body[T](*, default: T) -> T: ...
+
+
+@overload
+def Body[T](*, factory: Callable[[], T]) -> T: ...
+
+
+def Body(*, default: object = MISSING, factory: Callable[[], object] | None = None) -> object:
+    """声明一条**载荷**。**类型上返回缺省值的类型，运行时返回 :class:`BodyDecl`。**
+
+    载荷与属性的分别只在落点：载荷进 body 记录（大头内容、按内容地址去重），
+    属性跟着块记录走。同一个块可以声明多条载荷，它们一起编进那一份 body。
+
+    Args:
+        default: 字面缺省值。
+        factory: 缺省值的工厂（可变默认值走它，``list[str]`` 一类）。
 
     Raises:
-        TableDeclarationError: 名字或表名已被别的类型占用，或引用指向没登记的表。
-        AttrTypeError: 写了 `attr` 但类型实参不合规矩。
+        BlockShapeError: 缺省值给重了，或一个都没给。
     """
-    # 表名看的是**本类自己写下的** `__table__`；继承来的不算——否则子类会顶掉父类那张表，
-    # 而"每个类型一张表"正是这条机制的立论。没写就按类名推。
-    table = str(cls.__dict__.get("__table__") or cls.__name__.lower())
+    if default is MISSING and factory is None:
+        raise BlockShapeError("载荷声明要给出缺省值：`Body(default=…)` 或 `Body(factory=…)`")
+    if default is not MISSING and factory is not None:
+        raise BlockShapeError("载荷声明的缺省值只能给一个出处：default 或 factory")
+    return BodyDecl(default=None if default is MISSING else default, factory=factory)
+
+
+def body_decl(value: object) -> BodyDecl | None:
+    """这个值是不是一条载荷声明；不是即 ``None``。"""
+    return value if isinstance(value, BodyDecl) else None
+
+
+# ---- 形状：从实例上收声明 ----
+
+_WRAPPER_FLAG = "_cairn_declaring"
+"""基座包过的 ``__init__`` 上的记号：认得出就不重复包（探针可以被重新排多次）。"""
+
+
+@dataclass(frozen=True, slots=True)
+class _Shape:
+    """一个类型报上来的形状：ID 角色、属性（名字 + 声明）、载荷字段名，顺序即声明顺序。
+
+    ``ids`` 装的是**持有 ID 的字段名**：名字叫 ``id`` 的那一个是它自己的身份，
+    有它才产生一张表；没有就是"只活在载荷里的结构"，不登记、不建表。
+    """
+
+    ids: tuple[str, ...] = ()
+    attrs: tuple[tuple[str, AttrDecl], ...] = ()
+    payload: tuple[str, ...] = ()
+
+
+_SHAPES: dict[type[object], _Shape] = {}
+"""已收货的形状：键是**实例的真实类**，收货时与上一份**并**起来——
+逐层包 `__init__` 会让内层先把父类的标记换成真实值，故不能重扫覆盖。"""
+
+
+def _declaring_init(base: Callable[..., None]) -> Callable[..., None]:
+    """把一个 ``__init__`` 包一层：先跑它，再收货并换成真实默认值。"""
+
+    @wraps(base)
+    def start(self: object, *args: Any, **kwargs: Any) -> None:
+        base(self, *args, **kwargs)
+        _harvest(self)
+
+    setattr(start, _WRAPPER_FLAG, True)
+    return start
+
+
+def _harvest(instance: object) -> None:
+    """扫一遍实例：把声明收成形状，并把标记换成真实默认值。
+
+    **只认标记，不认注解**：``self.x: attr[str] = …`` 里的注解在函数体里会被 Python
+    丢掉（连求值都不发生），故性质只能由右边的标记给出——这也正是"各有各的结构"。
+
+    **ID 是报上来的**：哪个字段上是 :class:`ID`，哪个字段就是一条"用 ID 的角色"；
+    其中名字叫 ``id`` 的那一条是它自己的身份，**有它才有表**。
+    """
     ids: list[str] = []
-    refs: dict[str, str] = {}
-    attrs: list[tuple[str, TypeSpec]] = []
-    for name, hint in _hints(cls):
-        if hint is ID:
-            ids.extend(_IDENTITY_FIELDS)
-            continue
-        if name in BINDABLE_FIELDS:
+    attrs: list[tuple[str, AttrDecl]] = []
+    payload: list[str] = []
+    fields = vars(instance)
+    for name, value in list(fields.items()):
+        if isinstance(value, ID):
             ids.append(name)
             continue
-        spec = attr_type_of(hint)
-        if spec is not None:
-            attrs.append((name, spec))
+        attribute = attr_decl(value)
+        if attribute is not None:
+            attrs.append((name, attribute))
+            fields[name] = attribute.make()
             continue
-        target = _table_of_type(hint)
-        if target is not None:
-            refs[name] = target
-    return REGISTRY.register(
-        _decl_of(
-            cls,
-            table=table,
-            ids=tuple(ids) or _IDENTITY_FIELDS,
-            refs=refs,
-            attrs=tuple(attrs),
+        body = body_decl(value)
+        if body is not None:
+            payload.append(name)
+            fields[name] = body.make()
+    previous = _SHAPES.get(type(instance))
+    _SHAPES[type(instance)] = _Shape(
+        ids=_union(() if previous is None else previous.ids, ids),
+        attrs=_merged_attrs(() if previous is None else previous.attrs, attrs),
+        payload=_union(() if previous is None else previous.payload, payload),
+    )
+
+
+def _union(previous: tuple[str, ...], new: list[str]) -> tuple[str, ...]:
+    """并两拨名字，保持先出现的顺序（继承来的在前，本类后声明的在后）。"""
+    return tuple(dict.fromkeys((*previous, *new)))
+
+
+def _merged_attrs(
+    previous: tuple[tuple[str, AttrDecl], ...], new: list[tuple[str, AttrDecl]]
+) -> tuple[tuple[str, AttrDecl], ...]:
+    """并两拨属性：同名的以后声明的为准，位置保持先出现的那个。"""
+    merged = dict(previous)
+    merged.update(new)
+    return tuple(merged.items())
+
+
+def _ensure_shape(cls: type[object]) -> _Shape:
+    """取一个类型的形状：没有就跑一次**零参探针**（``cls()``）现收。
+
+    Raises:
+        BlockShapeError: 这个类没法零参构造（形状探不出来）。
+    """
+    shape = _SHAPES.get(cls)
+    if shape is not None:
+        return shape
+    try:
+        cls()
+    except TypeError as error:
+        # 探不动的类型撤掉它的探针：否则每一次查登记都要再炸一遍，一个坏类型毒掉一片查询。
+        REGISTRY.drop_probe(cls)
+        raise BlockShapeError(
+            f"类型 {cls.__name__} 的形状探不出来：`__init__` 必须能零参调用（{error}）"
+        ) from error
+    return _SHAPES[cls]
+
+
+def declare_type(cls: type[object]) -> TypeDecl | None:
+    """把一个块类型报上来的形状交给登记表；**没有自己的 ID 就不登记**。
+
+    这就是"表自然产生"那一步：类型不必去认领一张表，它只消在 ``__init__`` 里
+    给 ``self.id`` 放一个 :class:`ID`；没有 ID 的类型是**只活在载荷里的结构**
+    （值对象），它不进登记表、不建表，但形状照样收着——编码器按它遍历。
+
+    Returns:
+        登记进去的那份声明；这个类型没有自己的 ID 时返回 ``None``。
+
+    Raises:
+        TableDeclarationError: 名字或表名已被别的类型占用，或表形状立不起来。
+        BlockShapeError: 形状探不出来。
+    """
+    shape = _ensure_shape(cls)
+    if "id" not in shape.ids:
+        return None
+    return REGISTRY.register(_decl_of(cls, shape))
+
+
+def adopt(cls: type[object]) -> None:
+    """接管一个块类型：包一层 ``__init__``，并排一次零参探针。重复调用是幂等的。
+
+    探针的意义：**开库算表的时候还没有人构造过任何实例**，表形状仍要有答案。
+    故形状第一次被问到时探一遍——探针只做声明，不许有外部副作用。
+    """
+    current = cls.__dict__.get("__init__")
+    if not getattr(current, _WRAPPER_FLAG, False):
+        # 本类没写 `__init__` 时取**继承下来的那一个**（父类已被包过的那层），
+        # 而不是 `Block.__init__`：继承来的声明也要跑一遍，否则子类会整份丢掉父类的字段。
+        base = cls.__init__ if current is None else current
+        setattr(cls, "__init__", _declaring_init(base))  # noqa: B010 — 类对象上的方法不能直接赋值
+
+    def probe() -> None:
+        """探一次：没有 ID 的类型不登记，故这里的返回值直接丢掉。"""
+        declare_type(cls)
+
+    REGISTRY.add_probe(probe, key=cls)
+
+
+def install_core_types() -> None:
+    """装上内核自己那两张表的形状：`block`（块）与 `body`（内容）。
+
+    它们不由用户类型的构造声明而来：块表的主语是块、body 表的主语是内容，
+    都是内核机制，故在这里写死（与 `hub` 那张"不由类型诞生"的表同一路数）。
+    """
+    REGISTRY.register(
+        TypeDecl(
+            name="Block",
+            table="block",
+            doc="存储单元：身份壳，指向它携带的那份作业",
+            ids=ID_FIELDS,
+            refs={"body": "body"},
+        )
+    )
+    REGISTRY.register(
+        TypeDecl(
+            name="Body",
+            table="body",
+            doc="内容记录：按内容地址去重的载荷本身",
+            ids=ID_FIELDS,
         )
     )
 
 
-def _decl_of(
-    cls: type[object],
-    *,
-    table: str,
-    ids: tuple[str, ...],
-    refs: dict[str, str],
-    attrs: tuple[tuple[str, TypeSpec], ...],
-) -> TypeDecl:
-    """由类体的注解与那组 `__…__` 拼出一份类型登记。
+class Block:
+    """数据结构的基座：**身份可选**，字段在 ``__init__`` 里声明。
 
-    注解定**列与属性**（`ID` / ID 字段名 / `attr[T]` / 已登记类型）；
-    `__…__` 定**存储行为**（归属、配额、体积上限）。后者**不进声明文件**——
-    那份文件只描述库的形状，而"配额多少"是策略，不是形状。
+    有没有给 ID 决定它是哪一种：
+
+    - 给了 ``self.id = ID()`` —— 它是一个**块**：登记、建表，可单独落盘与查询；
+    - 没给 —— 它是一个**结构**：只活在别人的载荷里（值对象），不登记、不建表。
+
+    于是"创建一个数据结构"只有一条路：**继承 + 在 ``__init__`` 里写字段**，
+    没有第二个类、没有 dunder 样板：
+
+        class NoteGroup(Block):
+            def __init__(self) -> None:
+                super().__init__()
+                self.id = ID()
+                self.name = attr(default="")
+                self.notes = Body(factory=list[str])
+
+    表名默认取类名的小写写法，要改就写 ``__table__``；归属默认按包路径推
+    （``model.<域>.**`` → 域名），要改就写 ``__owner__``。
+
+    Attributes:
+        id: 块自身的身份。**由声明给出**：本基座不代为签发——要就要，不要就没有表。
+    """
+
+    __table__ = "block"
+    """这张表的名字：块表另有指向 `body` 的两列，故它比内容表宽。"""
+
+    def __init__(self, *, id: ID | None = None) -> None:
+        """不自动签发身份：要 ID 就自己声明（``self.id = ID()``），加了才有表。"""
+        if id is not None:
+            self.id = id
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """子类定义完就接管它（形状待探、`__init__` 待包）。"""
+        super().__init_subclass__(**kwargs)
+        adopt(cls)
+
+
+def _decl_of(cls: type[object], shape: _Shape) -> TypeDecl:
+    """由类的声明与那组 `__…__` 拼出一份类型登记。
+
+    注解与标记定**属性与载荷**；`__…__` 定**存储行为**（归属、配额、体积上限）。
+    后者**不进声明文件**——那份文件只描述库的形状，而"配额多少"是策略，不是形状。
     """
     return TypeDecl(
         name=cls.__name__,
-        table=table,
+        table=str(cls.__dict__.get("__table__") or cls.__name__.lower()),
         doc=_summary(cls),
-        ids=ids,
-        refs=refs,
-        attrs=attrs,
-        owner=_text_field(cls, "__owner__", "core"),
+        ids=_IDENTITY_FIELDS if "id" in shape.ids else (),
+        refs={"body": "body"},
+        attrs=tuple((name, declaration.spec) for name, declaration in shape.attrs),
+        payload=shape.payload,
+        owner=_owner(cls),
         tier=_enum_field(cls, "__tier__", Tier, Tier.DERIVED),
         backup=_flag_field(cls, "__backup__"),
         own_hub=_flag_field(cls, "__own_hub__"),
@@ -312,7 +542,7 @@ def _decl_of(
         pack_budget=_budget_field(cls, "__pack_budget__"),
         max_block_bytes=_max_block_bytes(cls),
         over_budget=_enum_field(cls, "__over_budget__", OverBudget, OverBudget.EXTEND),
-        indexed=_texts_field(cls, "__indexed__"),
+        indexed=tuple(name for name, declaration in shape.attrs if declaration.indexed),
     )
 
 
@@ -323,6 +553,17 @@ _BLOCK_SIZE_FACTORS: tuple[tuple[str, int], ...] = (
     ("mbyte", 1024**2),
     ("gbyte", 1024**3),
 )
+
+
+def _owner(cls: type[object]) -> str:
+    """归属：本类写死的优先，否则按包路径推——`model.<域>.**` 归那个域，其余归 `core`。"""
+    declared = cls.__dict__.get("__owner__")
+    if declared is not None:
+        if not isinstance(declared, str):
+            raise TableDeclarationError(f"{cls.__name__} 的 __owner__ 必须是字符串: {declared!r}")
+        return declared
+    parts = str(getattr(cls, "__module__", "")).split(".")
+    return parts[1] if len(parts) >= 2 and parts[0] == "model" else "core"
 
 
 def _enum_field[T: Enum](cls: type[object], dunder: str, expected: type[T], default: T) -> T:
@@ -367,19 +608,6 @@ def _budget_field(cls: type[object], dunder: str) -> int | None:
     return value
 
 
-def _texts_field(cls: type[object], dunder: str) -> tuple[str, ...]:
-    """读一串名字的声明（如 `__indexed__`）：本类没写即空。
-
-    只收字符串序列——写成单个字符串是最常见的笔误，故不让它"看起来也能用"。
-    """
-    value = cls.__dict__.get(dunder)
-    if value is None:
-        return ()
-    if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
-        raise TableDeclarationError(f"{cls.__name__} 的 {dunder} 必须是字符串序列: {value!r}")
-    return tuple(value)
-
-
 def _max_block_bytes(cls: type[object]) -> int | None:
     """把分档写下的单块上限**相加归一**成字节数；一档都没写即 `None`。
 
@@ -394,7 +622,7 @@ def _max_block_bytes(cls: type[object]) -> int | None:
     return total or None
 
 
-def block_attrs[T](block: Block[T]) -> dict[str, object]:
+def block_attrs[T](block: Block) -> dict[str, object]:
     """取一个块实例上**声明过的**属性值：只取登记里有的那些字段。
 
     判据用登记的 `TypeDecl.attrs`，故没声明过的字段不进载荷——"哪些字段算数"有确定
@@ -416,35 +644,6 @@ def _summary(cls: type[object]) -> str:
     return doc.strip().splitlines()[0] if doc and doc.strip() else ""
 
 
-def _hints(cls: type[object]) -> Iterator[tuple[str, object]]:
-    """取一个类的注解（解析成真实对象）；解不出来的项跳过，不让登记失败。"""
-    try:
-        resolved = get_type_hints(cls)
-    except NameError:  # 注解里引用了本模块还看不到的名字：按能解出来的那部分登记
-        resolved = {}
-    return iter(resolved.items())
-
-
-def _table_of_type(hint: object) -> str | None:
-    """一个注解指向哪张表：是已登记的类型才有答案，否则 ``None``（不是引用）。
-
-    `body: Body[T]` 这类注解本身不是类（它是泛型别名），故要往它的 `__origin__` 看一层；
-    泛型实参（`T`）只是"某一类载荷"，不构成引用。
-    """
-    candidates: list[object] = [hint, getattr(hint, "__origin__", None), *_generics_of(hint)]
-    for candidate in candidates:
-        if isinstance(candidate, type):
-            decl = REGISTRY.get(candidate.__name__)
-            if decl is not None:
-                return decl.table
-    return None
-
-
-def _generics_of(hint: object) -> tuple[object, ...]:
-    """取出泛型实参（`Body[T]` → `(T,)`）：它们是"某一类载荷"，不是登记类型。"""
-    return get_args(hint) or ()
-
-
 def _required_text(raw: Mapping[str, object], key: str) -> str:
     """取一段必需的文本；缺了或不是字符串即抛。"""
     value = raw.get(key)
@@ -453,53 +652,7 @@ def _required_text(raw: Mapping[str, object], key: str) -> str:
     return value
 
 
-@dataclass(slots=True)
-class Body[T]:
-    """数据载荷载体。
-
-    Attributes:
-        data: 载荷；字符串、列表、字典、二进制皆可，结构不作收窄。
-        id: 载荷的身份；摘要形态由载荷内容算出（见 `ID.of`）。
-    """
-
-    data: T | None = None
-    id: ID = field(default_factory=ID)
-
-    __table__ = "body"
-    """这张表的名字：**名字是表的坐标**，登记表与 `id(名字).字段` 都用它。"""
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        """子类定义完就登记自己：谁用了 ID，谁就在登记表里留下名字（设计篇 §8.2）。"""
-        # 直接叫 `type` 那一版，不走零参 `super()`：后者要用隐式 `__class__` 单元，
-        # 而 `Block[str]` 那样具体化出来的子类会让它取不到定义类
-        super(Body, cls).__init_subclass__(**kwargs)
-        register_type(cls)
-
-
-@dataclass(slots=True)
-class Block[T]:
-    """存储单元：身份壳加自包含属性。
-
-    Attributes:
-        id: 块自身的身份。
-        body: 块携带的载荷；先立壳、后挂载荷，故默认给一份空载荷。
-    """
-
-    id: ID = field(default_factory=ID)
-    body: Body[T] = field(default_factory=Body[T])
-
-    __table__ = "block"
-    """这张表的名字：块表另有指向 `body` 的两列，故它比内容表宽。"""
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        """子类定义完就登记自己（域表的诞生点就在这里）。"""
-        super(Block, cls).__init_subclass__(**kwargs)
-        register_type(cls)
-
-
-#: 两张内核表的登记必须在类定义之后发生：`__init_subclass__` 不在定义它的那个类上触发。
-register_type(Body)
-register_type(Block)
+install_core_types()
 
 
 __all__ = [
@@ -511,13 +664,17 @@ __all__ = [
     "Block",
     "BlockPayload",
     "Body",
+    "BodyDecl",
     "BodyRef",
     "Tombstone",
+    "adopt",
     "block_attrs",
     "block_payload_of",
+    "body_decl",
     "body_ref_of",
+    "declare_type",
     "encode_block_payload",
     "encode_tombstone",
-    "register_type",
+    "install_core_types",
     "tombstone_of",
 ]

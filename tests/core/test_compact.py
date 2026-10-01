@@ -3,18 +3,21 @@
 """整理契约：勘察只读、处理真抹、可重复跑，且删块留下的孤儿正文也一起回收。
 
 要真建库——整理动的是载体文件本身，纯函数验不了。
+
+带归属的那个测试类型按新范式写在 `__init__` 里声明字段；`__table__` / `__hub__`
+仍写在类体——它们描述的是**存储行为**，不是形状。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
 
 from core.init import Kernel
 from core.storage.carrier import owner_digest
-from core.storage.format.block import Block, Body, register_type, tombstone_of
+from core.storage.format.block import Block, install_core_types, tombstone_of
+from core.storage.format.id import ID
 from core.storage.format.record import decode
 from core.storage.hub import Hub, find_hubs
 from core.storage.registry import REGISTRY
@@ -26,14 +29,15 @@ if TYPE_CHECKING:
 
 @pytest.fixture(autouse=True)
 def clean_registry() -> Iterator[None]:
-    """每个用例一份干净的登记，**用完还原**（与 `test_attr.py` 同一套）。"""
+    """每个用例一份干净的登记，**用完还原**（与 `test_attr.py` 同一套）。
+
+    内核那两张表按 `install_core_types()` 重放——它们不由用户类型的构造声明而来。
+    """
     REGISTRY.clear()
-    register_type(Body)
-    register_type(Block)
+    install_core_types()
     yield
     REGISTRY.clear()
-    register_type(Body)
-    register_type(Block)
+    install_core_types()
 
 
 def _tombs(kernel: Kernel) -> int:
@@ -160,12 +164,15 @@ def test_compact_is_idempotent(tmp_path: Path):
 def test_compact_keeps_the_owner_of_a_pack(tmp_path: Path):
     """整理不把载体的归属弄丢：它记的是"这份归哪个类型"，丢了配额判定就会算错。"""
 
-    @dataclass(slots=True)
-    class Owned(Block[None]):
+    class Owned(Block):
         """指定 hub 的测试类型。"""
 
         __table__ = "owned"
         __hub__ = "idx"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.id = ID()
 
     with Kernel.create(tmp_path / "vault") as kernel:
         kernel.store(b"x" * 300, kind="owned")

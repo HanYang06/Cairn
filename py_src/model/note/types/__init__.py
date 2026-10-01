@@ -3,10 +3,13 @@
 """笔记的数据结构：载荷内的结构与落盘载体。
 
 这一层只放**形状**，不放算法（算法在 `engine/`、编解码在 `format/`）。
-前半是**载荷内的结构**——它们不登记、不建表，只活在各自载体的载荷里，随载荷一起重建；
-后半是**继承 `Block` 的落盘载体**——它们**一写就登记、开库即建表**，
-故本模块被 import 的那一刻，``notedata`` / ``notetag`` / ``notegroup`` /
-``noteasset`` / ``notecanvas`` 几张表就进了登记表。
+
+两种东西，一条写法——**继承 ``Block``、在 ``__init__`` 里声明字段**：
+
+- **载体**（``NoteData`` / ``NoteTag`` / ``NoteGroup`` / ``NoteAsset`` / ``NoteCanvas``）：
+  声明里有 ``self.id = ID()``，故**有表**，可单独落盘与查询；
+- **载荷内的结构**（``NoteLine`` / ``Span`` / ``Heading`` / ``Chunk`` / ``Figure`` …）：
+  没有 ID，故**不登记、不建表**，只活在各自载体的载荷里，随载荷一起重建。
 
 容器选型有一条规矩：**变长的用列表**（行、区间、分片、图），**定长的用元组**
 （`(start, end, style)`、`(操作, 坐标)`）；结构整体**默认不冻结**——
@@ -17,10 +20,9 @@
 
 from __future__ import annotations
 
-from model.note.types.asset import Chunk, NoteAsset, NoteAssetBody
-from model.note.types.body import NoteBody
-from model.note.types.canvas import CanvasLink, Figure, NoteCanvas, NoteCanvasBody, PlacedShape
-from model.note.types.group import NoteGroup, NoteGroupBody
+from model.note.types.asset import Chunk, NoteAsset
+from model.note.types.canvas import CanvasLink, Figure, NoteCanvas, PlacedShape
+from model.note.types.group import NoteGroup
 from model.note.types.kinds import REFERENCE_TABLES, LineKind, reference_table
 from model.note.types.line import (
     Code,
@@ -34,7 +36,7 @@ from model.note.types.line import (
     Todo,
 )
 from model.note.types.note import NoteData
-from model.note.types.tag import NoteTag, NoteTagTable
+from model.note.types.tag import NoteTag
 
 __all__ = [
     "REFERENCE_TABLES",
@@ -48,16 +50,11 @@ __all__ = [
     "Link",
     "ListItem",
     "NoteAsset",
-    "NoteAssetBody",
-    "NoteBody",
     "NoteCanvas",
-    "NoteCanvasBody",
     "NoteData",
     "NoteGroup",
-    "NoteGroupBody",
     "NoteLine",
     "NoteTag",
-    "NoteTagTable",
     "PlacedShape",
     "Ref",
     "Span",
