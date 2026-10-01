@@ -37,6 +37,7 @@ _TYPES = (
     "ci",
     "chore",
     "revert",
+    "delete",
 )
 
 #: 首行形状：`type(scope)!: 描述`。scope 用半角标识符，描述必填。
