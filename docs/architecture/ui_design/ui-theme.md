@@ -372,7 +372,7 @@
 > 历史备注：Qt 时代的主题库（QDarkStyleSheet / qt-material / PySide6-Fluent-Widgets /
 > qtdarktheme）已随 Qt 退场退出评估；当时的许可疑议（PySide6-Fluent-Widgets 疑为 GPLv3，
 > 当时未核实）是"许可证须提前查"这条红线的由来。现行许可规则的事实源为
-> [`contributing.md`](../contributing.md) 的「许可与署名」与 `.agents/skills/rules/references/licensing.md`。
+> [`contributing.md`](../../contributing.md) 的「许可与署名」与 `.agents/skills/rules/references/licensing.md`。
 
 ---
 

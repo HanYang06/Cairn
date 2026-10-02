@@ -6,7 +6,8 @@
 !!! warning "当前没有可用的界面"
 
     Cairn **尚未发布**。桌面壳（Tauri + Web 前端，`app/`）已立项，边车与转发口已接线，
-    但功能远未齐备。**当前可运行的是内核与测试**——下面第 2、3 节是现在就能用的部分。
+    但功能远未齐备。**内核此刻亦不成立**：L0 存储正在重写，`core.init` 依赖的存储模块尚未
+    补齐，故下面第 2 节的示例与第 3 节的测试都要等这次重写落地。
 
 ## 1. 准备环境
 
@@ -66,5 +67,5 @@ pnpm --dir app tauri dev
 ## 5. 下一步
 
 - 想改代码 → 「[参与开发](development.md)」与「[约定与红线](conventions.md)」
-- 想看设计 → 「[架构](../architecture/index.md)」
+- 想看设计 → 「[配置引擎](../architecture/py_core/config.md)」；`docs/architecture/**` 其余各页待重写
 - 想查某个类 / 函数的准确签名 → 「[API 参考](../api/index.md)」

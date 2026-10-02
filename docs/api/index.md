@@ -28,7 +28,7 @@ core(L0)  ←  feature(L3)  ←  app(组合根)
 `core` 是当前唯一有代码的一层：`feature` / `app` 在 2026-09-29 的重建中整条删除、待重建，
 故本节只有 core 一页，其页面在代码回来后再生成。`ui_tools` 这一 Qt 时代层名已作废，
 其职责由前端共享组件承担（界面侧边界见 `.agents/skills/rules/references/ui-boundary.md`）。
-各层的目标形态见「[架构](../architecture/index.md)」与「[领域](../architecture/domains.md)」。
+各层的目标形态见仓根 `AGENTS.md` 的「架构分层」；`docs/architecture/**` 那批设计页待重写。
 
 | 页 | 覆盖 |
 |---|---|
@@ -36,7 +36,6 @@ core(L0)  ←  feature(L3)  ←  app(组合根)
 
 ## 怎么读
 
-- 先看「[架构](../architecture/index.md)」再看本节：本节给出签名，
-  架构文档给出设计依据。
+- 先读 `docs/architecture/**`（这批页重建中）再看本节：本节给出签名，设计文档给出依据。
 - 每页顶部的包 docstring 通常包含该层的边界与红线。
 - 查词用「[术语表](../reference/glossary.md)」。

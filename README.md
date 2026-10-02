@@ -12,10 +12,12 @@
 仓库       https://github.com/HanYang06/cairn
 ```
 
+[![Architecture diagram of hanyang06/cairn](https://gitdiagram.com/hanyang06/cairn/diagram.png)](https://gitdiagram.com/hanyang06/cairn?utm_source=readme&utm_medium=picture)
+
 ## 定位
 
 - **本地优先**：内容寻址的桶 / 块是本体，应用只是消费者。数据落普通文件
-  （`vault/<桶>/packs/*.pack`，定长槽、自框定记录）+ 一个可重建的索引库 `vault/catalog.db`。
+  （`<root>/<hub>/packs/*.pack`，定长槽、自框定记录）+ 一个可重建的索引库 `<root>/catalog.db`。
   真源是载体，索引库是投影。
 - **三件套**：笔记、存储、项目管理。
 - **桌面优先**：以 Windows 为主要平台，内核与打包保持跨平台能力。
@@ -26,15 +28,16 @@
 
 早期开发阶段，**尚未发布**（`0.0.1` / pre-alpha）。
 
-- ✅ 已落地：L0 存储重写完成（块 / 载体 / 桶 / 多桶 / 索引库 / 巡检，内核已接上新底座）、
-  类型地基（`Attr` / `Data` / `Cfg`）、配置引擎、信号引擎与内核门户
-  （`Core` / `Signal` / `Storage` / `Conf`）、笔记领域（行身份 + 区间样式）、Windows 根壳。
-- ⚠️ 已知缺口：**版本能力整体缺失**（随内核重建移除，尚无一处写版本表）；`@action` 动作表未成立；
-  `Event` 的网络往返编解码未落。
-- 🔜 未做：对象驱动生成、多页 Tab 宿主、笔记编辑页、打包、P2P / 服务端。
+- ⚠️ **L0 存储正在重写**：旧的存储模块已删、新的尚未补齐（`core.init` 依赖的模块缺失），
+  故 `pytest`、`mypy` 与文档站构建此刻均不成立，`Kernel` 亦无法导入；事件引擎、配置引擎、
+  异常层与 `core/clock.py` 的时间口径不受影响。
+- **重建中**：领域层（`py_src/feature/` 已删，新落点 `py_src/model/note/`）与界面
+  （Tauri 壳与边车已接线，功能未齐）。
+- 🔜 未做：内容与块的压实回收、跨行事务与崩溃恢复、大正文分片、检索、P2P / 服务端、
+  打包与桌面入口。
 
-**详细进度与取舍不在本文件**——事实源是 [`docs/architecture/`](docs/architecture/index.md) 与代码；
-逐篇状态见 [架构文档索引](docs/architecture/index.md)。
+**详细进度与取舍不在本文件**——事实源是代码本身；`docs/architecture/**` 那批设计页在
+2026-09-29 的重建里被删、**待重写**。
 
 ## 快速开始
 
@@ -45,37 +48,29 @@ uv sync                 # 安装/同步依赖
 uv run pytest           # 跑内核测试（桌面入口尚未就绪）
 ```
 
-内核不依赖 Qt，可直接用：
+内核不依赖 Qt，装配在 `core.init` 的 `Kernel`：库根由调用方显式给出（`Kernel.create(root)`
+建库、`Kernel.open(root)` 打开已有库），**内核侧没有库路径旋钮**；桌面壳侧由 `CAIRN_VAULT`
+指定库根，`CAIRN_PYTHON` / `CAIRN_PYTHONPATH` 指定边车的解释器与模块搜索路径
+（见 `app/src-tauri/src/lib.rs`）。目标用法见 [快速开始](docs/guides/quickstart.md)；
+本次存储重写落地前，`uv run pytest` 与 `Kernel` 都还不成立（见上「现状」）。
 
-```python
-from core import Core
-from feature import Note
-
-core = Core()  # 内核是单例
-core.open("vault")  # 开（不存在则建）一个库
-note = Note(core)
-data = note.create("第一块石头", title="试笔")
-```
-
-完整步骤见 [快速开始](docs/guides/quickstart.md)。
-开发库默认 `<repo>/vault/`（已 gitignore），可用 `CAIRN_VAULT` 覆盖；
-`CAIRN_DEV_PASSPHRASE`（默认 `cairn-dev`）是 P2P / 服务端到来前的占位。
+开发库默认 `<repo>/vault/`（已 gitignore）；壳未设 `CAIRN_VAULT` 时就用它。
 
 ## 架构
 
 | 目录 | 职责 |
 |---|---|
 | `py_src/core/` | L0 底座：事件引擎 / 存储引擎 / 配置引擎 / 异常层；**Qt-free、传输无关** |
-| `py_src/feature/` | 领域（`note` / `project`）**待重建** |
-| `py_src/app/` | Python 侧入口（命令行、未来的内核边车）**待落地** |
+| `py_src/model/` | 领域层：`feature` 已删，新落点在 `model/note/`（随存储重写收敛） |
+| `py_src/app/` | Python 侧入口：边车（`app/sidecar.py`）已在，命令行与命令面**待落地** |
 | `app/` | 桌面外壳：Tauri 工程（`app/src/` React 前端 · `app/src-tauri/` Rust 壳）**功能待落地** |
 | `assets/` | 品牌素材单一真源（logo / 启动图 / Tauri 与安装包图标都从这里取） |
 
 Python 顶层包一律去 `cairn.` 前缀（如 `from core.storage import …`）；源码根叫 `py_src/`
 （不叫 `src/`：与 `app/src/` 撞名）。逐层红线见 [`AGENTS.md`](AGENTS.md) 的「架构分层」。
 
-分层红线与约定见 [约定与红线](docs/guides/conventions.md)；设计事实来源见
-[架构文档](docs/architecture/index.md)（`storage-design.md` 为 L0 存储的唯一事实来源）。
+分层红线与约定见 [约定与红线](docs/guides/conventions.md)；设计事实来源是 `docs/architecture/**`
+（这批页待重写，此刻在库的只有配置引擎与 UI 主题两页）。
 
 ## 开发
 
@@ -92,6 +87,8 @@ uv run mkdocs serve                # 本地预览文档站
 与 [怎么改文档](docs/contributing.md#怎么改文档)。
 
 ### 打包（Windows）
+
+> ⚠️ **待重做**：旧打包脚本依赖 Qt 时代已删除的层级，下面的命令与 CI 工作流现在都不成立。
 
 ```powershell
 uv run python scripts/build.py               # 绿色包 -> dist/cairn/

@@ -11,7 +11,7 @@ Cairn 尚在早期。提交前先读「[约定与红线](guides/conventions.md)�
 |---|---|
 | 准备环境、运行测试 | [参与开发](guides/development.md) |
 | 确认某个词的含义 | [术语表](reference/glossary.md) |
-| 了解设计理由 | [架构文档](architecture/index.md) |
+| 了解设计理由 | `docs/architecture/**`（这批页重建中；此刻在库的只有[配置引擎](architecture/py_core/config.md)与 [UI 主题](architecture/ui_design/ui-theme.md)） |
 | 查某个类 / 函数的签名 | [API 参考](api/index.md) |
 | 改文档、加一页 | [怎么改文档](#怎么改文档) |
 | 确认许可与署名要求 | [许可与署名](#许可与署名) |

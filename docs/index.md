@@ -6,7 +6,6 @@
 > **本地优先的内容寻址对象池**——笔记、资产、项目，集中在一台工作台。
 
 [:octicons-rocket-24: 快速开始](guides/quickstart.md){ .md-button .md-button--primary }
-[:octicons-book-24: 架构总纲](architecture/data-model.md){ .md-button }
 
 ---
 
@@ -24,20 +23,19 @@ Cairn 把使用者的内容存成一个**内容寻址对象池**：所有内容�
 
 ## 现状
 
-早期开发阶段，**尚未发布**。
+早期开发阶段，**尚未发布**（`0.0.1` / pre-alpha）。
 
-- **已落地**：内核重建完成——事件引擎（`Event` / `Bus` / 事件目录）、存储引擎
-  （身份 / 载体 / hub / 索引库 / 行层 / 巡检与处置）、异常层、配置引擎（`core/conf/`）、
-  传输无关的内核命令面（`core/api.py`），以及把它们装在一起的 `Kernel`；
-  322 例测试、覆盖率 95%，仓库级门禁（SPDX / 书面语 / 标点 / ruff / deptry / 架构 /
-  mypy strict / 锁文件 / pytest / 文档站）全绿。
+- ⚠️ **L0 存储正在重写**：旧的存储模块已删、新的尚未补齐（`core.init` 依赖的模块缺失），
+  故 `pytest`、`mypy` 与本站的构建此刻均不成立，`Kernel` 亦无法导入；事件引擎、配置引擎、
+  异常层与 `core/clock.py` 的时间口径不受影响。
 - **重建中**：领域层（`feature` 已删，新落点 `py_src/model/note/`）；
   界面（Tauri 壳与边车已接线，功能未齐）。
 - **未做**：内容与块的压实回收（更新与摘块留下的旧字节仍占空间）、跨行事务与崩溃恢复、
   大正文分片、检索、P2P / 服务端、打包与桌面入口。
 
-进度与待办的事实源是 [`docs/architecture/*.md`](architecture/index.md) 与代码本身；
-「[架构](architecture/index.md)」逐篇列出各文档的状态与**与代码的对应关系**（现状 / 意图）。
+进度与待办的事实源是**代码本身**。`docs/architecture/**` 那批设计页在 2026-09-29 的重建里
+被删、**待重写**（总纲、L0 存储设计、内核、领域、笔记模型、网络与生态等），此刻在库的只有
+[配置引擎](architecture/py_core/config.md)与 [UI 主题](architecture/ui_design/ui-theme.md)两页。
 
 ## 文档来源
 
