@@ -3,11 +3,13 @@
 """边车契约：帧怎么读写、循环怎么转、出错怎么回。
 
 帧协议那几条在这里钉死：长度按**字节**算、读不满即报、坏帧收工不硬撑。
+
+**写路径只经 `delete`**：命令面是读与诊断，块自己 `save()`——故通知帧那条用例先造好
+一个块，再让 `delete` 触发 `object.deleted`。
 """
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 from typing import TYPE_CHECKING
@@ -18,10 +20,19 @@ from app.sidecar import FrameError, answer, main, read_frame, serve, write_frame
 from core.api import Api
 from core.exc import CairnError
 from core.init import Kernel
+from core.storage.db.id import ID
+from core.storage.engine import Block
+from core.storage.types import Attr
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
     from pathlib import Path
+
+
+class Memo(Block):
+    """边车用例用的最小块：一个可索引属性就够了。"""
+
+    title: str = Attr("")  # type: ignore[assignment]
 
 
 @pytest.fixture
@@ -31,6 +42,17 @@ def api(tmp_path: Path) -> Iterator[Api]:
         yield Api(kernel)
 
 
+def _stored(title: str = "标题") -> Memo:
+    """造一个块并存进去，返回它（供"删它"那两条用例触发事件）。
+
+    写由块自己发起（`memo.save()`），不经命令面：能力靠内核装配时接上的那根线。
+    """
+    memo = Memo(ID(Memo))
+    memo.title = title
+    memo.save()
+    return memo
+
+
 def _frame(payload: object) -> bytes:
     """把一条消息编成帧字节（测试里当"对面发来的东西"）。"""
     stream = io.BytesIO()
@@ -38,25 +60,20 @@ def _frame(payload: object) -> bytes:
     return stream.getvalue()
 
 
-def _b64(text: str) -> str:
-    """把一段文本编成 base64（命令面里二进制的写法）。"""
-    return base64.b64encode(text.encode("utf-8")).decode("ascii")
-
-
 # ---- 帧的读写 ----
 
 
 def test_frame_roundtrip():
     """写一帧再读回来：内容一字不差。"""
-    stream = io.BytesIO(_frame({"id": 1, "method": "blocks"}))
+    stream = io.BytesIO(_frame({"id": 1, "method": "tables"}))
 
-    assert read_frame(stream) == {"id": 1, "method": "blocks"}
+    assert read_frame(stream) == {"id": 1, "method": "tables"}
     assert read_frame(stream) is None, "读完就该到流尾"
 
 
 def test_frame_length_counts_bytes_not_characters():
     """长度写的是字节数：中文不会被算少。"""
-    payload = {"id": 1, "method": "store", "params": {"data": "中文正文"}}
+    payload = {"id": 1, "method": "record", "params": {"uuid": "中文身份"}}
     raw = _frame(payload)
 
     head = raw.split(b"\r\n\r\n", 1)[0]
@@ -104,7 +121,7 @@ def test_non_object_body_is_refused():
 
 def test_answer_pairs_the_identifier(api: Api):
     """回答带回来时的 `id`：对面靠它配对。"""
-    reply = answer(api, {"id": 7, "method": "blocks"})
+    reply = answer(api, {"id": 7, "method": "tables"})
 
     assert reply["id"] == 7
     assert reply["ok"] is True
@@ -120,7 +137,7 @@ def test_answer_reports_a_bad_request(api: Api):
 
 def test_answer_reports_a_kernel_error(api: Api):
     """内核抛的错折成失败帧，带异常类名——界面按它分流。"""
-    reply = answer(api, {"id": 1, "method": "load", "params": {"uuid": "没有"}})
+    reply = answer(api, {"id": 1, "method": "record", "params": {"uuid": "没有"}})
 
     assert reply["ok"] is False
     assert _kind(reply) == "ObjectNotFoundError"
@@ -134,7 +151,7 @@ def test_answer_reports_an_unexpected_error(api: Api, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(api, "call", boom)
 
-    reply = answer(api, {"id": 1, "method": "blocks"})
+    reply = answer(api, {"id": 1, "method": "tables"})
 
     assert reply["ok"] is False
     assert _kind(reply) == "InternalError"
@@ -145,7 +162,7 @@ def test_answer_reports_an_unexpected_error(api: Api, monkeypatch: pytest.Monkey
 
 def test_serve_answers_every_request(api: Api):
     """喂两条请求，收回两条回答；流到尾即收工。"""
-    stream = _frame({"id": 1, "method": "blocks"}) + _frame({"id": 2, "method": "survey"})
+    stream = _frame({"id": 1, "method": "tables"}) + _frame({"id": 2, "method": "stats"})
     stdout = io.BytesIO()
 
     handled = serve(api, stdin=io.BytesIO(stream), stdout=stdout)
@@ -168,8 +185,8 @@ def test_serve_ends_on_a_broken_frame_without_answering(api: Api):
 
 def test_serve_keeps_going_after_a_failed_call(api: Api):
     """一次调用失败不影响后面的：错误是回答，不是终止。"""
-    stream = _frame({"id": 1, "method": "load", "params": {"uuid": "没有"}}) + _frame(
-        {"id": 2, "method": "blocks"}
+    stream = _frame({"id": 1, "method": "record", "params": {"uuid": "没有"}}) + _frame(
+        {"id": 2, "method": "stats"}
     )
     stdout = io.BytesIO()
 
@@ -191,8 +208,9 @@ def test_main_needs_exactly_one_argument(capsys: pytest.CaptureFixture[str]):
 
 
 def test_serve_pushes_events_as_notification_frames(api: Api):
-    """存一条会触发事件：**回答之前**先来一条通知帧，而且它没有 `id`。"""
-    request = _frame({"id": 1, "method": "store", "params": {"data": _b64("x")}})
+    """删一个块会发事件：**回答之前**先来一条通知帧，而且它没有 `id`。"""
+    memo = _stored()
+    request = _frame({"id": 1, "method": "delete", "params": {"uuid": memo.id.value_uuid}})
     stdout = io.BytesIO()
 
     serve(api, stdin=io.BytesIO(request), stdout=stdout)
@@ -201,14 +219,15 @@ def test_serve_pushes_events_as_notification_frames(api: Api):
     notices = [frame for frame in frames if "event" in frame]
     replies = [frame for frame in frames if "id" in frame]
 
-    assert [_event_type(notice) for notice in notices] == ["object.put"]
+    assert [_event_type(notice) for notice in notices] == ["object.deleted"]
     assert len(replies) == 1
     assert replies[0]["ok"] is True
 
 
 def test_notifications_can_be_turned_off(api: Api):
     """关掉推送就只剩回答：给"只想一问一答"的调用方留个口子。"""
-    request = _frame({"id": 1, "method": "store", "params": {"data": _b64("x")}})
+    memo = _stored()
+    request = _frame({"id": 1, "method": "delete", "params": {"uuid": memo.id.value_uuid}})
     stdout = io.BytesIO()
 
     serve(api, stdin=io.BytesIO(request), stdout=stdout, notify=False)

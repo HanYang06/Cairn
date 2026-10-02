@@ -45,8 +45,8 @@ def values(conf: Config) -> dict[str, object]:
 
 def test_declare_then_read_back(conf: Config):
     """声明即拿到默认值；同一形状的取值拿到同一个值。"""
-    assert conf("storage.pack.slot_bytes", 65536, type=int) == 65536
-    assert conf("storage.pack.slot_bytes") == 65536
+    assert conf("demo.size", 65536, type=int) == 65536
+    assert conf("demo.size") == 65536
 
 
 def test_declaration_without_default_is_read_only(conf: Config):
