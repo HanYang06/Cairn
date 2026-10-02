@@ -86,7 +86,7 @@ _PAGE_TAIL = """
 - 用法契约与形状由来：[配置引擎](../architecture/py_core/config.md)
 - 值文件 `config/settings.json`、词表 `config/schema/settings.json`——**跑一遍程序就生成**
   （引擎退出时落盘，不需要专门的生成脚本）。
-- 格式常量（载体魔数、文件头长度、记录头布局这类改了会坏库的）**故意不进配置**，留在实现处。
+- 格式常量（载体魔数、文件头长度、槽头布局这类改了会坏库的）**故意不进配置**，留在实现处。
 - 想加一条配置：在**用到它的那个包**里声明（例：`py_src/core/storage/conf.py`），
   再跑一次 `uv run python scripts/docgen.py --write` 把这一页更新。
 """

@@ -85,20 +85,20 @@ def test_span_and_offset_reject_illegal_numbers():
         offset_of(0, head=24, slot=0)
 
 
-def test_slot_size_comes_from_the_five_tiers_summed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """格长是五档之和：不写的档算零，**写 1 KB + 1 B 就是 1025 字节**。
+def test_slot_size_comes_from_the_two_tiers_summed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """格长是两档之和：不写的档算零，**写 1 KB + 1 B 就是 1025 字节**。
 
-    这里 monkeypatch 的是**配置面那一个读口**（五档声明与相加都在 `core.storage.conf`），
+    这里 monkeypatch 的是**配置面那一个读口**（两档声明与相加都在 `core.storage.conf`），
     故不必去动真的值文件。
     """
 
-    def only_bytes_tier(path: str) -> int:
-        """只给字节档 1，其余四档算零。"""
-        return 1 if path == "slot.max.byte.b" else 0
+    def one_of_each_tier(path: str) -> int:
+        """字节档与千字节档各给 1；本层没有别的档。"""
+        return 1 if path in {"slot.max.byte.b", "slot.max.byte.kb"} else 0
 
-    monkeypatch.setattr("core.storage.conf.conf", only_bytes_tier)
+    monkeypatch.setattr("core.storage.conf.conf", one_of_each_tier)
 
-    assert slot_bytes() == 1
+    assert slot_bytes() == 1025
 
 
 # ---- 文件头 ----

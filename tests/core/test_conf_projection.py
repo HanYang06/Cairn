@@ -22,6 +22,7 @@ import pytest
 import core.conf.params
 import core.storage.conf  # noqa: F401
 from core.conf import conf
+from core.storage.conf import body_history_depth, gc_auto_bytes
 
 #: 入库的两份产物（相对仓根）
 VALUE_FILE = Path("config/settings.json")
@@ -68,6 +69,12 @@ def test_shipped_values_are_readable(key: str):
 
     assert value is not None
     assert type(value) in {int, float, bool, str, list, dict}
+
+
+def test_the_ruling_added_two_policy_keys_to_the_storage_layer():
+    """2026-10-02 裁定新增的两条策略键：正文保留世代数与自动回收阈值，各自读得出开箱值。"""
+    assert body_history_depth() == 1
+    assert gc_auto_bytes() == 0
 
 
 def test_running_an_entry_point_generates_the_projections(tmp_path: Path):
