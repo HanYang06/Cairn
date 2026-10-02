@@ -1,12 +1,12 @@
 {
   "$schema": "schema/settings.json",
   "core.log.level": "WARNING",
+  "hub.default": "main",
+  "index.max.byte": 67108864,
+  "pack.max.byte": 2147483648,
   "slot.max.byte.b": 512,
   "slot.max.byte.gb": 0,
   "slot.max.byte.kb": 0,
   "slot.max.byte.mb": 0,
-  "slot.max.byte.tb": 0,
-  "storage.block.max_bytes": 1048576,
-  "storage.pack.max_bytes": 2147483648,
-  "storage.pack.slot_bytes": 512
+  "slot.max.byte.tb": 0
 }

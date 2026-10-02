@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-# 提交门禁：SPDX 头 -> 书面语 -> 标点 -> ruff -> deptry -> 架构 -> mypy -> 锁文件 -> 测试 -> 前端。
+# 提交门禁：SPDX 头 -> 书面语 -> 标点 -> 魔法用量 -> ruff -> deptry -> 架构 -> mypy -> 锁文件 -> 测试 -> 前端。
 # 提交信息另由 commit-msg 钩子校验（Conventional Commits）。
 # 覆盖率门禁与文档站构建留在 CI（见 `.github/workflows/ci.yml`）。
 #
@@ -33,6 +33,16 @@ repos:
         entry: uv run python scripts/punct.py --report
         language: system
         types_or: [python]
+        require_serial: true
+
+      # 魔法用量：类上的 dunder 逐个比对豁免表，并卡"用到魔法的类"比例上限。
+      # 口径见 `rules/references/quality.md`；表在 `scripts/magic.py` 的 ALLOWED。
+      - id: magic
+        name: magic (魔法用量)
+        entry: uv run python scripts/magic.py --check
+        language: system
+        files: ^py_src/.*\.py$
+        pass_filenames: false
         require_serial: true
 
       - id: ruff-check

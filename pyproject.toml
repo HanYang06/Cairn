@@ -17,19 +17,22 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "argon2-cffi>=25.1.0",
-    "blake3>=1.0.9",
+    # 载荷编解码：canonical CBOR——块记录与内容记录都靠它落到字节。
     "cbor2>=6.1.4",
-    "cryptography>=50.0.1",
-    "fastcdc>=1.7.0",
-    "pyyaml>=6.0.3",
-    "tomli-w>=1.2.0",
 ]
+
+# 已撤掉的声明（2026-10-02，判据是"一处引用都没有"）：
+#   blake3 / cryptography / argon2-cffi —— 摘要取 sha256、库本地不加密，三者都没有调用点；
+#   fastcdc —— 媒体定了固定粒度分片，不上内容定义分块；
+#   pyyaml —— 表声明文件（`config/tables.yaml`）已取消，那是它唯一的用处；
+#   tomli-w —— 同一条链上的 TOML 写出，随表声明一并没了。
+# `cbor2` 留着：它是载荷的落盘形态，不是可替换的实现选择。
 
 # 桌面外壳与前端不在本文件里：`app/` 是一份 Tauri 工程（`app/src-tauri/` 的 Cargo 工程
 # ＋ `app/src/` 的 React 前端，同一个 pnpm 工程）。
 # 原先的 `pyside6` 随 2026-09-30「Qt 退场」一并移除。
-# 命令入口的脚本声明见下方 `[project.scripts]`。
+# **没有 `[project.scripts]`**：命令行入口的契约（库根旋钮名、子命令集、退出码口径）待作者裁定，
+# 未定之前不占一个入口名。内核侧那一面在 `core/api.py`，边车在 `app/sidecar.py`。
 
 [dependency-groups]
 dev = [
@@ -42,8 +45,6 @@ dev = [
     "modelscope>=1.40.1",
     "mkdocs-material>=9.7",
     "mkdocstrings[python]>=1.0.6",
-    # mypy strict 下 PyYAML 需要类型存根
-    "types-pyyaml>=6.0.12",
     "deptry>=0.25.1",
     "import-linter>=2.15",
     # 依赖 CVE 扫描（CI 的 security-scan 用）。与 import-linter 同类：
@@ -118,27 +119,20 @@ known-first-party = ["app", "core", "model"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-[tool.ruff.lint.flake8-type-checking]
-# 块类型在**类定义时**被基座接管（`__init_subclass__` → `adopt`），它的 `__init__` 体在
-# **构造时**执行；`attr(...)` / `Body(...)` / `ID()` 都是那里的**运行期表达式**，
-# 不是注解，故凡在 `__init__` 里用的名字本来就不能只活在 `TYPE_CHECKING` 里。
-# 这里只钉住基类本身：子类定义处也真的要用到它。
-runtime-evaluated-base-classes = [
-    "core.storage.format.block.Block",
-]
+# 注：这里**没有** `[tool.ruff.lint.flake8-type-checking]` 那一节。旧范式下块类型的
+# `__init__` 体在构造时跑那些声明表达式，故要声明 `runtime-evaluated-base-classes`；
+# 现值范式把声明写回类体，而注解一个都不求值（`Attr` / `Body` 只认字段名，不读注解），
+# 故那一条按事实删掉——留着它会把"只给 mypy 看的领域类型"误判成运行期要用。
 
 [tool.ruff.lint.per-file-ignores]
-# `Body(...)` 是载荷**声明标记**，与属性那边的 `attr(...)` 对称：全小写入口之外，
-# 它是本层唯一一个以大写开头的调用面（作者定名，跟 `Block` 的读法一致）。
-"py_src/core/storage/format/block.py" = ["N802"]
-# 表名/列名来自声明层（tables.py）并经 quote_identifier 加引号，值全部参数化（无注入面）。
-"py_src/core/storage/rows.py" = ["S608"]
-"py_src/core/storage/index.py" = ["S608"]
+# 表名来自类名、列名来自 `ID_FIELDS`，两者都经 `Index._quote` 加引号，值全部参数化（无注入面）。
+"py_src/core/storage/db/engine.py" = ["S608"]
 # `conf` 的调用形是**对的形状本身就是契约**：声明与取值共用一个签名，`path` 之后全是可选副参数
 # （类型 / 说明 / 文件引用 / 强写）。拆成小对象会把"一种调用形"这个卖点拆掉。
 "py_src/core/conf/registry.py" = ["PLR0913"]
-# 表声明层要问"配置在哪"：`core.conf` 在函数里导入，免得"导入存储"就得先有配置文件在那儿。
-"py_src/core/storage/tables.py" = ["PLC0415"]
+# `Attr(False)` 这类写法里那个布尔是**声明的默认值**，不是"给函数加开关的布尔位置参数"：
+# 该规则防的是 `f(True, False)` 那种读不懂的调用，而 `Attr(<默认值>)` 恰恰是最清楚的写法。
+"py_src/model/**" = ["FBT003"]
 "tests/**" = ["ANN", "D", "S101", "S105", "S603", "PLR2004", "SLF001", "INP001", "FBT003"]
 "tools/**" = ["ANN", "D", "S101", "S603", "C901", "PLR2004", "T201", "INP001", "ERA001"]
 "scripts/**" = ["ANN", "D", "S101", "S603", "C901", "PLR2004", "T201", "INP001", "ERA001"]
@@ -156,8 +150,9 @@ disallow_incomplete_defs = false
 known_first_party = ["core", "model"]
 extend_exclude = ["app", "site", "docs", ".agents"]
 
+# 注：这里**没有** `DEP002` 的豁免清单。旧稿列了六个"声明了没用"的包当例外，
+# 那等于把盘点结果写成"已知问题"；它们已经撤掉声明，故清单也一并删了。
 [tool.deptry.per_rule_ignores]
-DEP002 = ["argon2-cffi", "blake3", "cryptography", "fastcdc", "tomli-w"]
 # `mypy` 是类型门禁本身要用的开发依赖，产品代码不 import 它。
 DEP004 = ["mypy"]
 
