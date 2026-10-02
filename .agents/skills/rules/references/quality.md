@@ -6,7 +6,7 @@
 本仓库的质量口径：严格度在「草台班子」与「金融级」之间，约等于**企业级再降半档**。
 `pyproject.toml` 是配置的**唯一事实来源**；本文件只写口径、豁免理由与升级路径。
 
-## 四个维度
+## 五个方面
 
 ### 1. 注释：有要求
 
@@ -32,20 +32,75 @@
 - **测试只豁免签名**（`tests.*` 关 `disallow_untyped_defs` / `disallow_incomplete_defs`）：
   函数体仍在 `check_untyped_defs` 下受检，对 `core.*` 的调用判据一条不少；
   口径与 ruff 对 `tests/**` 豁免 `ANN` 一致。
-- `Attr[T] = 值` 这类字段由 `tools/mypy_plugin.py` 还原可见类型，**不靠 ignore**。
+- **类体上写 `字段: T = 声明(...)` 时，声明与类型对不上，用 `type: ignore[assignment]`
+  并配一句注释**（描述符在实例上交出 `T`，而右值是声明对象）。这是已知的取舍，
+  不是"用 ignore 掩盖错误"——掩盖的是 mypy 对描述符的静态推断，不是真实缺陷。
 - 例外：`id` / `type` / `hash` 是本项目的**领域词汇**，豁免 `A002` / `A003`。
 
-### 4. 其他：按企业级
+### 4. 魔法：少用、不滥用
+
+**魔法不是不用，而是少用、不滥用。** 能用正常 Python 写法解决的，就不要用魔法——
+因为魔法的**可解释性与可测试性都更弱**：多数 Python 开发者读不懂它，少数高级开发者也只
+熟其中一部分。读不懂的代码，出问题时只能靠猜，而"猜"是不能写进门禁的。
+
+判据是**下一句能不能用大白话讲清楚**。讲不清就是魔法。
+
+三档，按此优先：
+
+| 档 | 是什么 | 规矩 |
+|---|---|---|
+| **正常写法** | `__init__` 里赋值、普通方法、普通继承、`@property`、`@dataclass` | **首选**。能这么写就这么写 |
+| **可解释的语法** | `__init_subclass__`、类体上的描述符、`__slots__`、`@classmethod` | **允许，但要在注释里写清"为什么不能用正常写法"** |
+| **冷门魔法** | 元类、动态改类属性、`__getattr__` 兜底一切、运行期生成类型、改写 `__mro__`、猴子补丁改库行为 | **默认不用**。要用须在代码里写明理由，并在评审时被问过一次 |
+
+三条落地要求：
+
+1. **机制要看得见**：一件事的来路写在**同一条链**上。反例：块的身份来自引擎内部的
+   `ID.unbound()`——读块类的人看不到"身份从哪来"。正例：身份由块自己那两行给出
+   （`self.id = ID(self)` + `super().__init__(self.id)`，或由调用方递进来）。
+2. **不用运行期猜来补信息**：拿不到就写清楚拿不到，不要用 `getattr` 兜底、不要扫
+   `vars()` 去猜"这大概是什么"。**判据落在值上**是可以的（那是数据），
+   但"靠猜结构"不行。
+3. **冷门写法要配用例**：一处魔法至少一条直说它行为的用例。没有用例的魔法，下一轮改动
+   就会悄悄坏掉，而且**不报错**。
+
+**测试也是给人读的**：用例用正常写法，别用魔法去省几行——用例是规格的说明书。
+
+**门禁**：`uv run python scripts/magic.py --check`（pre-commit 与 CI 都跑）。两道闸：
+
+- **豁免表**（`scripts/magic.py` 的 `ALLOWED`）：类上的 dunder 逐个比对，表里没有的一律失败。
+  要加一个，就在表里加一行并写明理由——**那一步就是评审点**；
+- **比例上限**（`MAX_RATIO`）：用到魔法的类占全部类的比例。当前实测 0.20、上限 0.30，
+  它的作用是**防涨**。真要砍就砍下去再把这个数改小——**门禁数字只许往下走**；
+- `__init__` 不算魔法（正常写法，几乎每个类都有）；`--report` 只看现状、不判失败。
+
+### 4.1 类变量：也少用
+
+**类变量（`ClassVar`）少用。** 它与类属性性质相近，但**用起来不够顺**：读的时候要分清
+"这是类上的还是实例上的"，改的时候更要小心（改了类上那一份，所有实例一起变）。
+清晰是清晰，可每次用都得先想一遍，不划算。
+
+只在**两处**用它，且都要能一句话说出理由：
+
+1. **它真的是"整个类型共享的一件事"**——如 `Block.max_bytes`（体积上限）、
+   索引类的 `manages`（管哪一类字段）。这类值整个类型只有一个，实例上带一份是多余的；
+2. **它必须由运行期读取，而不是给人读**——如引擎按 `max_bytes` 决定续不续块。
+
+反例（本仓踩过的那一个）：把"这个字段的落点"塞进**实例**值里（`self.title = Attr("")`），
+结果赋值一步就把声明覆盖了，字段的静态类型与声明还互相打架。
+**那种信息属于类体，不属于实例。**
+
+### 5. 其他：按企业级
 
 - **测试**：`pytest --strict-markers --strict-config`；`filterwarnings = ["error"]`（warning 零容忍）。
 - **覆盖率**：行 + 分支 ≥ 80%（CI 门禁 `--cov-fail-under=80`）。
-- **提交前**（`.pre-commit-config.yaml`，共 10 个钩子；**须先 `uv run pre-commit install
+- **提交前**（`.pre-commit-config.yaml`，共 11 个钩子；**须先 `uv run pre-commit install
   --hook-type pre-commit --hook-type commit-msg`**，否则一个都不跑）：
-  SPDX → 书面语 → 标点（报告模式）→ `ruff check --fix` → `ruff format` → `deptry` →
+  SPDX → 书面语 → 标点（报告模式）→ 魔法用量 → `ruff check --fix` → `ruff format` → `deptry` →
   `lint-imports` → `mypy` → `uv lock --check` → `pytest` → 前端 `pnpm check`；
   提交信息另由 commit-msg 钩子校验 Conventional Commits。
-- **CI**（`.github/workflows/ci.yml`，Python 侧十道 + 前端一组 `pnpm check`）：
-  SPDX → 书面语 → 标点 → 文档防漂移 → docstring 覆盖（报告）→ ruff → deptry →
+- **CI**（`.github/workflows/ci.yml`，Python 侧十一 + 前端一组 `pnpm check`）：
+  SPDX → 书面语 → 标点 → 魔法用量 → 文档防漂移 → docstring 覆盖（报告）→ ruff → deptry →
   import-linter → `uv lock --check` → mypy → pytest + 覆盖率门禁。
   **输出编码统一 UTF-8**（workflow 级 `PYTHONIOENCODING: utf-8`）：Windows runner 的 stdout
   默认不是 UTF-8，而 `lint-imports` 的报告里含中文契约名，打印即 `UnicodeEncodeError`。

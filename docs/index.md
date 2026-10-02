@@ -25,17 +25,16 @@ Cairn 把使用者的内容存成一个**内容寻址对象池**：所有内容�
 
 早期开发阶段，**尚未发布**（`0.0.1` / pre-alpha）。
 
-- ⚠️ **L0 存储正在重写**：旧的存储模块已删、新的尚未补齐（`core.init` 依赖的模块缺失），
-  故 `pytest`、`mypy` 与本站的构建此刻均不成立，`Kernel` 亦无法导入；事件引擎、配置引擎、
-  异常层与 `core/clock.py` 的时间口径不受影响。
-- **重建中**：领域层（`feature` 已删，新落点 `py_src/model/note/`）；
+- ✅ **L0 存储已在位**：内核（`py_src/core/`）与笔记领域的形状层（`py_src/model/note/`）
+  均可导入、可测试；落盘口径以「[L0 存储设计](architecture/storage-design.md)」为准。
+- **重建中**：领域层（`feature` 已删，现行落点是 `py_src/model/note/`）；
   界面（Tauri 壳与边车已接线，功能未齐）。
-- **未做**：内容与块的压实回收（更新与摘块留下的旧字节仍占空间）、跨行事务与崩溃恢复、
-  大正文分片、检索、P2P / 服务端、打包与桌面入口。
+- **未做**：字节回收（GC，`core/storage/gc.py` 只有一个 SPDX 头）、
+  领域载荷的规范化字节层（`py_src/model/note/format/`；故 `NoteData.lines` 里的行对象存不下去）、
+  跨行事务与崩溃恢复、大正文分片、检索、P2P / 服务端、打包与桌面入口。
 
-进度与待办的事实源是**代码本身**。`docs/architecture/**` 那批设计页在 2026-09-29 的重建里
-被删、**待重写**（总纲、L0 存储设计、内核、领域、笔记模型、网络与生态等），此刻在库的只有
-[配置引擎](architecture/py_core/config.md)与 [UI 主题](architecture/ui_design/ui-theme.md)两页。
+进度与待办的**事实源是代码本身**。设计页的现状 / 意图对照见
+「[架构索引](architecture/index.md)」：当前在库的架构篇是 L0 存储设计、块范式、配置引擎与 UI 主题。
 
 ## 文档来源
 

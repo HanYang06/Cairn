@@ -26,7 +26,7 @@ license: Apache-2.0
 | 新建或修改任何源文件 / 文档 | [`references/spdx.md`](references/spdx.md) |
 | **写任何文档 / 注释 / commit message（书面语）** | [`references/prose.md`](references/prose.md) |
 | 写 / 改文档、加文档页面、动 API 参考或文档站 | [`references/docs.md`](references/docs.md) |
-| 质量门禁 / ruff / mypy / pytest 配置 | [`references/quality.md`](references/quality.md) |
+| **写任何 Python 代码（风格 / 魔法用量 / 类型）· 质量门禁** | [`references/quality.md`](references/quality.md) |
 | 新增 / 修改界面（前端组件 / 样式 / 令牌） | [`references/frontend.md`](references/frontend.md)（**写第一行前端代码前先读**） |
 | 界面边界（分层 / 依赖方向 / 壳与内核的分工） | [`references/ui-boundary.md`](references/ui-boundary.md) |
 

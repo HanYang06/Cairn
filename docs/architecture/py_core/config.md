@@ -15,8 +15,8 @@
 ```python
 from core.conf import conf
 
-conf("storage.pack.slot_bytes", 512, type=int, doc="槽长")  # 声明
-slot = conf("storage.pack.slot_bytes")  # 取值
+conf("pack.max.byte", 2 * 1024**3, type=int, doc="封口线")  # 声明
+ceiling = conf("pack.max.byte")  # 取值
 ```
 
 **使用点统一**：import 之后任何位置都可直接调用，定位、缓存、补缺、落盘、词表这些机制细节
@@ -35,7 +35,8 @@ slot = conf("storage.pack.slot_bytes")  # 取值
 `file`（值放独立文件，见 §7）／`force`（强写，见 §4）。
 
 **声明是唯一事实来源**：默认值只写在声明处，实现里不抄第二份（存储那组直接引用
-`hub.DEFAULT_SLOT_BYTES`，以保证一份事实、两处引用，而非抄写一个数字）。
+`pack.DEFAULT_MAX_BYTES` 与 `slot.DEFAULT_SLOT_BYTES`，以保证一份事实、两处引用，
+而非抄写一个数字）。
 
 ## 3. 事务：引擎自己组织，调用方不划批次
 
@@ -132,10 +133,10 @@ conf("some.key", "", type=str, file="yaml")  # 值文件里那一行是 "some.ya
 缺失在**声明期即报错**，不延迟到读取时。值文件中的该行是**实际引用**：改为其他相对引用
 即指向另一个文件。
 
-**该能力存在，内核当前无使用它的键**：表声明（`config/tables.yaml`）曾经走这条引用
-（`storage.db.tables`），2026-09-30 起改成**由代码写出来的固定文件**——它由代码写、又被代码读，
-不是可调参数（见[存储设计](storage-design.md) §8.2.1）。文件名是
-`registry.TABLES_FILENAME` 这个常量。
+**该能力存在，内核当前无使用它的键**：它曾经被表声明用过（`config/tables.yaml`），
+而表声明这条链**已经整条取消**——表的形状由 `ID` 的字段现算（`ID_FIELDS`），
+不再读也不写任何声明文件（见[存储设计](../storage-design.md) §8.1、§12）。
+故这一节描述的是**仍在实现里的一项能力**，只是当前没有调用方。
 
 ## 8. 投影：两份产物，跑一遍就生成
 
@@ -144,7 +145,7 @@ config/settings.json          ← 值（使用者可改；顶部 $schema 指向�
 config/schema/settings.json   ← 词表（给 IDE 悬停与分发看的 JSON Schema）
 ```
 
-- **键逐字保留点分形式**（`"storage.pack.slot_bytes"` 是一个属性名，不展开成嵌套对象）：
+- **键逐字保留点分形式**（`"pack.max.byte"` 是一个属性名，不展开成嵌套对象）：
   `conf("…")` 里那个字符串是全仓唯一的检索词，代码与文件逐字一致，`grep` 才能无遗漏地检索；
 - **没有生成脚本**：两份产物由引擎在落盘时写出，运行一次程序（或 `pytest`）即一并生成。
   入库的产物与声明是否分叉，由 `tests/core/test_conf_projection.py` 检查；
@@ -156,8 +157,9 @@ config/schema/settings.json   ← 词表（给 IDE 悬停与分发看的 JSON Sc
 
 - **声明归属各自**：使用方在自己的包里声明（存储参数在 `core/storage/conf.py`，内核自己的在
   `core/conf/params.py`）；配置端只负责展开与取值，不替其他包管理；
-- **格式常量不进配置**：载体魔数、文件头长度、记录头布局这类改了会坏库的，留在实现处；
-- **已落盘的东西不被新配置改写**：槽长写进载体文件头，此后按文件头读；
+- **格式常量不进配置**：载体魔数、文件头长度、记录头布局这类改了会坏库的，留在实现处
+  （`core/storage/pack.py` 的 `MAGIC` / `HEADER_SIZE` / `RECORD_HEAD_SIZE`）；
+- **已落盘的东西不被新配置改写**：格长写进载体文件头，此后按文件头读；
 - **引擎不依赖第三方**：只用标准库＋`core.exc`；
 - **环境旋钮 `CAIRN_CONFIG` 不是配置项**：它是**定位配置根的手段**（测试与部署重定向），
   值文件里不会出现它。
@@ -170,6 +172,4 @@ config/schema/settings.json   ← 词表（给 IDE 悬停与分发看的 JSON Sc
 - **不做「值来自声明还是使用者改过」的来源标记**：只按「文件里有没有这个键」判，故使用者把值
   改回默认值后，该键的「已改动」状态不再保留；现有需求不要求记录来源；
 - **值投影仍是单文件**（十万行以内不分片）：拆分需先有量级依据；
-- **手写口 / 多来源合并**（个人覆写、部署覆盖）未做；
-- `config/tables.yaml` 是表声明的**本体所在的那份文件**，但**不走配置键**：它由类型登记现算、
-  由代码写出来（见[存储设计](storage-design.md) §8.2.1），故不在标量配置里占一个键。
+- **手写口 / 多来源合并**（个人覆写、部署覆盖）未做。
