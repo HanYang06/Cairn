@@ -130,9 +130,16 @@
 | `PLR2004` | 可读性阈值判断不算魔法数 |
 | `A002` `A003` | 领域词汇 `id` / `type` / `hash` |
 
-按文件豁免（`per-file-ignores`）：`rows.py` / `index.py` 的 `S608`（SQL 由声明拼、值全参数化），
-`conf/registry.py` 的 `PLR0913`（声明与取值共用一个签名），`storage/tables.py` 的 `PLC0415`
-（"配置在哪"延后问），以及测试 / 工具脚本的整组豁免。
+按文件豁免（`per-file-ignores`，以 `pyproject.toml` 为准）：
+`py_src/core/storage/db/engine.py` 的 `S608`（表名与列名由 `ID_FIELDS` 现算并经 `_quote` 加引号，
+值全部参数化）、`py_src/core/conf/registry.py` 的 `PLR0913`（声明与取值共用一个签名）、
+`py_src/model/**` 的 `FBT003`（`Attr(False)` 里那个布尔是**声明的默认值**，
+不是"给函数加开关的布尔位置参数"），以及测试 / 工具脚本的整组豁免。
+
+另有一处**反向**的取舍值得记：`[tool.ruff.lint.flake8-type-checking]` 那一节**已删**。
+旧范式下块类型的 `__init__` 体要在构造时跑声明表达式，故必须声明 `runtime-evaluated-base-classes`；
+现值范式把声明写回类体，而注解一个都不求值（`Attr` / `Body` 只认字段名，不读注解），
+留着它会把"只给 mypy 看的领域类型"误判成运行期要用。
 
 ## 安全扫描（与质量门禁同等地位）
 
