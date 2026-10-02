@@ -6,7 +6,7 @@
 接线（长度头分帧、序列化、子进程）在 `py_src/app/` 那一侧；壳只做转发，**不许认识领域字段**。
 
 **结果必须落在 JSON 域里**：映射、列表、字符串、数字、布尔与空值。故这一面只交出
-四样东西——**身份、位置、计数、记录的原文（base64）**。它**不解领域载荷**：把载荷解成
+四样东西——**身份、位置、计数、槽的原文（base64）**。它**不解领域载荷**：把载荷解成
 领域结构是领域格式层（`model/note/format/`）的活，尚未落地，这里就不假装解得出。
 
 **这一面是读与诊断**。写由领域块自己发起（`note.save()`），不能因为命令面里放一个
@@ -19,13 +19,13 @@ import base64
 from typing import TYPE_CHECKING
 
 from core.exc import InvalidParamsError, ObjectNotFoundError, UnknownMethodError
-from core.storage.db.payload import decode_block, decode_index, decode_tombstone
+from core.storage.db.id import ATTR_SLOT_FIELD, BODY_HISTORY_FIELD, ID, pack_segments
+from core.storage.pack import ATTR_SLOT, Slot
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from core.init import Kernel
-    from core.storage.db.id import ID
 
 #: 库自己的几张表：它们不是身份表，列举类型与统计时都不该混进去。
 _RESERVED_TABLES = frozenset({"hub", "meta"})
@@ -62,7 +62,7 @@ class Api:
         return handler(self, {} if params is None else params)
 
 
-# ---- 方法实现：每个都只做"读参数 → 问内核 → 折成 JSON" ----
+# ---- 方法实现：每个都只做"读参数 → 问内核 → 折成 JSON" ---- #
 
 
 def _tables(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
@@ -75,12 +75,12 @@ def _tables(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
 
 
 def _hubs(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
-    """已登记的 hub 名：登记是投影，真源是库根下那些目录。"""
+    """已登记的 hub 名：登记是库的一列，真源是库根下那些目录。"""
     return {"hubs": list(api.kernel.engine.index.hubs())}
 
 
 def _rows(api: Api, params: Mapping[str, object]) -> dict[str, object]:
-    """某个类型的身份行：一行是"这个身份在哪儿"。
+    """某个类型的身份行：一行是"这个身份在哪儿、它的正文有哪几代"。
 
     **表名由参数给**，不由命令面去猜：库是一个类型一张表，故"查哪张"这一问只能由
     调用方回答——它知道自己要什么类型。
@@ -90,10 +90,9 @@ def _rows(api: Api, params: Mapping[str, object]) -> dict[str, object]:
 
 
 def _locate(api: Api, params: Mapping[str, object]) -> object:
-    """按身份找位置：**逐张身份表找那一行**，返回它在哪张表、哪个 hub / 载体 / 格区间。
+    """按身份找位置：**逐张身份表找那一行**，返回它在哪张表、哪个 hub / 载体 / 段列表。
 
-    位置本来就是投影，故这一问的答案随时能由顺扫重算；这里只是走索引那条快路。
-    找不到即 ``None``。
+    找不到即 ``None``——"没有这个身份"不是错误。
     """
     value_uuid = _text(params, "uuid")
     found = _catalog_row(api, value_uuid)
@@ -104,56 +103,53 @@ def _locate(api: Api, params: Mapping[str, object]) -> object:
 
 
 def _record(api: Api, params: Mapping[str, object]) -> dict[str, object]:
-    """块记录的**载荷原文**（base64）：不解释、不降级，解它的人自己知道那是什么。
+    """**读出该块各槽的原文**（base64）：属性槽与正文槽逐格交出，不解释、不降级。
 
-    这条是刻意留的"最低限度可读"：领域载荷解不成 JSON，而诊断与调试恰恰需要看到
-    原始字节。它顺带把身份两套凭证交回去，调用方据此核对"读到的确实是这一份"。
+    这条是刻意留的"最低限度可读"：领域载荷解不成 JSON，而诊断与调试恰恰需要看到原始字节。
+    槽的种类与内容长度一并交出，故调用方据此分清哪几格是属性、哪几格是正文。
 
     Raises:
-        ObjectNotFoundError: 盘上没有这个身份的块记录。
+        ObjectNotFoundError: 库里没有这个身份，或它指着的那一格读不出来。
     """
-    identity = _identity(api, _text(params, "uuid"))
-    found = api.kernel.engine.find_block(identity)
-    if found is None:
-        raise ObjectNotFoundError(f"块不在: {identity.value_uuid}")
-    hub, pack, span, payload = found
+    value_uuid = _text(params, "uuid")
+    identity = _identity(api, value_uuid)
+    row = api.kernel.engine.index_row(identity)
+    held = api.kernel.engine.scan_slots(identity)
     return {
         "uuid": identity.value_uuid,
-        "hub": hub,
-        "pack": pack,
-        "first": span.first,
-        "last": span.last,
-        "hash": identity.value_hash,
-        "payload": _as_base64(payload),
+        "name": identity.name,
+        "hub": str(row.get("in_hub") or ""),
+        "pack": str(row.get("in_hub_pack") or ""),
+        "segments": pack_segments(identity.in_pack_slot),
+        "history": [pack_segments(generation) for generation in identity.body_history],
+        "slots": [
+            _slot(index, slot, str(row.get("in_hub_pack") or "")) for index, slot in enumerate(held)
+        ],
     }
 
 
 def _stats(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
-    """整库的**计数**：顺扫一遍，按载荷把记录分成四类。
+    """整库的**计数**：顺扫一遍，按槽的种类数。
 
-    **数的是盘上的条数，不判死活**：载体是追加写，被墓碑标记过的块记录仍在盘上，
-    要等 GC 才回收——故 `tombstones` 与 `blocks` 会同时非零，那不是矛盾，是现状。
-    它也**不吐记录本身**：整库记录随库体量无限增长，而这一面要交出 JSON 域里的值。
+    **数的是盘上的格数，不判死活**：载体是追加写，被删掉的那些槽仍在盘上，
+    要等回收才收走——故这里的数不小于"库里那些行指着"的数。
 
-    四类各有自己的保留键，判据一起比——只比"不是块记录"会把索引条目也算进来。
+    **没有墓碑那一栏**：删除即摘掉索引库那一行，载体上不留标记。
     """
-    records = blocks = contents = indexes = tombstones = 0
-    for record in api.kernel.engine.scan():
-        records += 1
-        if decode_block(record.payload) is not None:
-            blocks += 1
-        elif decode_index(record.payload) is not None:
-            indexes += 1
-        elif decode_tombstone(record.payload) is not None:
-            tombstones += 1
+    attrs = bodies = empty = 0
+    for _hub, _pack, _number, slot in api.kernel.engine.scan():
+        if not slot.kind:
+            empty += 1
+        elif slot.kind == ATTR_SLOT:
+            attrs += 1
         else:
-            contents += 1
+            bodies += 1
     return {
-        "records": records,
-        "blocks": blocks,
-        "contents": contents,
-        "indexes": indexes,
-        "tombstones": tombstones,
+        "slots": attrs + bodies + empty,
+        "attrs": attrs,
+        "bodies": bodies,
+        "empty": empty,
+        "rows": _row_count(api),
         "hubs": len(api.kernel.engine.index.hubs()),
     }
 
@@ -161,11 +157,18 @@ def _stats(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
 def _delete(api: Api, params: Mapping[str, object]) -> dict[str, object]:
     """摘掉一个块：返回是否确实摘掉了一个。
 
-    载体是追加写，旧字节删不掉——删除的落法是一条墓碑（顺扫据此不再把它算数），
-    空间等 GC 回收。故"删掉"是**语义上不再存在**，不是字节消失。
+    载体是追加写，旧字节删不掉——删除的落法是**摘掉库里那一行**，空间等回收收敛。
+    故"删掉"是**语义上不再存在**，不是字节消失。
+
+    **没有那一行不是错**：删两次时第二次就是没有可删的东西，报假即可——
+    与"删掉了一个"这件事对不上号的是"它到底删没删"，不是"它原先在不在"。
     """
-    identity = _identity(api, _text(params, "uuid"))
-    return {"deleted": api.kernel.engine.delete(identity)}
+    value_uuid = _text(params, "uuid")
+    found = _catalog_row(api, value_uuid)
+    if found is None:
+        return {"deleted": False}
+    _table, row = found
+    return {"deleted": api.kernel.engine.delete(ID.from_row(row))}
 
 
 #: 命令面那张表：方法名 → 处理器。**它是唯一的入口清单**，加方法只改这里。
@@ -180,7 +183,7 @@ _METHODS: Mapping[str, Callable[[Api, Mapping[str, object]], object]] = {
 }
 
 
-# ---- 内部：身份还原与行折形 ----
+# ---- 内部：身份还原与行折形 ---- #
 
 
 def _catalog_row(api: Api, value_uuid: str) -> tuple[str, dict[str, object]] | None:
@@ -196,46 +199,71 @@ def _catalog_row(api: Api, value_uuid: str) -> tuple[str, dict[str, object]] | N
 
 
 def _identity(api: Api, value_uuid: str) -> ID:
-    """由库里的那一行还原身份：**整行照 `ID.from_record` 搬**，故两套凭证都在。
+    """由库里的那一行还原身份：**身份、位置段与正文历史一起读回**。
 
-    库里没有这一行时退回"只有分配形态"的身份，让引擎顺扫去找——库是投影，
-    缺一行不该等于"这个块不存在"（那时摘要也真的没人给出，故它为空）。
+    **库里没有这一行即报错**：索引库是权威视角，缺一行就是"这个块不存在"，
+    没有顺扫这条退路。
     """
-    from core.storage.db.id import ID  # noqa: PLC0415 — 只在这一处用到，按需取
-
     found = _catalog_row(api, value_uuid)
     if found is None:
-        return ID("", value_uuid=value_uuid)
+        raise ObjectNotFoundError(f"对象不在: {value_uuid}")
     _table, row = found
-    return ID.from_record(row)
+    return ID.from_row(row)
 
 
 def _row(row: Mapping[str, object]) -> dict[str, object]:
-    """把一行身份折成 JSON：位置段落成两个数，其余照字符串交出去。"""
+    """把一行身份折成 JSON：**位置段按段列表交出去**，正文历史另给一份。"""
     return {
         "uuid": str(row.get("value_uuid") or ""),
         "name": str(row.get("name") or ""),
-        "hash": str(row.get("value_hash") or ""),
         "birth_time": str(row.get("birth_time") or ""),
         "hub": str(row.get("in_hub") or ""),
         "pack": str(row.get("in_hub_pack") or ""),
-        "first": _slot(row.get("in_pack_slot"), 0),
-        "last": _slot(row.get("in_pack_slot"), 1),
+        "segments": str(row.get("in_pack_slot") or ""),
+        "slots": list(_slot_numbers(str(row.get("in_pack_slot") or ""))),
+        "attr_slots": str(row.get(ATTR_SLOT_FIELD) or ""),
+        "history": str(row.get(BODY_HISTORY_FIELD) or ""),
     }
 
 
-def _slot(value: object, offset: int) -> int:
-    """取格区间的头 / 末格：库里落成 ``"头:末"``，读不回来即零。"""
-    head, sep, tail = str(value or "").partition(":")
-    if not sep:
-        return 0
-    try:
-        return int((head, tail)[offset])
-    except ValueError:
-        return 0
+def _slot_numbers(text: str) -> tuple[int, ...]:
+    """把段列表文本展开成升序的一串槽号（命令面按格号交出去）。"""
+    found: list[int] = []
+    for part in text.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        head, sep, tail = item.partition("-")
+        if not sep:
+            found.append(int(head))
+            continue
+        found.extend(range(int(head), int(tail) + 1))
+    return tuple(found)
 
 
-# ---- 参数读取：缺了或类型不对就报错，不猜 ----
+def _slot(index: int, slot: Slot, pack: str) -> dict[str, object]:
+    """把一格折成 JSON：**槽号、槽种类与内容原文**。"""
+    return {
+        "slot": index,
+        "kind": slot.kind_name,
+        "pack": pack,
+        "length": len(slot.content),
+        "content": _as_base64(slot.content),
+    }
+
+
+def _row_count(api: Api) -> int:
+    """库里身份行的总条数（不含 `hub` 与 `meta`）。"""
+    index = api.kernel.engine.index
+    total = 0
+    for table in index.tables():
+        if table in _RESERVED_TABLES:
+            continue
+        total += sum(1 for _row_item in index.rows(table))
+    return total
+
+
+# ---- 参数读取：缺了或类型不对就报错，不猜 ---- #
 
 
 def _text(params: Mapping[str, object], key: str) -> str:

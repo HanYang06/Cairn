@@ -92,9 +92,9 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   Rust 壳在 `app/src-tauri/`。**顶层包在 `py_src/` 下、一律去 `cairn.` 前缀**（`from core.storage import …`）。
 - `py_src/core/`（L0）是公共底座：**必须 Qt-free、传输无关**。当前装着三件事：
   **事件引擎**（`core/event/`：`Event` / `Bus` / 事件目录）、**存储层**（`core/storage/`：
-  格与算术定位 `slot.py`、载体 `pack.py`、hub `hub.py`、声明 `types.py`、配置声明 `conf.py`、
-  存储引擎 `engine.py`、回收 `gc.py`；身份、载荷与索引库在 `db/`（`id.py` / `payload.py` / `engine.py`）；
-  两类索引块在 `index/`）、**异常层**（`core/exc.py`）；
+  载体与槽 `pack.py`、hub `hub.py`、声明 `types.py`、配置声明 `conf.py`、
+  存储引擎 `engine.py`、回收 `gc.py`；身份与段算术、载荷与索引库在 `db/`
+  （`id.py` / `payload.py` / `engine.py`）；两类索引块在 `index/`）、**异常层**（`core/exc.py`）；
   装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置引擎**在 `core/conf/`
   （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/py_core/config.md`）。
 - `py_src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与

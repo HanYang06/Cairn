@@ -34,8 +34,8 @@ from __future__ import annotations
 from core.conf import conf
 from core.exc import SlotSizeError
 
+from .hub import DEFAULT_SLOT_BYTES
 from .pack import DEFAULT_MAX_BYTES
-from .slot import DEFAULT_SLOT_BYTES
 
 SLOT_MAX_BYTE = "slot.max.byte.b"
 """格长档位：字节。**开箱的一档**：默认 512 B，另一档留空。"""

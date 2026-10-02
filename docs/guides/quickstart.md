@@ -34,7 +34,7 @@ with Kernel.create("vault") as kernel:  # 建库并装配；已有库改用 Kern
     group.notes.extend(["n1", "n2"])
 
     ident = group.save()  # 落盘，返回块身份 ID
-    print(ident.value_uuid, ident.value_hash)  # uuid4 比较有效 / sha256 去重有效
+    print(ident.value_uuid, ident.in_pack_slot)  # uuid4 是这个身份 / 段列表是它占的槽
 
     fetched = NoteGroup.fetch(ident)  # 按身份读回同一个类
     print(fetched.title, fetched.notes)
@@ -46,9 +46,10 @@ with Kernel.create("vault") as kernel:  # 建库并装配；已有库改用 Kern
 
 - **写由块自己发起**：`group.save()`。装配处（`Kernel`）**没有 `store` 方法**——
   落点由类体上的 `Attr` / `Body` 声明决定，命令面里放一个 `store` 就绕过了这一条。
-- **一个块分两个域**（**裁定 · 未落码**）：属性进**属性槽**、正文进**正文槽**。
-  改一个属性即**原地覆盖属性槽**、不进历史；改正文即**新建正文槽**并按内容摘要去重、
-  记一条正文历史（旧字节等 GC 回收，**尚未落地**）。
+- **一个块分两个域**：属性进**属性槽**（可原地覆盖、不进历史）、正文进**正文槽**
+  （只追加、按内容摘要去重、旧世代记进库里那一列，保留世代数取 `body.history.depth`）。
+  两个域同处一段位置段：**正文槽在前、属性槽在后**，而属性槽那一段另记一列
+  （`attr_in_pack_slot`），故切分不靠次序推。
 - **索引库是权威视角**：`<root>/catalog.db` 装身份、位置与正文历史；
   `<root>/<hub>/packs/*`（载体）**只装值**，载体上不写一个字节的身份。
   **没有顺扫重建**，索引库丢失即身份与位置丢失。

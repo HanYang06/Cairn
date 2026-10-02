@@ -1,23 +1,24 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""载体：一个文件，内含格；**一条记录占一或多格**，位置即头格与末格两个整数。
+"""载体：一个文件，内含等长格；**一格即一个槽**，槽头十六字节加内容。
 
-一句话就说得完：**文件里是格，块存在文件里，一个块可以跨多个格。**
+一句话就说得完：**文件里是格，格是一个槽，块由若干槽拼成。**
 
 本模块管三件事，多一件都不揽：
 
-- **文件头**（24 字节）：魔数与格长。故**载体自描述**——只凭这个文件就能算偏移，
+- **文件头**（24 字节）：魔数与格长。故**载体自描述**——只凭这个文件就能算地址，
   不必问配置。格长随载体走：不同批次可以不同格长，各自照样精确算术定位；
-- **记录**：自带总长、校验和**与它自己的身份**，故顺扫即可切出全部记录并知道各自是谁，
-  **不依赖索引库**。这是"库丢了能重建"的前提；
-- **追加写**：写到文件尾，写完补齐格尾。**唯一可变的事实是文件尾在哪**——
-  没有空闲表、没有分配位图：格号 < 文件尾格数即"写过"，≥ 即"空闲"。
+- **槽**：槽头（槽种类 1 ＋ crc32 校验和 4 ＋ 内容长度 4 ＋ 预留 7）加内容。
+  一格的可用内容即**格长减 16**；内容超出即报错，不静默截断；
+- **读写**：正文槽只追加，属性槽可原地覆盖。**唯一可变的事实是文件尾在哪**——
+  没有空闲表、没有分配位图：槽号 < 文件尾格数即"写过"，≥ 即"空闲"。
 
-**记录头里的身份就是 ID 的落盘部分**（两套凭证、名字、签发时刻）：身份必须在记录里，
-否则索引库一丢，"这一格是谁"就无从复原。位置段不在其中——扫到它时位置已经由扫描给出了。
+**载体上不写一个字节的身份**：没有记录头、没有身份段、没有帧、没有版本组、
+没有归属字段、没有墓碑。故载体只装值，**索引库装身份、位置与正文历史**，
+两者缺一，块都取不回来。顺扫仍然在，但它只服务诊断与回收。
 
-**封口是策略，不是状态**：写满封口线就换新载体，但文件里不留任何封印标记——
-"已封口"就是"这个载体达到了封口线"。故改封口线不会出现"标记与事实不符"。
+**封口是策略，不是状态**：判据是"剩下的地方装不下下一格"（:attr:`Pack.sealed`），
+文件里不留任何封印标记——故改封口线不会出现"标记与事实不符"。
 
 **读路径不建东西**：文件不在即报错，不新建一个空的顶上——空载体与"载体丢了"必须分得开。
 """
@@ -28,115 +29,88 @@ import struct
 from typing import TYPE_CHECKING, NamedTuple
 from zlib import crc32
 
-import cbor2
-
-from core.exc import HubShapeError, RecordFormatError, SlotError
-
-from .db.id import ID
-from .slot import Slot, SlotRange, offset_of, span_of
+from core.exc import HubShapeError, SlotError, SlotFormatError, SlotTooLargeError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-MAGIC = b"CairnPk1"
+MAGIC = b"CairnPk2"
 """载体魔数：末位是布局版本号。不符即报错，不作推断，也不当作"此处没有载体"。"""
 
 HEADER_SIZE = 24
 """文件头长度（字节）：魔数 8 ＋ 格长 8 ＋ 预留 8。**它不必凑成整格**。"""
 
-RECORD_HEAD_SIZE = 16
-"""记录头的定长部分（字节）：总长 4 ＋ 校验和 4 ＋ 身份段长度 4 ＋ 预留 4。
+SLOT_HEAD_SIZE = 16
+"""槽头长度（字节）：槽种类 1 ＋ crc32 4 ＋ 内容长度 4 ＋ 预留 7。"""
 
-三项都定长于格边界之前，故记录起点永远落在格边界上，且**单格记录也不浪费一格**。
-身份段（canonical CBOR）跟在定长部分之后，长度自报。
-"""
+ATTR_SLOT = 1
+"""槽种类：**属性槽**——装一个块的全部属性，可原地覆盖。"""
+
+BODY_SLOT = 2
+"""槽种类：**正文槽**——装正文分片，只追加。"""
+
+EMPTY_SLOT = 0
+"""没写过的格：槽种类为 0。它既不是属性槽也不是正文槽。"""
 
 DEFAULT_MAX_BYTES = 2 * 1024**3
 """封口线：单个载体写满这个字节数就换新载体。只管"换不换文件"，不是硬上限。"""
 
 _HEADER = struct.Struct(">8sQQ")
-_RECORD = struct.Struct(">III4x")
+_SLOT = struct.Struct(">BII7s")
+"""槽头：槽种类 1 ＋ crc32 4 ＋ 内容长度 4 ＋ 预留 7。
 
-_MIN_TOTAL = RECORD_HEAD_SIZE
-"""一条记录的最小总长：有头、身份为空、载荷为空。"""
+预留那 7 字节**如实写零**（不写成对齐补白）：它是留给将来加字段的那一段，
+写零才有"这一段还没用"的读法。
+"""
 
+if _SLOT.size != SLOT_HEAD_SIZE:  # pragma: no cover — 格式串写错即当场拦下
+    raise AssertionError(f"槽头格式串与 {SLOT_HEAD_SIZE} 字节不符: {_SLOT.size}")
 
-class Record(NamedTuple):
-    """从载体里读出的一条记录：**它是谁、躺在哪个载体的哪几格、装了什么**。
-
-    Attributes:
-        identity: 记录里的 ID（两套凭证、名字、签发时刻）。位置段它是空的——
-            位置由 `owner` 与 `span` 给出，它是投影。
-        owner: 它所在的**载体名**。记录自己不带位置，故"在哪个文件"由读它的那一方补上。
-        span: 占的格区间（头格，末格），闭区间。
-        payload: 记录内容。
-    """
-
-    identity: ID
-    owner: str
-    span: SlotRange
-    payload: bytes
-
-    @property
-    def located(self) -> bool:
-        """位置是否齐全（载体名与格区间都有）。"""
-        return bool(self.owner)
+_KIND_NAMES = {ATTR_SLOT: "属性槽", BODY_SLOT: "正文槽"}
 
 
-def frame(identity: ID, payload: bytes) -> bytes:
-    """把一条记录框起来：**总长 + 校验和 + 身份段长度 + 身份 + 载荷**。
+def offset_of(slot: int, *, slot_bytes: int) -> int:
+    """某一格在载体文件里的字节地址：``文件头长度 + 槽号 × 格长``。
 
-    自框定是必须的：没有它，一条记录的位置就得靠外部索引才切得出来，于是"库丢了能重建"
-    这条不成立。校验和验的是"读到的是不是原文"——**它不承担内容寻址**：内容凭证走 ID 的
-    摘要形态，两件事不该由一处兼职。
-
-    Args:
-        identity: 这条记录的身份（ID 的落盘部分进记录头）。
-        payload: 记录内容。
-
-    Returns:
-        可整段写进载体的字节。
-    """
-    segment = cbor2.dumps(identity.to_record(), canonical=True)
-    total = RECORD_HEAD_SIZE + len(segment) + len(payload)
-    head = _RECORD.pack(total, crc32(payload), len(segment))
-    return head + segment + payload
-
-
-def unframe(raw: bytes, *, slot: int) -> tuple[ID, int, bytes]:
-    """把一段"从记录头开始"的字节解开成（身份，总长，载荷）。
+    **格号到地址是常数时间**：给一个槽号，地址当场算出；不查表、不扫目录、不读别的槽。
 
     Raises:
-        RecordFormatError: 记录头不完整、总长或身份段越界、格长对不上，或校验和不符。
+        SlotError: 槽号或格长为负。
     """
-    if len(raw) < RECORD_HEAD_SIZE:
-        raise RecordFormatError(f"记录头不完整：读到 {len(raw)} 字节，至少要 {RECORD_HEAD_SIZE}")
-    total, checksum, id_len = _RECORD.unpack_from(raw, 0)
-    if total < RECORD_HEAD_SIZE:
-        raise RecordFormatError(f"记录总长不合法: {total}")
-    if total > len(raw):
-        raise RecordFormatError(f"记录被截断：声明 {total} 字节，只读到 {len(raw)}")
-    if id_len <= 0 or RECORD_HEAD_SIZE + id_len > total:
-        raise RecordFormatError(f"身份段长度不合法: {id_len}（记录总长 {total}）")
-    span = span_of(total, slot=slot)
-    if span.size * slot > len(raw):
-        raise RecordFormatError(f"记录越出载体尾部：声明 {total} 字节，落在第 {span.last} 格之外")
-    segment = raw[RECORD_HEAD_SIZE : RECORD_HEAD_SIZE + id_len]
-    payload = raw[RECORD_HEAD_SIZE + id_len : total]
-    if crc32(payload) != checksum:
-        raise RecordFormatError("记录校验和不符：这一段的字节与它自己声明的不一致")
-    try:
-        decoded = cbor2.loads(segment)
-    except cbor2.CBORDecodeError as error:
-        raise RecordFormatError(f"记录里的身份段解不出来: {error}") from error
-    if not isinstance(decoded, dict):
-        raise RecordFormatError("记录里的身份段不是映射")
-    try:
-        identity = ID.from_record(decoded)
-    except (TypeError, ValueError) as error:
-        raise RecordFormatError(f"记录里的身份不合法: {error}") from error
-    return identity, total, payload
+    if slot_bytes <= 0:
+        raise SlotError(f"格长必须是正数: {slot_bytes}")
+    if slot < 0:
+        raise SlotError(f"槽号不能为负: {slot}")
+    return HEADER_SIZE + slot * slot_bytes
+
+
+class Slot(NamedTuple):
+    """从载体里读出的一格：**它的种类与内容**。
+
+    槽头只描述本格，故内容之外没有第二样事实——归属、片号、世代号都不在载体上。
+    """
+
+    kind: int
+    """槽种类：属性槽或正文槽。"""
+
+    content: bytes
+    """内容本身；长度即槽头记的那个数。"""
+
+    @property
+    def kind_name(self) -> str:
+        """槽种类的名字（诊断用）。"""
+        return _KIND_NAMES.get(self.kind, f"未知槽种类({self.kind})")
+
+
+class Layout(NamedTuple):
+    """载体的几何：文件头长度与格长，两项都从**文件头**读出。"""
+
+    head: int
+    """文件头长度（字节）。"""
+
+    slot: int
+    """格长（字节）。**读取一律以此为准**——配置只决定新建载体时写什么。"""
 
 
 def _read_header(path: Path) -> tuple[bytes, int, int]:
@@ -161,20 +135,23 @@ def _read_header(path: Path) -> tuple[bytes, int, int]:
     return magic, int(slot), path.stat().st_size
 
 
-class Layout(NamedTuple):
-    """载体的几何：文件头长度与格长，两项都从**文件头**读出。"""
+def _pack_slot(kind: int, content: bytes, *, slot_bytes: int) -> bytes:
+    """把一格编成字节：槽头 ＋ 内容 ＋ 补零，使下一格重新落在格边界上。
 
-    head: int
-    """文件头长度（字节）。"""
-
-    slot: int
-    """格长（字节）。**读取一律以此为准**——配置只决定新建载体时写什么。"""
+    Raises:
+        SlotTooLargeError: 内容超过"格长减槽头"。
+    """
+    room = slot_bytes - SLOT_HEAD_SIZE
+    if len(content) > room:
+        raise SlotTooLargeError(f"一格装不下 {len(content)} 字节（格长 {slot_bytes}，可用 {room}）")
+    head = _SLOT.pack(kind, crc32(content) & 0xFFFFFFFF, len(content), b"\x00" * 7)
+    return head + content + b"\x00" * (room - len(content))
 
 
 class Pack:
-    """一个载体文件：管格、管追加写、管顺扫；**它是格的唯一可变面**。
+    """一个载体文件：管格、管追加写、管原地覆盖、管顺扫；**它是槽的唯一可变面**。
 
-    它不知道自己装的是块还是内容：那是上一层的事。它只管"谁（ID）在哪几格、装了什么"。
+    它不知道自己装的是属性还是正文：那是上一层的事。它只管"哪个槽是什么种类、装了什么"。
 
     Args:
         path: 载体文件路径。
@@ -197,15 +174,18 @@ class Pack:
             slot_bytes: 格长（字节）。新建时写进文件头；打开时由 :meth:`open` 从文件头读出。
             max_bytes: 封口线。
             size: 当前文件长度；默认即刚写完文件头的那一刻。
+
+        Raises:
+            SlotError: 格长不是正数。
+            SlotTooLargeError: 格长装不下槽头。
         """
-        if slot_bytes <= 0:
-            raise SlotError(f"格长必须是正数: {slot_bytes}")
+        if slot_bytes <= SLOT_HEAD_SIZE:
+            raise SlotError(f"格长必须大于槽头（{SLOT_HEAD_SIZE} 字节）: {slot_bytes}")
         path.parent.mkdir(parents=True, exist_ok=True)
         if size == HEADER_SIZE:
             path.write_bytes(_HEADER.pack(MAGIC, slot_bytes, 0))
         self._path = path
         self._max_bytes = max_bytes
-        self._head = HEADER_SIZE
         self._slot = slot_bytes
         self._size = size
         self._closed = False
@@ -229,7 +209,7 @@ class Pack:
 
     @property
     def name(self) -> str:
-        """载体名：**它就是文件的名字**，也是 ID 的 `in_hub_pack` 那一项。"""
+        """载体名：**它就是文件的名字**，也是身份里 `in_hub_pack` 那一项。"""
         return self._path.name
 
     @property
@@ -242,140 +222,160 @@ class Pack:
         """当前文件长度（字节），即**唯一那个可变事实**。"""
         return self._size
 
+    @property
+    def slot_bytes(self) -> int:
+        """格长（字节）。读取一律以文件头里那一个为准。"""
+        return self._slot
+
+    @property
+    def slot_count(self) -> int:
+        """已写过的格数：槽号 < 它即"写过"，≥ 即"空闲"。"""
+        return (self._size - HEADER_SIZE) // self._slot
+
+    @property
+    def content_bytes(self) -> int:
+        """一格能装的内容上限：格长减槽头。"""
+        return self._slot - SLOT_HEAD_SIZE
+
+    @property
+    def content_room(self) -> int:
+        """一格能装的内容上限：**格长减槽头**。"""
+        return self._slot - SLOT_HEAD_SIZE
+
     def layout(self) -> Layout:
         """文件头长度与格长：读侧的一切算术都用它。"""
-        return Layout(head=self._head, slot=self._slot)
+        return Layout(head=HEADER_SIZE, slot=self._slot)
 
     @property
     def sealed(self) -> bool:
         """是否该换新载体。**它是策略判断，不是落盘状态**：改封口线即随之变。
 
-        判据是"**剩下的地方装不下下一格**"，而不是"长度达到了封口线"：一条记录至少占一格，
-        故还剩格子就不该封——否则那一格白扔，而写入纪律本该是"写到满才换"。
-
-        单条记录大于封口线时不必担心：:meth:`append` 不判封口线，整条照写。
+        判据是"**剩下的地方装不下下一格**"，而不是"长度达到了封口线"：
+        一个槽占一格，故还剩格子就不该封——否则那一格白扔。
         """
         return self._size + self._slot > self._max_bytes
 
     # ---- 读 ---- #
 
-    def offset_of(self, first: int) -> int:
-        """某一格在文件里的字节偏移：``文件头长度 + 格号 × 格长``。"""
-        return offset_of(first, head=self._head, slot=self._slot)
+    def offset_of(self, slot: int) -> int:
+        """某一格的字节地址：``文件头长度 + 槽号 × 格长``。"""
+        return offset_of(slot, slot_bytes=self._slot)
 
-    def read_span(self, span: SlotRange) -> bytes:
-        """读出某几格的全部字节（**含记录头与格尾补零**）。
+    def read(self, slot: int) -> Slot:
+        """读出某一格：**校验并交出槽种类与内容**。
 
-        要直接拿到记录走 :meth:`read`，要载荷走 :meth:`read_payload`。
+        **校验和不符即报错**：不把错的内容当成对的返回。没写过的格读出 `EMPTY_SLOT`
+        与空内容，不算错——那是"这一格还空着"。
 
         Raises:
-            SlotError: 格区间越界（它落在文件尾之后）。
+            SlotError: 槽号越出文件尾。
+            SlotFormatError: 槽头读不满、内容长度越出格长，或校验和不符。
             HubShapeError: 文件读不出来。
         """
-        offset = self.offset_of(span.first)
-        length = span.size * self._slot
-        if offset + length > self._size:
+        offset = self.offset_of(slot)
+        if offset + self._slot > self._size:
             raise SlotError(
-                f"格区间越界: {span.first}..{span.last} 要到 {offset + length} 字节，"
-                f"文件只有 {self._size}"
+                f"槽号越界: {slot} 要到 {offset + self._slot} 字节，文件只有 {self._size}"
             )
         try:
             with self._path.open("rb") as handle:
                 handle.seek(offset)
-                return handle.read(length)
+                raw = handle.read(self._slot)
         except OSError as error:
             raise HubShapeError(f"载体读不出来: {self._path}（{error}）") from error
-
-    def read(self, span: SlotRange) -> Record:
-        """按格区间读出**一条记录**（身份、格区间、载荷）。
-
-        Raises:
-            RecordFormatError: 记录头、身份段或校验和对不上。
-        """
-        identity, _total, payload = unframe(self.read_span(span), slot=self._slot)
-        return Record(identity=identity, owner=self.name, span=span, payload=payload)
-
-    def read_payload(self, span: SlotRange) -> bytes:
-        """按格区间只读出**载荷**（跳过记录头与身份段）。"""
-        _identity, _total, payload = unframe(self.read_span(span), slot=self._slot)
-        return payload
-
-    def slot(self, first: int, last: int) -> Slot:
-        """取某一段格的只读视图。**它不读盘**：真正读是 :meth:`Slot.read`。"""
-        return Slot(self, SlotRange(first, last))
-
-    def scan(self) -> Iterator[Record]:
-        """顺扫全部记录：交出 :class:`Record`，**不依赖索引库**。
-
-        记录自框定（总长在最前），故一遍扫完即得全部记录——这是重建与巡检的取数口。
-        尾部若不足一整格，或哪条记录读不到底，即报错：那是残写或外来改动，
-        **不推断续写起点**。
-
-        Raises:
-            RecordFormatError: 尾部残留不足一整格，或某条记录的头、身份、校验和对不上。
-            HubShapeError: 文件读不出来。
-        """
-        try:
-            raw = self._path.read_bytes()
-        except OSError as error:
-            raise HubShapeError(f"载体读不出来: {self._path}（{error}）") from error
-        body = raw[self._head :]
-        if len(body) % self._slot:
-            raise RecordFormatError(
-                f"载体尾部不是整格: {self._path}（正文 {len(body)} 字节，格长 {self._slot}）"
+        if len(raw) < SLOT_HEAD_SIZE:
+            raise SlotFormatError(f"槽头读不满: 第 {slot} 格只读到 {len(raw)} 字节")
+        kind, checksum, length, _reserved = _SLOT.unpack(raw[:SLOT_HEAD_SIZE])
+        if length > self.content_bytes:
+            raise SlotFormatError(
+                f"内容长度越出格长: 第 {slot} 格声明 {length} 字节，"
+                f"一格最多 {self.content_bytes} 字节"
             )
-        cursor = 0
-        while cursor < len(body):
-            rest = body[cursor:]
-            identity, total, payload = unframe(rest, slot=self._slot)
-            span = span_of(total, slot=self._slot)
-            occupied = span.size * self._slot
-            if occupied > len(rest):
-                raise RecordFormatError(f"记录越出载体尾部: {cursor} 起声明占 {occupied} 字节")
-            first = cursor // self._slot
-            yield Record(
-                identity=identity,
-                owner=self.name,
-                span=SlotRange(first, first + span.size - 1),
-                payload=payload,
-            )
-            cursor += occupied
+        content = raw[SLOT_HEAD_SIZE : SLOT_HEAD_SIZE + length]
+        if kind != EMPTY_SLOT and (crc32(content) & 0xFFFFFFFF) != checksum:
+            raise SlotFormatError(f"槽校验和不符: 第 {slot} 格的字节与它自己声明的不一致")
+        return Slot(kind=kind, content=content)
+
+    def scan(self) -> Iterator[tuple[int, Slot]]:
+        """顺扫全部已写过的格：交出（槽号，槽）。
+
+        它**只服务诊断与回收**：读侧的一切定位都走索引库那一行给出的段列表。
+        尾部若不是整格，或哪一格读不出来，即报错——那是残写或外来改动，不推断。
+        """
+        for slot in range(self.slot_count):
+            yield slot, self.read(slot)
+
+    def content_at(self, slot: int) -> bytes:
+        """只取某一格的内容（跳过槽头）；种类不是本层关心的事。"""
+        return self.read(slot).content
 
     # ---- 写 ---- #
 
-    def append(self, identity: ID, payload: bytes) -> SlotRange:
-        """把一条记录追加到载体末尾，返回它占的格区间。
+    def append(self, kind: int, content: bytes) -> int:
+        """把一个槽追加到载体末尾，返回它的槽号。
 
-        **写到满才换**：本方法不判封口线，换不换文件由调用方按 :attr:`sealed` 决定——
-        否则"单条记录大于封口线"就永远写不进去。
-
-        Args:
-            identity: 这条记录的身份；它的落盘部分进记录头。
-            payload: 记录内容。
+        **写到满才换**：本方法不判封口线，换不换文件由调用方按 :attr:`sealed` 决定。
 
         Raises:
-            RecordFormatError: 文件尾不是整格（残写或外来改动，不推断续写起点）。
+            SlotTooLargeError: 内容超过一格能装的字节数。
+            SlotFormatError: 文件尾不是整格（残写或外来改动，不推断续写起点）。
+            HubShapeError: 文件写不进去。
+        """
+        return self.write_at(self.slot_count, kind, content)
+
+    def overwrite(self, slot: int, kind: int, content: bytes) -> None:
+        """把一个槽**原地覆盖**：写在同一格号上，位置不变。
+
+        属性槽走这一条；正文槽只追加，不覆盖。
+
+        Raises:
+            SlotError: 槽号不是已写过的格。
+            SlotTooLargeError: 内容超过一格能装的字节数。
+            HubShapeError: 文件写不进去。
+        """
+        if slot < 0 or slot >= self.slot_count:
+            raise SlotError(f"只能覆盖已写过的格: 第 {slot} 格（已写到第 {self.slot_count} 格）")
+        self.write_at(slot, kind, content)
+
+    def write_at(self, slot: int, kind: int, content: bytes) -> int:
+        """把一个槽写在指定的格号上：**槽号由调用方给定**，这正是"地址是算术"的用法。
+
+        写到当前文件尾之后即补零拉长（回收按算好的位置落活槽靠它）；写在文件尾之内
+        即原地覆盖，位置不变。两种情形都不改动别格。
+
+        Args:
+            slot: 目标格号。
+            kind: 槽种类。
+            content: 内容。
+
+        Returns:
+            写下去的格号。
+
+        Raises:
+            SlotError: 格号为负。
+            SlotTooLargeError: 内容超过一格能装的字节数。
+            SlotFormatError: 文件尾不是整格（残写或外来改动，不推断续写起点）。
             HubShapeError: 文件写不进去。
         """
         if self._closed:
             raise HubShapeError(f"载体已关闭: {self._path}")
-        body = self._size - self._head
+        if slot < 0:
+            raise SlotError(f"槽号不能为负: {slot}")
+        body = self._size - HEADER_SIZE
         if body < 0 or body % self._slot:
-            raise RecordFormatError(
+            raise SlotFormatError(
                 f"文件尾不是整格，拒绝续写: {self._path}（正文 {body} 字节，格长 {self._slot}）"
             )
-        raw = frame(identity, payload)
-        span = span_of(len(raw), slot=self._slot)
-        padded = raw + b"\x00" * (span.size * self._slot - len(raw))
+        raw = _pack_slot(kind, content, slot_bytes=self._slot)
         try:
-            with self._path.open("ab") as handle:
-                handle.write(padded)
+            with self._path.open("r+b") as handle:
+                handle.seek(self.offset_of(slot))
+                handle.write(raw)
                 handle.flush()
         except OSError as error:
             raise HubShapeError(f"载体写不进去: {self._path}（{error}）") from error
-        self._size += len(padded)
-        first = body // self._slot
-        return SlotRange(first, first + span.size - 1)
+        self._size = max(self._size, self.offset_of(slot) + self._slot)
+        return slot
 
     def close(self) -> None:
         """标记本载体不再写。**不落任何标记**：文件本身就是全部事实。"""
@@ -387,13 +387,15 @@ class Pack:
 
 
 __all__ = [
+    "ATTR_SLOT",
+    "BODY_SLOT",
     "DEFAULT_MAX_BYTES",
+    "EMPTY_SLOT",
     "HEADER_SIZE",
     "MAGIC",
-    "RECORD_HEAD_SIZE",
+    "SLOT_HEAD_SIZE",
     "Layout",
     "Pack",
-    "Record",
-    "frame",
-    "unframe",
+    "Slot",
+    "offset_of",
 ]

@@ -1,49 +1,48 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""存储引擎：管 block 的状态与存储，把文件读写整条路替上层做掉。
+"""存储引擎：把块落成载体的槽，再把槽读回来，组织成块对象。
 
 **两个引擎，分工不重叠**：
 
-- 本文件是**存储引擎**：面向载体（slot / pack / hub），负责"分配 hub、分配 pack、分配 slot"，
-  把内存里的值写成字节、把字节读回来**组织成 block 对象**交还。它不认识数据库；
+- 本文件是**存储引擎**：面向载体（pack / hub），负责"分配 hub、分配载体、分配槽"，
+  把内存里的值写成字节、把字节读回来**组织成 block 对象**交还；
 - `core.storage.db.engine` 是**数据库引擎**：面向索引库，只回答"这个身份在哪儿"。
-  它是本引擎的**子引擎**：写入时登记定位，读取时按身份问路。
 
-**能力靠继承拿到，身份靠调用方给。** `Block` 是那个"隐形关联"的接口面：
+**能力靠继承拿到，身份靠调用方给。** `Block` 是那个接口面：
 
     self.id = ID(self)      # 身份由调用方签发——内核不代签
-    ...                     # 随便怎么玩：字段、派生值、临时状态
     note = Note(self.id)    # 递给基座，能力在那一刻成立
     note.title = "标题"
-    note.save()             # 引擎接手：分配、编码、落盘、回填摘要与位置
+    note.save()             # 引擎接手：分配、编码、落盘、回填位置段
 
-**没有 ID 就没有一切**：不递 ID 的对象不入库、不建表、不产生任何关系。
+**一个块占属性槽与正文槽**：
 
-**块的落点由值决定**（`types.py` 三个判据）：
+- **属性槽**：一个块的全部属性，装不下即占多格；**可原地覆盖**，不进历史；
+- **正文槽**：正文分片，按正文自身的**逻辑顺序**切分；**只追加**，有历史；
+- **位置段**：覆盖该块占用的全部槽，写进索引库那一行，改一次写一次。
+  属性槽排在低位、正文槽排在高位，故"哪几格是属性"由属性占的字节数当场算出。
 
-- `Body(...)` → 内容记录（按内容地址去重）；
-- `Attr(...)` → 块记录载荷里的属性，**并且进反表**（用了它即进，没有开关）；
-- **裸赋值** → 照样进块记录载荷，只是没有索引加持；
-- `ID` 实例 → 身份，不重复落进载荷。
+**一次保存只写它动过的域**（属性 / 正文 / 索引三选几），不重写整块。判据落在字节上：
+正文按摘要查 `BodyIndex`，属性编出来与库里记的那几格逐字节比——故"没动"是算出来的，
+不是调用方声明的。
 
-**策略参数向配置面要值**（`storage/conf.py`）：默认 hub、格长、封口线、索引块上限四样都在
-那里声明；构造时不给就用当前配置值。故"改配置"改的是这些数，而**改不动已落盘的字节**。
+**去重只针对 `Body` 的内容**：写入前按正文摘要查 `BodyIndex`，命中即**引用同一份正文的
+段**，不重复写槽。`Attr`、裸赋值与资产类二进制（如视频）不去重。
 
-**写路径发事件**（`core/event`）：落盘之后发 `object.put`、摘掉之后发 `object.deleted`。
-总线是可选的：不给就没人在听，写照样成立——通知不该成为写成功的前提。
+**删除 = 摘掉索引库那一行**：载体上不留任何标记（槽上不记归属），字节由回收收敛。
 
-**一个块落成两条记录**：内容记录（载荷即正文，身份按内容签发，同内容只存一份）与块记录
-（载荷是指向内容的指针加块自己的属性，身份是块自己的）。两条记录各自提交，不是一次事务。
+**读路径没有顺扫回退**：库里没有那一行即显式报错——索引库是权威视角，载体上一个字节的
+身份都没有，扫也扫不回来。
 
-**位置段是投影**：引擎写完后把坐标回填到调用方递进来的那个 ID 上。别拿 `id.in_hub` 一类
-派生持久字段——压实、搬移之后它就会变，而派生值已经冻进载荷里了。
+**策略参数向配置面要值**（`storage/conf.py`）：默认 hub、格长、封口线、索引块上限、
+正文历史深度、自动回收阈值都在那里声明；构造时不给就用当前配置值。
 """
 
 from __future__ import annotations
 
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, cast
 
 from core.event.catalog import OBJECT_DELETED, OBJECT_PUT
 from core.event.events import Event
@@ -52,67 +51,80 @@ from core.exc import (
     IndexNotFoundError,
     IndexSchemaError,
     ObjectNotFoundError,
-    RecordFormatError,
     SlotError,
+    SlotTooLargeError,
 )
 
 from . import conf as storage_conf
-from .db.engine import Index
-from .db.id import ID, digest
+from .db.engine import HUB_TABLE, META_TABLE, Index
+from .db.id import (
+    ATTR_SLOT_FIELD,
+    ID,
+    SlotSpan,
+    canonical_segments,
+    digest,
+    keep_generations,
+    pack_segments,
+    parse_body_history,
+    parse_segments,
+)
 from .db.payload import (
-    ContentRef,
-    decode_block,
-    decode_content,
-    decode_index,
-    decode_tombstone,
-    encode_block,
-    encode_content,
-    encode_index,
-    encode_tombstone,
+    BODY_MARK,
+    COLUMN_KEY,
+    VALUE_KEY,
+    decode_attrs,
+    decode_index_row,
+    encode_attrs,
+    encode_index_row,
+    index_text,
 )
 from .hub import Hub, find_hubs
-from .slot import SlotRange
-from .types import BODY_KIND, kind_of, kinds_of, unwrap
+from .pack import ATTR_SLOT, BODY_SLOT, SLOT_HEAD_SIZE, Pack, Slot
+from .types import ATTR_KIND, BODY_KIND, kind_of, kinds_of, unwrap
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator, Mapping
 
     from core.event.bus import Bus
 
     from .index.index import IndexEngine
-    from .pack import Record
 
 CATALOG_FILENAME = "catalog.db"
 """索引库文件名：**路径约定只在这里出现一次**。"""
 
-BODY_NAME = "body"
-"""内容记录的身份名：它是内容，不是块，故名字与任何块表都不同。"""
-
-TOMBSTONE_NAME = "tombstone"
-"""墓碑记录的身份名：它是内核的机制记录，不占任何类型的配额。"""
-
 SOURCE = "core.storage"
 """事件里的发出者标识：写路径发的事件都署它。"""
 
+BODY_KEY = "cairn.body"
+"""正文在槽里那一小段 CBOR 映射的键名，也是 `BodyIndex` 里那一列的列名。"""
 
-BODY_FIELDS_KEY = "\x00cairn.body_fields"
-"""块记录载荷里的保留键：**哪些字段的内容在内容记录里**（按写入次序）。
 
-它只记名字、不记值——值在内容记录里。少了它，回读时不知道该往哪几个字段填值；
-把值也抄一份，去重就白做了。
-"""
+class SlotPlacement(NamedTuple):
+    """一个块在索引里那一行的内容：**哪一列、什么值、落在哪儿**。
+
+    属性行的值是值本身，正文行的值是它的摘要；两者的落点都是槽号列表，
+    故索引行与属性槽共用同一种"落点"写法。
+    """
+
+    value: str
+    """这一列的值（文本化，带类型名）。"""
+
+    hub: str
+    """落点所在的 hub。"""
+
+    slots: tuple[int, ...]
+    """落点占的槽号（升序）。"""
 
 
 class Engine:
-    """存储引擎：分配 hub / pack / slot，把块落成两条记录，再按身份读回来。
+    """存储引擎：分配 hub / 载体 / 槽，把块落进属性槽与正文槽，再按身份读回来。
 
     Args:
         root: 库根（vault 目录）。
         default_hub: 不点名时写进哪个 hub；不给即取配置面的 `hub.default`。
-        slot_bytes: **新建**载体时的格长；不给即取配置面的五档之和。
+        slot_bytes: **新建**载体时的格长；不给即取配置面两档之和。
             读已有载体一律看它自己的文件头，与这个数无关。
-        max_bytes: 封口线；不给即取配置面的 `pack.max.byte`。它只管"什么时候换文件"，
-            不构成单条记录的硬上限。
+        max_bytes: 封口线；不给即取配置面的 `pack.max.byte`。它只管"什么时候换文件"。
         bus: 事件总线；不给即不发事件（写路径不依赖有没有人在听）。
     """
 
@@ -128,10 +140,10 @@ class Engine:
         """接上库根与索引库。**它不建库根**：建立是显式动作（`Kernel.create`）。
 
         索引库是**惰性开的**：第一次要用它时才建文件。故"只想读载体"的场合
-        （只读工具、巡检）不会因为装配一个引擎就凭空多出一个库文件。
+        （只读工具、诊断）不会因为装配一个引擎就凭空多出一个库文件。
 
         **策略值在这里定下**：构造一次读一次配置面，此后这一次装配里的每个 hub 与载体
-        都按同一组数判。故"这一次写入用的是哪条封口线"答得出来，不必回头猜。
+        都按同一组数判。
         """
         self._root = Path(root)
         self._default_hub = default_hub or storage_conf.default_hub_name()
@@ -140,6 +152,8 @@ class Engine:
         self._bus = bus
         self._index: Index | None = None
         self._indexes: IndexEngine | None = None
+
+    # ---- 属性 ---- #
 
     @property
     def root(self) -> Path:
@@ -203,6 +217,11 @@ class Engine:
         """写路径发事件的那条总线；没有即 `None`（不发）。"""
         return self._bus
 
+    @property
+    def content_room(self) -> int:
+        """一格能装的内容上限（格长减槽头）。"""
+        return self._slot_bytes - SLOT_HEAD_SIZE
+
     def _notify(self, event_type: str, identity: ID, data: object = None) -> None:
         """发一条通知：**只在有人听的时候才说话**，且失败绝不回流写路径。
 
@@ -218,64 +237,317 @@ class Engine:
     # ---- 写入 ---- #
 
     def save(self, block: Block, *, hub: str | None = None) -> ID:
-        """把一个块落成两条记录，返回块身份（就是调用方递进来那一个，已回填）。
+        """把一个块落成属性槽与正文槽，返回块身份（就是调用方递进来那一个，已回填）。
+
+        **只写它动过的域**：正文按摘要查 `BodyIndex`，属性与库里记的那几格逐字节比。
+        库里没有这一行即首次落盘，两样都写。
+
+        写序是定死的：**新槽先落定，位置段与历史后写**。故新槽落稳之前，旧世代仍然
+        被库里那一行指着。
 
         Raises:
-            TypeError: 这个对象没有身份（没递 ID）。
-            AttrTypeError: 属性或内容编不进载荷。
+            SlotTooLargeError: 属性编出来超过一格能装的字节数。
+            AttrTypeError: 值编不进槽（值不是 CBOR 认得的写法）。
         """
         identity = block.id
         fields = _fields_of(block)
-        target = self._hub_name(hub)
-        target_hub = self._open_hub(target)
-
-        content = encode_content(_content_of(block, fields))
-        content_id = ID.of(content, name=BODY_NAME)
-        self._write_content(target_hub, content_id, content)
-
-        payload = encode_block(
-            _attrs_of(block, fields),
-            ContentRef(value_uuid=content_id.value_uuid, value_hash=content_id.value_hash),
-        )
-        record = target_hub.append(identity, payload)
-        # **改绑**：同一个块改了字段再存一次，块身份随载荷而变，故引擎要能重写这一项。
-        identity.bind(payload, rebind=True)
-        _place(identity, target, record.owner, record.span)
+        hub_name = self._hub_name(hub)
+        row = self._row_of(identity)
+        attrs = _attrs_of(block, fields)
+        chunks = _split(encode_attrs(attrs), self.content_room)
+        # **槽序以这一趟的落点为准**：正文槽在前、属性槽在后。旧行那一份位置段只用来
+        # 取"旧世代"，故它读的是哪一块载体都不影响这一条。
+        old_attr = _attr_slots_of(row) if row is not None else ()
+        old_body = _body_slots_of(row) if row is not None else ()
+        body = _body_of(block, fields)
+        history: list[tuple[SlotSpan, ...]] = [canonical_segments(old_body)] if old_body else []
+        attr_slots = self._write_attrs(hub_name, chunks, row, old_attr)
+        entries: dict[str, SlotPlacement] = self._index_entries(block, hub_name, attrs, attr_slots)
+        if body:
+            entries[BODY_KEY] = self._write_body(hub_name, body, old_body, history)
+        self._place(identity, hub_name, attr_slots, entries.get(BODY_KEY))
+        identity.body_history = [
+            tuple(generation) for generation in _trim(history, depth=_history_depth())
+        ]
+        self._index_block(block, identity, entries)
         self._register(block, identity)
-        self._index_block(block)
         self._notify(
             OBJECT_PUT,
             identity,
-            {"table": block.type_name, "content": content_id.value_hash},
+            {"table": block.type_name, "segments": pack_segments(identity.in_pack_slot)},
         )
         return identity
 
-    def _index_block(self, block: Block) -> None:
+    def _write_attrs(
+        self,
+        hub_name: str,
+        chunks: list[bytes],
+        row: dict[str, object] | None,
+        current: tuple[int, ...],
+    ) -> tuple[int, ...]:
+        """安排属性槽：**格数够就原地覆盖，不够才另占几格**。
+
+        原地覆盖是本裁定给属性槽的写法，故"属性变了"不产生新槽、也不进历史；
+        非到格数都不够才另占。此时旧的那几格从此不再被这一行指着，由回收收走。
+        """
+        if len(current) == len(chunks) and _hub_of(row) == hub_name and _pack_of(row):
+            pack = self._open_pack(hub_name, _pack_of(row))
+            for index, slot in enumerate(current):
+                pack.overwrite(slot, ATTR_SLOT, chunks[index])
+            return tuple(_slots_of(current))
+        return self._append_slots(hub_name, ATTR_SLOT, chunks)
+
+    def _write_body(
+        self,
+        hub_name: str,
+        body: list[object],
+        current: tuple[int, ...],
+        history: list[tuple[SlotSpan, ...]],
+    ) -> SlotPlacement:
+        """安排正文槽：**改一段正文即新建槽**，旧世代进历史。
+
+        写入前按正文摘要查 `BodyIndex`：命中即**引用同一份正文的段**，不重复写槽；
+        没命中才写新槽。命中的段若在别的 hub，则照原样在新 hub 里写一份——
+        一个块的全部槽因此落在同一个 hub，位置段只有一处载体名。
+
+        **只有正文确实换了内容才动历史**：同一份正文再存一次不产生新槽，也不多记一代。
+        """
+        content = content_digest_of_body(body)
+        found = self._lookup_body(content)
+        if found is not None and found.hub == hub_name:
+            return found
+        if current:
+            history.append(current)
+        chunks = _split(_encode_body(body), self.content_room)
+        return SlotPlacement(
+            value=index_text(content),
+            hub=hub_name,
+            slots=self._append_slots(hub_name, BODY_SLOT, chunks),
+        )
+
+    def _lookup_body(self, content: str) -> SlotPlacement | None:
+        """按正文摘要查 `BodyIndex`：**写入去重只走这一条**，不扫全库。
+
+        命中即那一份正文已经在载体上，故返回**它的正文槽**；没命中即要写新槽。
+        `BodyIndex` 缺位时退化为"没命中"，于是每次都写新槽——**数据不丢，只是不去重**。
+
+        Args:
+            content: 正文摘要（原样；文本化由索引那一层做，免得两处各化一次）。
+        """
+        for row in self.index_engine.search(_owner(BODY_KIND), BODY_KEY, content):
+            target = str(row.get("value_uuid") or "")
+            found = self._row_by_uuid(target)
+            if found is None or not _hub_of(found):
+                continue
+            body = _body_slots_of(found)
+            if not body:
+                continue
+            return SlotPlacement(value=index_text(content), hub=_hub_of(found), slots=body)
+        return None
+
+    def _row_by_uuid(self, value_uuid: str) -> dict[str, object] | None:
+        """逐张身份表按分配形态凭证找那一行；没有即 ``None``。
+
+        **名字为空即查不了表**，故这一问要逐张表找——`BodyIndex` 给的是"谁在用它"，
+        而"那个谁在哪张表"只有库自己答得出来。
+        """
+        if not value_uuid or not self.catalog_path.is_file():
+            return None
+        try:
+            for table in self.index.tables():
+                if table in {HUB_TABLE, META_TABLE}:
+                    continue
+                row = self.index.get(table, value_uuid)
+                if row is not None:
+                    return row
+        except (IndexNotFoundError, IndexSchemaError):  # pragma: no cover — 库刚开过
+            return None
+        return None
+
+    def _index_entries(
+        self,
+        block: Block,
+        hub_name: str,
+        attrs: Mapping[str, object],
+        attr_slots: tuple[int, ...],
+    ) -> dict[str, SlotPlacement]:
+        """这个块的属性各列在索引里那一行：列名 → 值 ＋ 落点。
+
+        **落点对全部属性是一样的**——它们同住那几格属性槽，故索引行的落点照抄即可；
+        值另取一遍（属性槽里存的是值，直接读出来文本化）。
+        """
+        kinds = kinds_of(type(block))
+        return {
+            name: SlotPlacement(
+                value=index_text(getattr(block, name, None)), hub=hub_name, slots=attr_slots
+            )
+            for name in attrs
+            if kinds.get(name) == ATTR_KIND
+        }
+
+    def _index_block(
+        self, block: Block, identity: ID, entries: Mapping[str, SlotPlacement]
+    ) -> None:
         """把这个块的**正表行**写进各类索引：**声明了 `Attr` / `Body` 就必然进来**。
 
-        哪些字段进哪一类索引，是索引块那边声明的（:meth:`IndexBlock.holds`）；
-        引擎只管把行写下去、满了续块。故这里没有一行"哪个字段该不该索引"的判断。
+        哪些列进哪一类索引，由索引块自己声明的 `manages` 定。故这里没有一行
+        "哪个字段该不该索引"的判断。
         """
-        self.index_engine.record(block)
+        kinds = kinds_of(type(block))
+        for owner in _index_owners():
+            manages = owner.__dict__.get("manages")
+            row: dict[str, SlotPlacement] = {}
+            if manages == BODY_KIND and BODY_KEY in entries:
+                row[BODY_KEY] = entries[BODY_KEY]
+            if manages == ATTR_KIND:
+                row.update(
+                    {
+                        name: placed
+                        for name, placed in entries.items()
+                        if kinds.get(name) == ATTR_KIND
+                    }
+                )
+            if row:
+                self.lay_index_row(owner, identity.value_uuid, row)
+
+    def lay_index_row(
+        self, owner: type[Any], value_uuid: str, row: Mapping[str, SlotPlacement]
+    ) -> None:
+        """把一个块的正表行写进 `owner` 这类索引块；**满了自动续下一块**。
+
+        **一条行一个槽**，故写路径只有追加、没有改动。索引块也是块：它有身份、有表，
+        故"查索引时它搁哪儿"由库里那一行回答。
+
+        Args:
+            owner: 索引块的类型（`AttrIndex` / `BodyIndex`）。
+            value_uuid: 这一行属于哪个块。
+            row: 列名 → 落点。
+        """
+        hub_name = self._default_hub
+        table = owner.__name__.lower()
+        live = self._active_index(owner, hub_name)
+        if live is None:
+            # **索引块的身份按块的标准用法来**：`owner()` 自己签一个（那两行就在它的
+            # `__init__` 里）。它是块，故它自然进库、有表。
+            live = ID(table, value_uuid=owner().id.value_uuid)
+        for column, placement in row.items():
+            payload = encode_index_row(
+                {
+                    COLUMN_KEY: column,
+                    "issuer": live.value_uuid,
+                    "value_uuid": value_uuid,
+                    "value": placement.value,
+                    "hub": placement.hub,
+                    "pack": _first_pack(placement.hub, self._root),
+                    "slots": pack_segments([_range_of(placement.slots)]),
+                }
+            )
+            if len(payload) > self.content_room:
+                raise SlotTooLargeError(
+                    f"一条索引行装不下: {len(payload)} 字节（可用 {self.content_room}）"
+                )
+            written = self._append_slots(hub_name, ATTR_SLOT, [payload])
+            live.in_hub = hub_name
+            live.in_hub_pack = _first_pack(hub_name, self._root)
+            live.add_slot(written[0])
+            self._register_index(owner, live, hub_name)
+
+    def _active_index(self, owner: type[Any], hub_name: str) -> ID | None:
+        """挑一个**还有地方**的索引块：最后写的那一块没到上限就用它，否则 ``None``（续一块）。
+
+        上限取配置 `index.max.byte`（块自己用 `max_bytes` 覆盖它）。
+
+        **挑的是"最新那一块"**：索引块按写入次序一个接一个续，故最近登记的那个就是活跃的。
+        续块的场合由调用方另签一个身份（`owner()`），它随即成为新的一行。
+        """
+        limit = max(1, int(owner.max_bytes) or storage_conf.index_max_bytes())
+        table = owner.__name__.lower()
+        latest: dict[str, object] | None = None
+        try:
+            for candidate in self.index.rows(table):
+                if str(candidate.get("in_hub") or "") == hub_name:
+                    latest = candidate
+        except (IndexNotFoundError, IndexSchemaError):  # pragma: no cover — 表由引擎补齐
+            return None
+        if latest is None or len(_slots_of_place(latest)) * self._slot_bytes >= limit:
+            return None
+        return ID.from_row(latest)
+
+    def _register_index(self, owner: type[Any], identity: ID, hub_name: str) -> None:
+        """把索引块自己也登记进库：**它也是块，用了 ID 就有表**。
+
+        这一步不是可选的：索引一多就"不知道它搁哪儿了"，故它必须进身份表。
+        """
+        table = owner.__name__.lower()
+        index = self.index
+        index.ensure_table(table)
+        index.register_hub(hub_name)
+        index.put(table, identity.to_row())
 
     def _register(self, block: Block, identity: ID) -> None:
         """把这个身份写进它那张表：**用了 ID 就有表，有了表就有一行**。
 
-        库里的行是 ID 的镜像：列全部照 `ID_FIELDS` 搬，位置段由引擎刚回填的值给出。
+        库里那一行的列由 `columns_of()` 现算：身份字段、位置段，再加正文历史那一列。
         """
         table = block.type_name
         index = self.index
         index.ensure_table(table)
         index.register_hub(identity.in_hub)
-        index.put(
-            table,
-            identity.to_record()
-            | {
-                "in_hub": identity.in_hub,
-                "in_hub_pack": identity.in_hub_pack,
-                "in_pack_slot": identity.in_pack_slot,
-            },
-        )
+        index.put(table, identity.to_row())
+
+    def _place(
+        self,
+        identity: ID,
+        hub_name: str,
+        attr_slots: tuple[int, ...],
+        body: SlotPlacement | None,
+    ) -> None:
+        """把这次的落点写进身份：**位置段是真源，改一次写一次**。
+
+        位置段只收**这个块自己的槽**：属性槽在前、正文槽在后。
+        **索引块里那条正表行占的槽不进这里**——它属于索引块，而"索引块自己搁哪儿"
+        写在它自己那张索引表里（`_register_index`）。混进来会把"前几格是属性槽"这条切分
+        搅乱，而且不报错。
+
+        载体名由 hub 当场取一份——一份块的槽落在同一个 hub，故一个名字就够。
+        """
+        found: list[list[int]] = []
+        if body is not None:
+            found.append(list(body.slots))
+        found.append(list(attr_slots))
+        identity.place_groups(hub=hub_name, pack=_first_pack(hub_name, self._root), groups=found)
+        identity.attr_in_pack_slot = list(canonical_segments(attr_slots))
+
+    def _hub_name(self, explicit: str | None) -> str:
+        """这一次写进哪个 hub。"""
+        return explicit or self._default_hub
+
+    def _open_hub(self, name: str) -> Hub:
+        """取一个可写的 hub；不在即建（建立 hub 是写路径的正当动作）。"""
+        return Hub.create(self._root / name, slot_bytes=self._slot_bytes, max_bytes=self._max_bytes)
+
+    def _open_pack(self, hub_name: str, pack_name: str) -> Pack:
+        """打开一个已有的载体（原地覆盖与读取走这一条；**不新建**）。"""
+        return Hub.open(self._root / hub_name, max_bytes=self._max_bytes).pack(pack_name)
+
+    def _append_slots(self, hub_name: str, kind: int, chunks: list[bytes]) -> tuple[int, ...]:
+        """把一格一格的内容追加到 hub 里，返回它占的槽号（升序）。"""
+        hub = self._open_hub(hub_name)
+        written: list[int] = []
+        for chunk in chunks:
+            _pack_name, slot = hub.append(kind, chunk)
+            written.append(slot)
+        return tuple(written)
+
+    def _row_of(self, identity: ID) -> dict[str, object] | None:
+        """按身份取库里那一行；没有那一行、或没有那张表即 ``None``（那是首次落盘）。"""
+        table = identity.name
+        if not table or not self.catalog_path.is_file():
+            return None
+        try:
+            return self.index.get(table, identity.value_uuid)
+        except (IndexNotFoundError, IndexSchemaError):
+            return None
 
     # ---- 索引：**由正表现算反表**，索引块只声明参数 ---- #
 
@@ -288,221 +560,128 @@ class Engine:
             self._indexes = IndexEngine(self)
         return self._indexes
 
-    def write_index_row(self, owner: type[Block], value_uuid: str, row: dict[str, object]) -> None:
-        """把一个块的**正表行**写进 `owner` 这类索引；**满了自动开下一块**。
-
-        **身份由索引块自己签发**：这个索引还没有块时，引擎造一个空的（`owner()`）——
-        那一下走的就是块的标准用法（`self.id = ID(self)` + `super().__init__(self.id)`），
-        故"有 ID 才有表、才进库"这条在索引上照样成立，不是魔法。
-
-        一条行一条记录，故写路径只有追加、没有改动——不会出"改漏一处"的事故。
-
-        Args:
-            owner: 索引块的类型（`AttrIndex` / `BodyIndex`）。
-            value_uuid: 这一行属于哪个块。
-            row: 字段名 → 值（一个字段一条记录）。
-        """
-        owner_name = owner.__name__.lower()
-        limit = max(1, int(owner.max_bytes) or storage_conf.index_max_bytes())
-        live = self._active_index(owner_name, limit)
-        for field, value in row.items():
-            if live is None:
-                live = owner().id  # **索引块自己签发身份**（那两行就在它的 __init__ 里）
-                self._register_index(owner_name, live)
-            hub = self._open_hub(live.in_hub or self._default_hub)
-            record = hub.append(
-                live, encode_index(owner_name, field, value, [value_uuid], [str(value)])
-            )
-            _place(live, hub.name, record.owner, record.span)
-            self._register_index(owner_name, live)
-
     def read_index_rows(self, owner: type[Any]) -> Iterator[dict[str, object]]:
-        """读出一类索引的**全部正表行**：行 = `{"value_uuid", "field", "value", "text"}`。
+        """读出一类索引的**全部正表行**。
 
-        **多块合并**：同一类索引可以有好几块（上个满了就开了下一个），并起来才是完整的正表。
-        同一个块同一字段若被写过多次，**最后写的那一条说了算**（块身份随载荷，改了字段就换了值）。
+        **多块合并**：同一类索引可以有好几块（上个满了就续了下一个），并起来才是完整的
+        正表。同一个块同一列写过多次时，**每一条都留着**——反表是"值 → 哪些块"，
+        块的身份与那一次写入的值都不同，故两行都得算数；去重按（列，值，块身份）三样来。
+
+        **指向已删块的那几行不算**：库里已经没有那一行了，它查不回任何东西。
+        这一层过滤不靠顺扫，靠库里那几行在不在。
         """
-        owner_name = owner.__name__.lower()
-        latest: dict[tuple[str, str], dict[str, object]] = {}
-        for record in self.index_records(owner_name):
-            parsed = decode_index(record.payload)
-            if parsed is None:  # pragma: no cover — index_records 已经筛过
+        alive = self._alive_uuids()
+        seen: set[tuple[str, str, str]] = set()
+        for row in self._index_block_rows(owner):
+            column = str(row.get(COLUMN_KEY) or "")
+            target = str(row.get("value_uuid") or "")
+            value = str(row.get("value") or "")
+            if target not in alive:
                 continue
-            _owner, field, text, blocks, _values = parsed
-            for target in blocks:
-                latest[(field, target)] = {
-                    "value_uuid": target,
-                    "field": field,
-                    "value": text,
-                    "text": text.partition(":")[2],
-                }
-        yield from latest.values()
-
-    def index_records(self, owner_name: str) -> Iterator[Record]:
-        """顺扫出某一类索引的全部记录（多块合并的取数口）。"""
-        for record in self._records():
-            parsed = decode_index(record.payload)
-            if parsed is not None and parsed[0] == owner_name:
-                yield record
-
-    def block_records(self) -> Iterator[Record]:
-        """顺扫出**块记录**：索引行与墓碑都不算。
-
-        块记录 = 带保留键（指向内容的两套凭证）的那些；索引行与墓碑各有自己的保留键。
-        数"盘上有几个块"该用它，而不是 `scan()`——后者把索引行也数进去了。
-        """
-        for record in self._records():
-            if decode_block(record.payload) is not None:
-                yield record
-
-    def _active_index(self, owner_name: str, limit: int) -> ID | None:
-        """挑一个**还有地方**的索引块：最后一条载荷没到上限就用它，否则返回 `None`（开新的）。"""
-        latest: Record | None = None
-        for record in self.index_records(owner_name):
-            latest = record
-        if latest is None or len(latest.payload) >= limit:
-            return None
-        return ID(
-            owner_name,
-            value_uuid=latest.identity.value_uuid,
-            birth_time=latest.identity.birth_time,
-        )
-
-    def _register_index(self, owner_name: str, identity: ID) -> None:
-        """把索引块自己也登记进库：**它也是块，用了 ID 就有表**。
-
-        这一步不是可选的：索引一多就"不知道它搁哪儿了"，故它必须进身份表。
-        """
-        index = self.index
-        index.ensure_table(owner_name)
-        index.register_hub(identity.in_hub)
-        index.put(
-            owner_name,
-            identity.to_record()
-            | {
-                "in_hub": identity.in_hub,
-                "in_hub_pack": identity.in_hub_pack,
-                "in_pack_slot": identity.in_pack_slot,
-            },
-        )
-
-    def _write_content(self, hub: Hub, identity: ID, payload: bytes) -> SlotRange:
-        """写一条内容记录：**同内容只存一份**——已经在盘上就不重复写。
-
-        去重判据是内容摘要（分配形态与内容无关，故不能拿它判重）。内容记录的身份名是
-        `body`：它是内容，不是块。
-        """
-        found = self._find_content(identity.value_hash)
-        if found is not None:
-            return found
-        return hub.append(identity, payload).span
-
-    def _find_content(self, content_hash: str) -> SlotRange | None:
-        """顺扫找一条内容记录，返回它的格区间；没有即 ``None``。
-
-        判据有两条：载荷摘要相等（那就是同一份内容），且它**不是块记录**（不带保留键）。
-        """
-        for record in self._records():
-            if decode_block(record.payload) is not None:
+            if (column, value, target) in seen:
                 continue
-            if digest(record.payload) == content_hash:
-                return record.span
-        return None
+            seen.add((column, value, target))
+            yield row
 
-    def _hub_name(self, explicit: str | None) -> str:
-        """这一次写进哪个 hub。"""
-        return explicit or self._default_hub
+    def _alive_uuids(self) -> frozenset[str]:
+        """库里还存在的身份（全部身份表的凭证并起来）。"""
+        found: set[str] = set()
+        try:
+            for table in self.index.tables():
+                if table in {HUB_TABLE, META_TABLE}:
+                    continue
+                for row in self.index.rows(table):
+                    uuid = str(row.get("value_uuid") or "")
+                    if uuid:
+                        found.add(uuid)
+        except (IndexNotFoundError, IndexSchemaError):  # pragma: no cover — 库刚开过
+            return frozenset()
+        return frozenset(found)
 
-    def _open_hub(self, name: str) -> Hub:
-        """取一个可写的 hub；不在即建（建立 hub 是写路径的正当动作）。
-
-        格长与封口线在这一处交给 hub：**写路径上只有这里定"这一份载体怎么建"**，
-        故"这次写入用的是哪组策略"不必回头猜。
-        """
-        return Hub.create(self._root / name, slot_bytes=self._slot_bytes, max_bytes=self._max_bytes)
-
-    def _write_hub(self, name: str) -> Hub:
-        """取一个**已存在**的 hub 用于追加（墓碑走这条）：同一组策略，但绝不新建。"""
-        return Hub.open(self._root / name, slot_bytes=self._slot_bytes, max_bytes=self._max_bytes)
+    def _index_block_rows(self, owner: type[Any]) -> Iterator[dict[str, object]]:
+        """逐个索引块读出它槽里的正表行：**它也是块，行落在载体的槽上**。"""
+        table = owner.__name__.lower()
+        try:
+            rows = tuple(self.index.rows(table))
+        except (IndexNotFoundError, IndexSchemaError):  # pragma: no cover — 表由引擎补齐
+            return
+        for row in rows:
+            hub_name = _hub_of(row)
+            pack_name = _pack_of(row)
+            if not hub_name or not pack_name:
+                continue
+            pack = self._open_pack(hub_name, pack_name)
+            for slot in _slots_of_place(row):
+                parsed = decode_index_row(pack.content_at(slot))
+                if parsed is not None:
+                    yield parsed
 
     # ---- 读取 ---- #
 
-    def _records(self) -> Iterator[Record]:
-        """顺扫全库的记录：**这是不依赖索引的取数口**。
+    def scan(self) -> Iterator[tuple[str, str, int, Slot]]:
+        """顺扫全库的槽：交出（hub 名，载体名，槽号，槽）。
 
-        记录自框定、身份随记录走，故一遍扫完即得"谁在哪、装了什么"。
-        数据库引擎与 GC 走的都是这一条路。
+        **它只服务诊断与回收**：读侧的一切定位都走索引库那一行给出的段列表。
         """
         for hub in find_hubs(self._root):
             for pack in hub.packs():
-                yield from pack.scan()
+                for number, slot in pack.scan():
+                    yield hub.name, pack.name, number, slot
 
-    def scan(self) -> Iterator[Record]:
-        """顺扫全库，交出记录（公开面）。"""
-        yield from self._records()
+    def scan_slots(self, identity: ID) -> list[Slot]:
+        """按身份读回它**全部槽的原文**（按槽号升序），供命令面交出原文。
 
-    def find_block(self, identity: ID) -> tuple[str, str, SlotRange, bytes] | None:
-        """按身份找**块记录**：返回（hub 名，载体名，格区间，载荷）；找不到即 ``None``。
-
-        **先问索引库**：身份表里有这一行，就照它记的坐标直接去读那一格——这正是
-        索引库存在的理由（省掉一遍顺扫）。库里没有（或还没有库）才回退到顺扫。
-
-        顺扫那一趟的判据落在三处：记录里的身份 = 递进来的那个、载荷带保留键
-        （它是块记录而不是内容）、且**没有被墓碑标记过**。
-
-        **取最后那一条，再判它死活**：同一个身份在盘上可能有好几条（每存一次追加一条），
-        "最后写的"才是它现在的样子。判据落在**那一条自己的**摘要上——若改成"往回找第一条
-        没被标记的"，删掉一次之后旧副本就会**复活**，而且不报错。
+        Raises:
+            ObjectNotFoundError: 库里没有这一行，或它指着的那一格读不出来。
         """
-        found = self._find_via_index(identity)
-        if found is not None:
-            return found
-        marked = self.tombstones()
-        latest: tuple[str, str, SlotRange, bytes] | None = None
-        for hub in find_hubs(self._root):
-            for pack in hub.packs():
-                for record in pack.scan():
-                    if record.identity.value_uuid != identity.value_uuid:
-                        continue
-                    if decode_block(record.payload) is None:
-                        continue
-                    latest = (hub.name, pack.name, record.span, record.payload)
-        if latest is None or digest(latest[3]) in marked:
-            return None
-        return latest
+        return self._read_slots(self._locate(identity))
 
-    def _find_via_index(self, identity: ID) -> tuple[str, str, SlotRange, bytes] | None:
-        """照索引库那一行记的坐标去读那一格；查不到、读不出来、或**读到的不是它**即 ``None``。
+    def index_row(self, identity: ID) -> dict[str, object]:
+        """按身份取库里那一行（身份、位置段、正文历史都在里面）。
 
-        **名字为空即查不了表**：身份的名字就是表名，没有名字就没有那一行可问。
-        这条路直接回退顺扫——拿空名字去问 sqlite 会报"没有这张表"，而"这个身份没有类型"
-        不是错误（按分配形态读回一个块正是它的用法）。
-
-        **读完要核对身份**：库里那一行是投影，坐标会随载体重写（GC、压实、人手改动）失效。
-        不核对就可能把"那一格现在住着别的记录"当成"就是这个块"，而且**不报错**。
-        记录头里本来就带着身份，故核对这一步不要额外的 IO。
+        Raises:
+            ObjectNotFoundError: 库里没有这一行。
         """
-        if not identity.name or not self.catalog_path.is_file():
-            return None
+        return self._locate(identity)
+
+    def _locate(self, identity: ID) -> dict[str, object]:
+        """按身份取库里那一行；**行不在即报错**，没有顺扫回退。
+
+        Raises:
+            ObjectNotFoundError: 库里没有这一行（或它还没有落点）。
+        """
+        row = self._row_of(identity)
+        if row is None or not _hub_of(row):
+            raise ObjectNotFoundError(f"对象不在: {identity.value_uuid}")
+        return row
+
+    def _read_slots(self, row: Mapping[str, object]) -> list[Slot]:
+        """照库里那一行的段列表逐格读出槽。
+
+        Raises:
+            ObjectNotFoundError: 载体不在，或那一格读不出来。
+        """
         try:
-            row = self.index.get(_table_of(identity), identity.value_uuid)
-        except (IndexNotFoundError, IndexSchemaError):
-            return None
-        # 位置段不全即"这一行还没落过盘"：那样也算没这一行，回退顺扫。
-        placed = None if row is None else _located(row)
-        if placed is None:
-            return None
-        hub_name, pack_name, span = placed
-        try:
-            record = Hub.open(self._root / hub_name).pack(pack_name).read(span)
-        except (HubNotFoundError, RecordFormatError, SlotError):
-            return None
-        if record.identity.value_uuid != identity.value_uuid:
-            return None
-        return hub_name, pack_name, span, record.payload
+            pack = self._open_pack(_hub_of(row), _pack_of(row))
+            return [pack.read(slot) for slot in _slots_of_place(dict(row))]
+        except (HubNotFoundError, SlotError) as error:
+            raise ObjectNotFoundError(f"对象不在: 槽读不出来（{_pack_of(row)}）") from error
+
+    def find_block(self, identity: ID) -> tuple[str, str, tuple[SlotSpan, ...], bytes]:
+        """按身份找**它的属性槽内容**：返回（hub 名，载体名，段列表，属性字节）。
+
+        **只走索引库这一条路**：库里没有那一行即显式报错，没有顺扫回退。
+
+        Raises:
+            ObjectNotFoundError: 库里没有这一行，或它指着的那一格读不出来。
+        """
+        row = self._locate(identity)
+        held = self._read_slots(row)
+        attrs = self._read_attrs(row, held)
+        return _hub_of(row), _pack_of(row), _segments_of_place(row), attrs
 
     def load(self, identity: ID, owner: type[Block] | None = None) -> Block:
-        """按身份读回一个块：**读字节、解码、组织成对象交还**。
+        """按身份读回一个块：**读属性槽与正文槽、解码、组织成对象交还**。
 
         Args:
             identity: 要读的那个身份。
@@ -510,100 +689,362 @@ class Engine:
                 不再按表名去猜——名字相同的类型满仓都是，猜会挑错那一个。
 
         Raises:
-            ObjectNotFoundError: 盘上没有这个身份。
+            ObjectNotFoundError: 库里没有这个身份，或它指着的那一格读不出来。
         """
-        found = self.find_block(identity)
-        if found is None:
-            raise ObjectNotFoundError(f"对象不在: {identity.value_uuid}")
-        hub_name, pack_name, span, payload = found
-        parsed = decode_block(payload)
-        if parsed is None:  # pragma: no cover — find_block 已经保证了它解得开
-            raise ObjectNotFoundError(f"这一条不是块记录: {identity.value_uuid}")
-        ref, attrs = parsed
-
-        block_id = ID(identity.name, value_uuid=identity.value_uuid, birth_time=identity.birth_time)
-        block_id.bind(payload)
-        _place(block_id, hub_name, pack_name, span)
-        block = _new_block(str(identity.name), block_id, owner=owner)
-        content = self._read_content(ref.value_hash)
-        index = 0
-        for name, entry in attrs.items():
-            if not isinstance(entry, dict) or "v" not in entry:
-                setattr(block, name, entry)
-                continue
-            if entry.get("body"):
-                # 内容字段：从内容记录里取值，值按声明写进实例（描述符收下裸值）。
-                value = content[index] if index < len(content) else entry["v"]
-                index += 1
-                setattr(block, name, value)
-                continue
-            setattr(block, name, entry["v"])
+        row = self._locate(identity)
+        held = self._read_slots(row)
+        attrs = decode_attrs(self._read_attrs(row, held))
+        block_id = _identity_from_row(identity, row)
+        block = _new_block(identity.name, block_id, owner=owner)
+        _fill(block, attrs, self._read_body(row, held))
         return block
 
-    def _read_content(self, content_hash: str) -> list[object]:
-        """按内容摘要读回内容记录里的值（给去重与反查用）。
+    def _read_attrs(self, row: Mapping[str, object], held: list[Slot]) -> bytes:
+        """把属性槽的内容逐格读出来并拼起来。"""
+        count = len(_attr_slots_of(row))
+        return b"".join(slot.content for slot in (held[len(held) - count :] if count else []))
 
-        Raises:
-            ObjectNotFoundError: 盘上没有这份内容（指针指向了不存在的字节）。
+    def _read_body(self, row: Mapping[str, object], held: list[Slot]) -> list[Slot]:
+        """正文槽那几格：**全部槽去掉属性那几格**。
+
+        按那一列记下的属性槽做差，而不是按"末尾几格"切——属性槽与它相邻的正文槽在位置段
+        里可能并成一段，那时"末尾几格"就切不准；做差永远成立。
         """
-        for record in self._records():
-            if decode_block(record.payload) is not None:
-                continue
-            if digest(record.payload) != content_hash:
-                continue
-            decoded = decode_content(record.payload)
-            return decoded if isinstance(decoded, list) else [decoded]
-        raise ObjectNotFoundError(f"内容不在: {content_hash}")
+        attrs = set(_attr_slots_of(row))
+        return [
+            slot
+            for slot, number in zip(held, _slots_of_place(dict(row)), strict=True)
+            if number not in attrs
+        ]
 
     # ---- 删除 ---- #
 
     def delete(self, identity: ID) -> bool:
-        """删掉一个块：返回是否确实删掉了一个。
+        """删掉一个块：**摘掉索引库那一行**，返回是否确实摘掉了一个。
 
-        载体是追加写，旧字节删不掉，故删除要落两处：
-
-        - **一条墓碑**（追加在载体末尾）：顺扫认得出"这一条不算数了"，空间由 GC 回收；
-        - **摘掉索引行**：库里那一行是给"按身份问路"用的，留着它就会把已删的块又读回来。
-
-        **墓碑必须落盘**：位置本来就是投影，只清内存里的位置等于没删。
+        **载体上不留标记**：槽上不记归属，删后的载体字节不再属于任何块，由回收收走。
         """
-        found = self.find_block(identity)
-        if found is None:
+        if self._row_of(identity) is None:
             return False
-        hub_name, _pack, _span, payload = found
-        tombstone = ID.unbound(name=TOMBSTONE_NAME)
-        self._write_hub(hub_name).append(tombstone, encode_tombstone(digest(payload)))
-        self._forget(identity)
-        _clear_place(identity)
+        try:
+            dropped = self.index.drop_row(_table_of(identity), identity.value_uuid)
+        except (IndexNotFoundError, IndexSchemaError):
+            return False
+        if not dropped:
+            return False
+        identity.clear_place()
         self._notify(OBJECT_DELETED, identity)
         return True
-
-    def _forget(self, identity: ID) -> None:
-        """摘掉库里的身份行：**只摘不删载体上的字节**，那由 GC 回收。"""
-        try:
-            self.index.drop_row(_table_of(identity), identity.value_uuid)
-        except (IndexNotFoundError, IndexSchemaError):
-            return
-        identity.in_hub = ""
-        identity.in_hub_pack = ""
-        identity.in_pack_slot = (0, 0)
-
-    def tombstones(self) -> frozenset[str]:
-        """顺扫全部墓碑：**被删掉的那些载荷摘要**。
-
-        块身份随载荷，故墓碑认的是载荷摘要而不是分配形态——同一份载荷只会有一份
-        块记录，记摘要即够。
-        """
-        marked: set[str] = set()
-        for record in self._records():
-            victim = decode_tombstone(record.payload)
-            if victim is not None:
-                marked.add(victim)
-        return frozenset(marked)
 
     def __repr__(self) -> str:
         """诊断用：库根与默认 hub，不读盘。"""
         return f"Engine(root={self._root!s}, hub={self._default_hub!r})"
+
+
+# ---- 槽内容的切分与拼装 ---- #
+
+
+def _split(content: bytes, room: int) -> list[bytes]:
+    """把一段字节按格内的可用长度切开；空内容切出空序列（不凭空占一格）。"""
+    if not content:
+        return []
+    return [content[start : start + room] for start in range(0, len(content), room)]
+
+
+def _encode_body(body: list[object]) -> bytes:
+    """把一份正文编成 canonical CBOR：**整份内容一个摘要**，分片只是它的切片。
+
+    带一层映射是为了让正文能被"按值判同"：canonical 编码保证同一份值恒得同一段字节。
+    """
+    return encode_attrs({BODY_KEY: body})
+
+
+def _decode_body(fragments: Iterable[bytes]) -> list[object]:
+    """把正文分片拼回一份正文：分片顺序即逻辑顺序。"""
+    joined = b"".join(fragments)
+    if not joined:
+        return []
+    values = decode_attrs(joined).get(BODY_KEY)
+    return list(values) if isinstance(values, list) else [values]
+
+
+def content_digest_of_body(body: list[object]) -> str:
+    """一份正文的摘要：**写入去重与 `BodyIndex` 共用的唯一口径**。"""
+    return digest(_encode_body(body))
+
+
+def content_digest(block: Block) -> str | None:
+    """一个块的**正文摘要**；它没有正文字段时是 ``None``。
+
+    **这是 `BodyIndex` 与正文槽共用的唯一口径**：索引那边按它反查，引擎这边按它写槽——
+    两处若各算一份，按正文反查就永远查不到东西，而且**不报错**。
+    """
+    body = _body_of(block, _fields_of(block))
+    return content_digest_of_body(body) if body else None
+
+
+# ---- 库里那一行的读法 ---- #
+
+
+def _attr_slots_of(row: Mapping[str, object] | None) -> tuple[int, ...]:
+    """属性槽那几格：**库里那一列单独记下的段列表**。
+
+    这一列必须单独记：属性槽与它相邻的正文槽在位置段里会并成一段，那时"末尾几格"
+    切不准。故属性槽自己那一段另写一列，切分在任何时候都成立——包括回收搬动之后。
+    """
+    if row is None:
+        return ()
+    return _slots_of(parse_segments(str(row.get(ATTR_SLOT_FIELD) or "")))
+
+
+def _body_slots_of(row: Mapping[str, object] | None) -> tuple[int, ...]:
+    """正文槽那几格：位置段覆盖的全部槽去掉属性那几格（**按格号做差**）。"""
+    if row is None:
+        return ()
+    attrs = set(_attr_slots_of(row))
+    return tuple(slot for slot in _slots_of_place(dict(row)) if slot not in attrs)
+
+
+def _hub_of(row: Mapping[str, object] | None) -> str:
+    """库里那一行的 hub 名。"""
+    return "" if row is None else str(row.get("in_hub") or "")
+
+
+def _pack_of(row: Mapping[str, object] | None) -> str:
+    """库里那一行的载体名。"""
+    return "" if row is None else str(row.get("in_hub_pack") or "")
+
+
+def _segments_of_place(row: Mapping[str, object] | None) -> tuple[SlotSpan, ...]:
+    """库里那一行的位置段（规范形）。"""
+    return () if row is None else parse_segments(str(row.get("in_pack_slot") or ""))
+
+
+def _slots_of_place(row: Mapping[str, object]) -> tuple[int, ...]:
+    """库里那一行覆盖的全部槽号（升序）。"""
+    return _slots_of(_segments_of_place(row))
+
+
+def _slots_of(spans: Iterable[SlotSpan]) -> tuple[int, ...]:
+    """把段列表展开成一串槽号，**次序照段列表**。
+
+    **不归位**：位置段的次序有意义——属性槽排在前几格、正文槽排在其后。归位会在
+    "正文槽复用了别的块的、格号比属性槽小"这种场合把两者翻过来，而**不报错**。
+    要规范形的地方（回收、诊断）另行调 :func:`canonical_segments`。
+    """
+    found: list[int] = []
+    for item in spans:
+        if isinstance(item, int):
+            found.append(item)
+            continue
+        found.extend(range(item[0], item[1] + 1))
+    return tuple(found)
+
+
+def _range_of(slots: Iterable[int]) -> SlotSpan:
+    """把一串槽号折成一个段（它们本来就是连续的那一段）。"""
+    found = list(slots)
+    return found[0] if len(found) == 1 else (found[0], found[-1])
+
+
+def _first_pack(hub_name: str, root: Path) -> str:
+    """一个 hub 里的载体名。
+
+    **一份块的槽落在同一个 hub**，故名字取哪一个都一样；取排序后的第一个，
+    使同一个 hub 里的位置段恒得同一个名字。
+    """
+    hub = Hub.open(root / hub_name)
+    names = hub.pack_names()
+    return names[0] if names else ""
+
+
+def _trim(history: list[tuple[SlotSpan, ...]], *, depth: int) -> list[tuple[SlotSpan, ...]]:
+    """按保留世代数截取历史：**留下最近的那几代**。
+
+    世代数由配置 `body.history.depth` 给，不得写成常数。保留范围之内的世代都算活口，
+    超出的最老世代可被回收。
+    """
+    kept = keep_generations(history, depth=depth)
+    unique: list[tuple[SlotSpan, ...]] = []
+    for generation in kept:
+        if generation and generation not in unique:
+            unique.append(generation)
+    return unique
+
+
+def _history_depth() -> int:
+    """当前正文保留的世代数（配置面给）。"""
+    return storage_conf.body_history_depth()
+
+
+def _identity_from_row(identity: ID, row: Mapping[str, object]) -> ID:
+    """由库里那一行还原块身份：**位置段与正文历史也一并回填**。"""
+    restored = ID(
+        identity.name,
+        value_uuid=identity.value_uuid,
+        birth_time=_int_or_zero(row.get("birth_time")),
+    )
+    restored.in_hub = _hub_of(row)
+    restored.in_hub_pack = _pack_of(row)
+    restored.in_pack_slot = list(_segments_of_place(row))
+    restored.attr_in_pack_slot = list(parse_segments(str(row.get(ATTR_SLOT_FIELD) or "")))
+    restored.body_history = [
+        tuple(generation) for generation in parse_body_history(str(row.get("body_history") or ""))
+    ]
+    return restored
+
+
+def _int_or_zero(value: object) -> int:
+    """把整数字段读回：缺失取 0，形态非法即抛（不静默吞掉脏值）。"""
+    if value is None or value == "":
+        return 0
+    try:
+        return int(str(value))
+    except ValueError as error:
+        raise ObjectNotFoundError(f"库里那一行的整数字段非法: {value!r}") from error
+
+
+# ---- 字段分类与装载 ---- #
+
+
+def _fill(block: Block, attrs: dict[str, object], body_slots: list[Slot]) -> None:
+    """把属性与正文填进块对象：正文的字段按**声明次序**取正文里那一项。"""
+    values = _decode_body([slot.content for slot in body_slots])
+    cursor = 0
+    for name, entry in attrs.items():
+        if isinstance(entry, dict) and entry.get(BODY_MARK):
+            value = values[cursor] if cursor < len(values) else None
+            cursor += 1
+            setattr(block, name, value)
+            continue
+        if not isinstance(entry, dict) or VALUE_KEY not in entry:
+            setattr(block, name, entry)
+            continue
+        setattr(block, name, entry[VALUE_KEY])
+
+
+def _fields_of(block: Block) -> dict[str, object]:
+    """把一个块的**用户字段**读出来：**以类体声明的为准，再并上实例上多出来的**。
+
+    为什么不能只看 `vars()`：**没显式赋过值的声明字段不在 `vars()` 里**。
+    `class Counted(Block): count: int = Attr(0)` 造出来只带默认值，此时 `vars()` 只有
+    `id`——只看它，这个字段就既不落盘也不进索引，而且**不报错**（读回来像是"从没写过"）。
+    故声明过的字段一律取出来（取值即触发描述符给出那份默认值）。
+
+    顺序：先按类体声明的书写顺序，再补实例上多出来的（那些是裸赋值，照样落盘）。
+    """
+    declared = kinds_of(type(block))
+    fields: dict[str, object] = {}
+    for name in declared:
+        fields[name] = getattr(block, name, None)
+    store = getattr(block, "__dict__", None)
+    if isinstance(store, dict):
+        for name, value in store.items():
+            if name != "id" and not name.startswith("_"):
+                fields.setdefault(name, value)
+    else:
+        for cls in type(block).__mro__:
+            for name in getattr(cls, "__slots__", ()):
+                if name != "id" and not name.startswith("_"):
+                    fields.setdefault(name, getattr(block, name, None))
+    return fields
+
+
+def _body_of(block: Block, fields: dict[str, object]) -> list[object]:
+    """正文槽里装的东西：**落点为正文的那几个字段值**，按字段次序。
+
+    正文的身份是**它的值**（字段名只是装载方式），故同值恒得同一个摘要：同一份正文
+    挂在两个不同名字的字段上，也只存一份。
+    """
+    return [
+        unwrap(value) for name, value in fields.items() if kind_of(type(block), name) == BODY_KIND
+    ]
+
+
+def _attrs_of(block: Block, fields: dict[str, object]) -> dict[str, object]:
+    """属性槽的内容：**除身份与正文以外的全部字段**，每个字段装成值加它的落点。
+
+    每个字段装成一个映射 ``{"v": 值}``；正文字段只留一个标记 ``{"body": true}``，
+    **值不在属性槽里**（它在正文槽里）——这样属性槽里就没有正文的字节，两者各归各的：
+
+    - **值在这里**：属性槽因此自足——顺读即得全部属性值；
+    - **落点也在这里**：赋值一步就会覆盖 `Body(...)` 的声明，故落点必须与值一起存下来，
+      否则回读时分不清哪些字段的内容在正文槽里。
+    """
+    attrs: dict[str, object] = {}
+    for name, value in fields.items():
+        if kind_of(type(block), name) == BODY_KIND:
+            attrs[name] = {BODY_MARK: True}
+            continue
+        attrs[name] = {VALUE_KEY: unwrap(value)}
+    return attrs
+
+
+def _new_block(table: str, identity: ID, owner: type[Block] | None = None) -> Block:
+    """造一个空块：**有 owner 就用它**；没有才按表名去找注册过的类。
+
+    理由：**名字相同的类型满仓都是**（测试里两个文件各有一个 `NoteData`），
+    按表名挑会挑到别处那一个——读回来的对象不是调用方那个类，`isinstance` 当场不成立。
+
+    按表名找是"没带类来"时的兜底；都找不到就用一个通用块——那是"不认识的类型降级读回"
+    那条路：属性照旧齐全，只是没有那个类的行为方法。
+    """
+    if owner is not None and owner.__name__.lower() == table:
+        return owner(identity)
+    for cls in _known_tables().get(table, ()):
+        try:
+            return cls(identity)
+        except TypeError:  # pragma: no cover — 签名对不上的类跳过，继续找
+            continue
+    generic: type[Block] = type(table.capitalize(), (Block,), {})
+    return generic(identity)
+
+
+def known_tables() -> tuple[str, ...]:
+    """进程内已知的块类型各自的表名（按名字排序）。"""
+    return tuple(sorted(_known_tables()))
+
+
+def _index_owners() -> tuple[type[Any], ...]:
+    """进程内已知的索引块类型（惰性引：`index/` 引本模块，故不能反过来在顶部引它）。"""
+    from .index.index import owners  # noqa: PLC0415 — 打断环形引用
+
+    return owners()
+
+
+def _index_tables() -> tuple[str, ...]:
+    """索引块各自的表名。"""
+    return tuple(owner.__name__.lower() for owner in _index_owners())
+
+
+def _owner(manages: str) -> type[Any]:
+    """管某一类落点的索引块类型。"""
+    for owner in _index_owners():
+        if owner.__dict__.get("manages") == manages:
+            return owner
+    raise LookupError(f"没有索引块管这一类落点: {manages!r}")  # pragma: no cover — 索引在册
+
+
+def _known_tables() -> dict[str, tuple[type[Block], ...]]:
+    """进程内已知的块类型：按表名分组。"""
+    found: dict[str, list[type[Block]]] = {}
+    for cls in _subclasses(Block):
+        found.setdefault(cls.__name__.lower(), []).append(cls)
+    return {name: tuple(classes) for name, classes in found.items()}
+
+
+def _subclasses(root: type[Block]) -> list[type[Block]]:
+    """递归收集全部子类（含隔代）。"""
+    found: list[type[Block]] = []
+    for child in root.__subclasses__():
+        found.append(child)
+        found.extend(_subclasses(child))
+    return found
+
+
+def _table_of(identity: ID) -> str:
+    """这个身份该落在哪张表：**表名就是它的名字**（由类型推出来）。"""
+    return str(identity.name)
 
 
 class Block:
@@ -624,9 +1065,9 @@ class Block:
     max_bytes: ClassVar[int] = 0
     """这个块的**体积上限**（字节）；`0` 即用配置面的默认（`index.max.byte`）。
 
-    它只管"什么时候该换下一个块"——引擎按它决定续块（索引块就靠这一条自动一块接一块，
-    块自己不必写一行续块逻辑）。**它是配置性的参数，不是写死的格式常量**：
-    故声明在这里的是"这个类型要比默认更宽还是更窄"，默认值本身在 `storage/conf.py`。
+    它只管"什么时候该续下一个块"——引擎按它决定续块（索引块就靠这一条自动一块接一块）。
+    **它是配置性的参数，不是写死的格式常量**：故声明在这里的是"这个类型要比默认更宽
+    还是更窄"，默认值本身在 `storage/conf.py`。
     """
 
     @classmethod
@@ -634,7 +1075,7 @@ class Block:
         """这个块在**某类索引**里正表的那一行：字段名 → 值。
 
         基座上默认**没有**（空映射）：普通块不进任何索引。索引块把它接上——
-        `AttrIndex` 交出 `Attr(...)` 声明的字段，`BodyIndex` 交出内容地点。
+        `AttrIndex` 交出 `Attr(...)` 声明的字段（正文那一列由引擎另行给出，它的值要算）。
         声明放在这一层，是因为"这个块能按什么被查"本来就是块自己的性质。
         """
         del block
@@ -660,8 +1101,7 @@ class Block:
         """这个块的表名，**只由类的名字算出来**。
 
         `class NoteData` → `notedata`。没有第二个口子：表名不由声明给出，由类名算出——
-        故这里也不提供任何 `__table__` 一类的覆盖。（身份的名字由 `ID(self)` 解析出来，
-        与这里同一个来源。）
+        故这里也不提供任何 `__table__` 一类的覆盖。
         """
         return type(self).__name__.lower()
 
@@ -675,12 +1115,12 @@ class Block:
         return kinds_of(cls)
 
     def save(self, *, hub: str | None = None) -> ID:
-        """存进去：引擎分配 hub / pack / slot，回填摘要与位置，返回块身份。"""
+        """存进去：引擎分配 hub / 载体 / 槽，回填位置段，返回块身份。"""
         return engine().save(self, hub=hub)
 
     @classmethod
     def fetch(cls, identity: ID) -> Self:
-        """按身份取回来：引擎读字节、组织成块对象交还。
+        """按身份取回来：引擎读槽、组织成块对象交还。
 
         取回来的字段是**裸值**：声明 `Attr("标题")` 的字段，`block.title` 是 `"标题"`
         而不是声明对象——声明管的是落点，不管取值。
@@ -694,9 +1134,12 @@ class Block:
     def find(cls, identity: ID) -> Self | None:
         """按身份找：没有即 ``None``（与 :meth:`fetch` 的分别只在要不要抛错）。"""
         current = current_engine()
-        if current is None or current.find_block(identity) is None:
+        if current is None:
             return None
-        return cast("Self", current.load(identity, owner=cls))
+        try:
+            return cast("Self", current.load(identity, owner=cls))
+        except ObjectNotFoundError:
+            return None
 
     def delete(self) -> bool:
         """摘掉这个块：返回是否确实摘掉了一个。"""
@@ -752,190 +1195,17 @@ def engine() -> Engine:
     return _BOUND
 
 
-# ---- 内部：字段分类、位置回填、类查找 ---- #
-
-
-def _fields_of(block: Block) -> dict[str, object]:
-    """把一个块的**用户字段**读出来：**以类体声明的为准，再并上实例上多出来的**。
-
-    为什么不能只看 `vars()`：**没显式赋过值的声明字段不在 `vars()` 里**。
-    `class Counted(Block): count: int = Attr(0)` 造出来只带默认值，此时 `vars()` 只有
-    `id`——只看它，这个字段就既不落盘也不进索引，而且**不报错**（读回来像是"从没写过"）。
-    故声明过的字段一律取出来（取值即触发描述符给出那份默认值）。
-
-    顺序：先按类体声明的书写顺序，再补实例上多出来的（那些是裸赋值，照样落盘）。
-    """
-    declared = kinds_of(type(block))
-    fields: dict[str, object] = {}
-    for name in declared:
-        fields[name] = getattr(block, name, None)
-    store = getattr(block, "__dict__", None)
-    if isinstance(store, dict):
-        for name, value in store.items():
-            if name != "id" and not name.startswith("_"):
-                fields.setdefault(name, value)
-    else:
-        for cls in type(block).__mro__:
-            for name in getattr(cls, "__slots__", ()):
-                if name != "id" and not name.startswith("_"):
-                    fields.setdefault(name, getattr(block, name, None))
-    return fields
-
-
-def _content_of(block: Block, fields: dict[str, object]) -> list[object]:
-    """内容记录里装的东西：**落点为内容的那几个字段值**，按字段次序。
-
-    内容的身份是**它的值**（字段名只是装载方式），故同值恒得同一个摘要：同一份正文
-    挂在两个不同名字的字段上，也只存一份。
-    """
-    return [
-        unwrap(value) for name, value in fields.items() if kind_of(type(block), name) == BODY_KIND
-    ]
-
-
-def content_digest(block: Block) -> str | None:
-    """一个块的**内容地点**（摘要）；它没有内容字段时是 ``None``。
-
-    **这是内容索引与内容记录共用的唯一口径**：索引那边按它反查，引擎这边按它写记录——
-    两处若各算一份，按内容反查就永远查不到东西，而且**不报错**。
-    """
-    values = _content_of(block, _fields_of(block))
-    if not values:
-        return None
-    return digest(encode_content(values))
-
-
-def _attrs_of(block: Block, fields: dict[str, object]) -> dict[str, object]:
-    """块记录的属性：除身份以外的全部字段，**每个字段一小段：值 + 它的落点**。
-
-    每个字段装成一个两元映射 ``{"v": 值, "body": true}``（`body` 只在内容字段上出现）：
-
-    - **值在这里**：块记录因此自足——顺读即得全部属性值；
-    - **落点也在这里**：赋值一步就会覆盖 `Body(...)` 的声明，故落点必须与值一起存下来，
-      否则回读时分不清哪些字段的内容在内容记录里。
-
-    裸赋值与 `Attr(...)` 在这里同样是属性（`Attr` 与它的分别只在反表那一边）。
-    """
-    attrs: dict[str, object] = {}
-    for name, value in fields.items():
-        if kind_of(type(block), name) == BODY_KIND:
-            attrs[name] = {"v": unwrap(value), "body": True}
-            continue
-        attrs[name] = {"v": unwrap(value)}
-    return attrs
-
-
-def _table_of(identity: ID) -> str:
-    """这个身份该落在哪张表：**表名就是它的名字**（由类型推出来）。
-
-    名字为空即"这个身份没有类型"——那它查不了表，:meth:`Engine.find_block` 回退顺扫。
-    """
-    return str(identity.name)
-
-
-def _located(row: dict[str, object]) -> tuple[str, str, SlotRange] | None:
-    """从索引行里取出物理坐标；位置段不全即 ``None``（那这一行还没落过盘）。"""
-    hub = str(row.get("in_hub") or "")
-    pack = str(row.get("in_hub_pack") or "")
-    span = _span_of(row.get("in_pack_slot"))
-    if not hub or not pack or span is None:
-        return None
-    return hub, pack, span
-
-
-def _span_of(value: object) -> SlotRange | None:
-    """把索引里那对格号读回来（落盘时写成 ``"头:末"``）。"""
-    if isinstance(value, tuple | list) and len(value) == 2:
-        return SlotRange(int(value[0]), int(value[1]))
-    if not isinstance(value, str) or ":" not in value:
-        return None
-    head, _, tail = value.partition(":")
-    try:
-        return SlotRange(int(head), int(tail))
-    except ValueError:
-        return None
-
-
-def _place(identity: ID, hub: str, pack: str, span: SlotRange) -> None:
-    """把落盘后的物理坐标回填到身份上：**这是位置段的唯一写入口**。
-
-    位置段是投影：记录里不带它，扫到它时位置由扫描给出。
-    """
-    identity.in_hub = hub
-    identity.in_hub_pack = pack
-    identity.in_pack_slot = (span.first, span.last)
-
-
-def _clear_place(identity: ID) -> None:
-    """摘掉位置段（删除之后它不该再指着一个已失效的坐标）。"""
-    identity.in_hub = ""
-    identity.in_hub_pack = ""
-    identity.in_pack_slot = (0, 0)
-
-
-def _new_block(table: str, identity: ID, owner: type[Block] | None = None) -> Block:
-    """造一个空块：**有 owner 就用它**；没有才按表名去找注册过的类。
-
-    为什么要 owner：**名字相同的类型满仓都是**（测试里两个文件各有一个 `NoteData`），
-    按表名挑会挑到别处那一个——读回来的对象不是调用方那个类，`isinstance` 当场不成立。
-    调用方（`NoteData.fetch()`）本来就知道自己是哪个类，故以它为准。
-
-    按表名找是"没带类来"时的兜底；都找不到就用一个通用块——那是"不认识的类型降级读回"
-    那条路：属性照旧齐全，只是没有那个类的行为方法。
-    """
-    if owner is not None and owner.__name__.lower() == table:
-        return owner(identity)
-    for cls in _known_tables().get(table, ()):
-        try:
-            return cls(identity)
-        except TypeError:  # pragma: no cover — 签名对不上的类跳过，继续找
-            continue
-    generic: type[Block] = type(table.capitalize(), (Block,), {})
-    return generic(identity)
-
-
-def known_tables() -> tuple[str, ...]:
-    """进程内已知的块类型各自的表名（按名字排序）。"""
-    return tuple(sorted(_known_tables()))
-
-
-def _index_owners() -> tuple[type[Any], ...]:
-    """进程内已知的索引块类型（惰性引：`index/` 引本模块，故不能反过来在顶部引它）。"""
-    from .index.index import owners  # noqa: PLC0415 — 打断环形引用
-
-    return owners()
-
-
-def _index_tables() -> tuple[str, ...]:
-    """索引块各自的表名。"""
-    return tuple(owner.__name__.lower() for owner in _index_owners())
-
-
-def _known_tables() -> dict[str, tuple[type[Block], ...]]:
-    """进程内已知的块类型：按表名分组。"""
-    found: dict[str, list[type[Block]]] = {}
-    for cls in _subclasses(Block):
-        found.setdefault(cls.__name__.lower(), []).append(cls)
-    return {name: tuple(classes) for name, classes in found.items()}
-
-
-def _subclasses(root: type[Block]) -> list[type[Block]]:
-    """递归收集全部子类。"""
-    found: list[type[Block]] = []
-    for child in root.__subclasses__():
-        found.append(child)
-        found.extend(_subclasses(child))
-    return found
-
-
 __all__ = [
-    "BODY_NAME",
+    "BODY_KEY",
     "CATALOG_FILENAME",
     "SOURCE",
-    "TOMBSTONE_NAME",
     "Block",
     "Engine",
+    "SlotPlacement",
     "bind",
+    "content_digest",
+    "content_digest_of_body",
     "current_engine",
     "engine",
+    "known_tables",
 ]

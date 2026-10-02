@@ -46,7 +46,7 @@
 
 ## 存储引擎
 
-四层各管下一层：格算术、载体、hub、块 ↔ 槽。一个块分属性槽与正文槽，
+四层各管下一层：段算术与身份（`core.storage.db.id`）、载体、hub、块 ↔ 槽。一个块分属性槽与正文槽，
 落盘后发事件，删除即摘掉索引库那一行。
 
 ::: core.storage
@@ -56,8 +56,6 @@
 ::: core.storage.engine
 
 ::: core.storage.types
-
-::: core.storage.slot
 
 ::: core.storage.pack
 

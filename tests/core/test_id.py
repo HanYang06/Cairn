@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""ID 契约：两套凭证、**局部可变**、落盘子集。
+"""ID 契约：名字与凭证、局部可变、**段列表**、正文历史、库里那一行。
 
-本文件钉五件事：
+本文件钉六件事：
 
-- **两套凭证并存**：分配形态（签发时定、去重无效）与摘要形态（由内容算、比较无效）；
-- **可变是局部的**：`value_uuid` / `birth_time` 创建即锁死，`value_hash` 只由 `bind` 写一次，
-  而位置段可改（它是投影，压实搬移后重算即得）；
+- **身份只有一条来源**：`value_uuid` 由签发分配，与内容无关；摘要形态不属于身份；
+- **可变是局部的**：`value_uuid` / `birth_time` / `name` 创建即锁死，位置段可改；
 - **名字由持有者推出**：`ID(self)` 是最省事的写法，且**只记名字、不持有对象**；
-- **未绑定内容不伪造摘要**：空串就是"还没绑"，读一条缺摘要的记录即报错；
-- **落盘子集**：记录头只带推不出来的那几项，位置段不带（扫到它时位置已知）。
+- **段列表的规范形四条**：升序、不重叠、相邻合并、段数最少；
+- **编码与解析各只有一套**：`pack_segments` 与 `parse_segments`；
+- **库里的行 = 身份字段加正文历史与属性槽格数两列**。
 """
 
 from __future__ import annotations
@@ -21,9 +21,22 @@ from hashlib import sha256
 import pytest
 
 from core.exc import InvalidIdError
-from core.storage.db.id import EMPTY_HASH, ID, ID_FIELDS, digest, new_uuid
-
-_SAMPLE = "巨石堆".encode()
+from core.storage.db.id import (
+    ATTR_SLOT_FIELD,
+    BODY_HISTORY_FIELD,
+    ID,
+    ID_FIELDS,
+    SlotSpan,
+    canonical_segments,
+    digest,
+    encode_body_history,
+    keep_generations,
+    new_uuid,
+    pack_segments,
+    parse_body_history,
+    parse_segments,
+    segments_of,
+)
 
 
 class Notedata:
@@ -39,8 +52,6 @@ def test_a_new_id_has_an_allocation_credential_and_a_birth_time():
 
     assert identity.value_uuid
     assert identity.birth_time > 0
-    assert identity.value_hash == EMPTY_HASH, "还没绑定内容，摘要就是空的"
-    assert not identity.bound
     assert not identity.located
 
 
@@ -49,7 +60,27 @@ def test_two_issued_ids_never_collide():
     first, second = ID(), ID()
 
     assert first.value_uuid != second.value_uuid
-    assert first.value_hash == second.value_hash == EMPTY_HASH
+
+
+def test_the_digest_algorithm_is_sha256():
+    """摘要口径就这一条，测试直接对算法：换算法必须是有意的。"""
+    assert digest(b"cairn") == sha256(b"cairn").hexdigest()
+
+
+def test_new_uuid_keeps_issuing_distinct_values():
+    """签发算法收在一处：换实现只动 `new_uuid` 一个函数。"""
+    assert new_uuid() != new_uuid()
+
+
+@pytest.mark.parametrize(
+    "gone", ["value_hash", "EMPTY_HASH", "of", "bind", "bound", "same_content"]
+)
+def test_the_digest_form_is_no_longer_part_of_identity(gone: str):
+    """**摘要形态不属于身份**（2026-10-02 裁定）：随它退役的成员一个都不在。"""
+    import core.storage.db.id as module  # noqa: PLC0415 — 用例按名字逐个取证
+
+    assert not hasattr(ID, gone)
+    assert not hasattr(module, gone)
 
 
 # ---- 名字由持有者推出 ----
@@ -77,7 +108,7 @@ def test_the_holder_is_not_kept():
     assert identity.name == "notedata", "名字已经解析出来了，不靠对象"
 
 
-# ---- 局部可变：三项锁死 ----
+# ---- 局部可变 ----
 
 
 def test_the_allocation_credential_is_locked_at_creation():
@@ -104,17 +135,6 @@ def test_the_name_is_locked_once_resolved():
         identity.name = "别的"  # type: ignore[misc]
 
 
-def test_the_position_segment_stays_writable():
-    """位置段**可写**：它是投影，写入后回填，压实搬移后重算即得。"""
-    identity = ID.of(_SAMPLE)
-    identity.in_hub = "main"
-    identity.in_hub_pack = "abc"
-    identity.in_pack_slot = (3, 4)
-
-    assert identity.located
-    assert identity.in_pack_slot == (3, 4)
-
-
 def test_an_id_holds_no_unexpected_attributes():
     """字段就是那几个：`__slots__` 拦住"另行挂一个状态上去"。"""
     identity = ID()
@@ -123,136 +143,160 @@ def test_an_id_holds_no_unexpected_attributes():
         identity.something_else = 1  # type: ignore[attr-defined]
 
 
-# ---- 内容绑定 ----
+def test_the_position_segment_stays_writable():
+    """位置段**可写**：它是真源，写入后由库记下，回收搬移后重写。"""
+    identity = ID()
+
+    identity.place(hub="main", pack="abc", spans=[3, 4])
+
+    assert identity.located
+    assert identity.in_pack_slot == [(3, 4)]
+    assert identity.slots == (3, 4)
 
 
-def test_signing_by_content_pins_the_digest():
-    """按内容签发：同内容恒得同一个摘要，故去重成立。"""
-    first = ID.of(_SAMPLE)
-    second = ID.of(_SAMPLE)
+def test_clearing_the_place_also_drops_the_history():
+    """删除之后位置段与正文历史都不该再指着已失效的坐标。"""
+    identity = ID()
+    identity.place(hub="main", pack="abc", spans=[1])
+    identity.body_history = [((5, 6),)]
 
-    assert first.value_hash == digest(_SAMPLE)
-    assert first.value_hash == second.value_hash
-    assert first.value_uuid != second.value_uuid, "分配形态仍各不相同"
+    identity.clear_place()
 
-
-def test_binding_later_fills_the_digest_of_an_unbound_id():
-    """先建对象、内容后定：绑定一次即补上摘要。"""
-    identity = ID.unbound()
-
-    assert identity.bind(_SAMPLE) == digest(_SAMPLE)
-    assert identity.bound
-    assert identity.same_content(ID.of(_SAMPLE))
+    assert not identity.located
+    assert identity.in_pack_slot == []
+    assert identity.body_history == []
+    assert identity.attr_slots == 0
 
 
-def test_the_digest_is_locked_after_it_is_bound():
-    """摘要写定即不可改：`bind` 是唯一通路，属性本身只读。"""
-    identity = ID.of(_SAMPLE)
-
-    with pytest.raises(AttributeError):
-        identity.value_hash = "改"  # type: ignore[misc]
+# ---- 段列表：规范形四条 ----
 
 
-def test_binding_the_same_content_twice_is_harmless():
-    """重复绑定同一份内容不算错：它是同一件事的重放。"""
-    identity = ID.of(_SAMPLE)
-
-    assert identity.bind(_SAMPLE) == digest(_SAMPLE)
-
-
-def test_binding_a_different_content_is_refused():
-    """一份身份不许指两份内容：那是身份被用错了，当场报错而不是静默覆盖。"""
-    identity = ID.of(_SAMPLE)
-
-    with pytest.raises(InvalidIdError, match="别的内容"):
-        identity.bind(b"another")
+def test_segments_are_sorted_and_merged():
+    """规范形：**升序、不重叠、相邻合并、段数最少**。"""
+    assert canonical_segments([5, 3, 4, 1]) == (1, (3, 5))
+    assert canonical_segments([(3, 3)]) == (3,), "单格与区间是同一格，段数取最少"
+    assert canonical_segments([(1, 2), (3, 4)]) == ((1, 4),), "相邻两段并成一段"
+    assert canonical_segments([1, 5]) == (1, 5), "不相邻就不并"
 
 
-def test_same_content_compares_by_digest_only():
-    """ "是不是同一份内容"只比摘要：分配形态不同不影响。"""
-    first = ID.of(_SAMPLE)
-    second = ID.of(_SAMPLE)
-
-    assert first.same_content(second)
-    assert not first.same_content(ID.of(b"other"))
+def test_an_empty_segment_list_is_legal():
+    """没落盘时一个槽都不占：空段列表是合法值，不是错误。"""
+    assert canonical_segments([]) == ()
+    assert parse_segments("") == ()
+    assert pack_segments([]) == ""
 
 
-def test_an_unbound_id_is_never_the_same_content():
-    """未绑定内容的身份**恒不相等**：空摘要与空摘要相同，但那不构成"同一份内容"。"""
-    first, second = ID(), ID()
-
-    assert first.value_hash == second.value_hash == EMPTY_HASH
-    assert not first.same_content(second)
-
-
-# ---- 落盘 ----
-
-
-def test_the_record_carries_identity_but_not_position():
-    """落盘只带推不出来的那几项：名字、两套凭证、签发时刻；**位置不入记录**。"""
-    identity = ID.of(_SAMPLE, name=Notedata)
-    raw = identity.to_record()
-
-    assert raw == {
-        "name": "notedata",
-        "value_uuid": identity.value_uuid,
-        "value_hash": identity.value_hash,
-        "birth_time": identity.birth_time,
-    }
-    assert "in_hub" not in raw
-    assert "in_pack_slot" not in raw
-
-
-def test_a_record_round_trips():
-    """写下去、读回来，身份一字不差；位置仍空着（它本来就不在记录里）。"""
-    identity = ID.of(_SAMPLE, name="body")
-
-    restored = ID.from_record(identity.to_record())
-
-    assert restored.name == identity.name
-    assert restored.value_uuid == identity.value_uuid
-    assert restored.value_hash == identity.value_hash
-    assert restored.birth_time == identity.birth_time
-    assert not restored.located
-
-
-def test_a_record_missing_a_credential_is_refused():
-    """分配形态凭证缺失即抛：半截身份读不得，补一个编的值更不行。"""
+def test_segments_reject_illegal_elements():
+    """格号为负、区间反着写、元素形态不对，一律当场报错。"""
     with pytest.raises(InvalidIdError):
-        ID.from_record({})
+        canonical_segments([-1])
     with pytest.raises(InvalidIdError):
-        ID.from_record({"value_uuid": ""})
+        canonical_segments([(3, 1)])
     with pytest.raises(InvalidIdError):
-        ID.from_record({"value_hash": "h"})
+        canonical_segments([True])
+    with pytest.raises(InvalidIdError):
+        canonical_segments(["三"])  # type: ignore[list-item]
 
 
-def test_a_record_without_a_digest_is_allowed_and_reads_as_unbound():
-    """摘要**允许为空**：记录的身份不必与内容摘要重合。
-
-    内容记录按载荷摘要寻址，它自己那份身份是分配形态；把摘要读成空只是"这份身份没绑内容"，
-    不是坏记录。
-    """
-    restored = ID.from_record({"value_uuid": "u"})
-
-    assert restored.value_uuid == "u"
-    assert not restored.bound
+def test_segments_of_builds_from_a_slot_or_a_span():
+    """写侧最常用的两种构造：一个格号，或一个闭区间。"""
+    assert segments_of(7) == [7]
+    assert segments_of(span=(2, 5)) == [(2, 5)]
+    with pytest.raises(InvalidIdError):
+        segments_of()
 
 
-def test_an_unknown_birth_time_reads_as_zero_not_now():
-    """缺签发时刻读成 0，**不取当前时刻**——否则读旧记录会凭空冒出一个时间。"""
-    restored = ID.from_record({"value_uuid": "u", "value_hash": "h"})
-
-    assert restored.birth_time == 0
-    assert restored.name == ""
-
-
-def test_a_corrupt_integer_field_is_refused():
-    """整数字段形态非法即抛：不静默吞掉脏字节。"""
-    with pytest.raises(InvalidIdError, match="整数字段非法"):
-        ID.from_record({"value_uuid": "u", "value_hash": "h", "birth_time": "昨天"})
+def test_the_text_form_writes_single_slots_and_ranges():
+    """文本形态：**单格写一个数，连续的一段写 `起-止`**。"""
+    assert pack_segments([1, 5, 9]) == "1,5,9"
+    assert pack_segments([2, 3, 4]) == "2-4"
+    assert pack_segments([(4, 7)]) == "4-7"
+    assert pack_segments([3]) == "3"
 
 
-# ---- 字段清单 ----
+def test_the_text_form_round_trips():
+    """编出来再解回去，段列表一字不差。"""
+    spans: list[SlotSpan] = [0, 2, (5, 9), 12]
+
+    assert parse_segments(pack_segments(spans)) == canonical_segments(spans)
+
+
+def test_parsing_reads_the_old_range_form_too():
+    """`3:5` 这种旧写法仍读得出来（只为读旧值，新写一律用 `起-止`）。"""
+    assert parse_segments("3:5") == ((3, 5),)
+    assert parse_segments("3") == (3,)
+
+
+def test_parsing_rejects_a_broken_text():
+    """段落写不成数字、空项、区间反着写，一律报错，不静默取零。"""
+    with pytest.raises(InvalidIdError):
+        parse_segments("1,,2")
+    with pytest.raises(InvalidIdError):
+        parse_segments("三")
+    with pytest.raises(InvalidIdError):
+        parse_segments("9-2")
+
+
+# ---- 正文历史 ----
+
+
+def test_the_history_round_trips_newest_first():
+    """正文历史编出来再解回去，世代次序是**新到旧**，每一代是规范形段列表。"""
+    generations = [[10, 20], [7], [3, 4, 5]]
+
+    assert parse_body_history(encode_body_history(generations)) == (
+        (10, 20),
+        (7,),
+        ((3, 5),),
+    )
+
+
+def test_an_empty_history_is_an_empty_text():
+    """没有旧世代即空串；空串读回空世代列表。"""
+    assert encode_body_history([]) == ""
+    assert parse_body_history("") == ()
+
+
+def test_history_parsing_rejects_broken_text():
+    """解不成映射即报错，不静默当成"没有历史"。"""
+    with pytest.raises(InvalidIdError):
+        parse_body_history("not base64 at all!!")
+    with pytest.raises(InvalidIdError):
+        parse_body_history(encode_body_history([[1]])[:4] + "!!!")
+
+
+def test_keep_generations_trims_to_the_depth():
+    """保留世代数数的是**总共几代**（当前世代占一代），故深度 1 不留旧世代。"""
+    generations = [[1], [2], [3], [4]]
+
+    assert keep_generations(generations, depth=2) == ((1,),)
+    assert keep_generations(generations, depth=1) == (), "只留当前世代"
+    assert keep_generations(generations, depth=0) == ()
+    assert keep_generations(generations, depth=99) == ((1,), (2,), (3,), (4,))
+
+
+def test_generations_give_the_current_one_first():
+    """当前世代由位置段给出，它排在旧世代之前——回收按这一份清单判活口。"""
+    identity = ID()
+    identity.place(hub="main", pack="p", spans=[3, 9])
+    identity.body_history = [((7, 8),)]
+
+    assert identity.current_generation == (3, 9)
+    assert identity.generations == ((3, 9), ((7, 8),))
+
+
+def test_attr_span_and_body_span_split_the_position():
+    """属性槽与正文槽的切分由**那一列单独记下的属性槽**给出，不靠位置段的次序。"""
+    identity = ID()
+    identity.place(hub="main", pack="p", spans=[7, 8, 20])
+    identity.attr_in_pack_slot = [(7, 8)]
+
+    assert identity.attr_slots == 1
+    assert identity.attr_span == ((7, 8),)
+    assert identity.body_span == (20,), "按格号做差，不按段切"
+
+
+# ---- 库里那一行 ----
 
 
 def test_the_identity_field_list_is_the_id_itself():
@@ -260,25 +304,76 @@ def test_the_identity_field_list_is_the_id_itself():
     assert ID_FIELDS == (
         "name",
         "value_uuid",
-        "value_hash",
         "birth_time",
         "in_hub",
         "in_hub_pack",
         "in_pack_slot",
     )
+    assert "value_hash" not in ID_FIELDS, "摘要形态已移出身份"
 
 
 def test_the_field_list_matches_the_slots():
-    """清单与 `__slots__` 一一对应：私有槽去掉前缀即公开字段名。"""
+    """清单与 `__slots__` 一一对应，只多出库里那两列（它们不是身份字段）。"""
     slots = {name.lstrip("_") for name in ID.__slots__}
-    assert slots == set(ID_FIELDS)
+    extra = {ATTR_SLOT_FIELD, BODY_HISTORY_FIELD}
+
+    assert slots - extra == set(ID_FIELDS)
+    assert extra - slots == set()
 
 
-def test_new_uuid_keeps_issuing_distinct_values():
-    """签发算法收在一处：换实现只动 `new_uuid` / `digest` 两个函数。"""
-    assert new_uuid() != new_uuid()
+def test_a_row_round_trips():
+    """写下去、读回来：身份、位置段、属性槽段与正文历史一字不差。"""
+    identity = ID(Notedata, value_uuid="u", birth_time=7)
+    identity.place(hub="main", pack="p", spans=[1, 4, (5, 6), 20])
+    identity.attr_in_pack_slot = [(5, 6)]
+    identity.body_history = [((9, 10),)]
+
+    restored = ID.from_row(identity.to_row())
+
+    assert restored.name == "notedata"
+    assert restored.value_uuid == "u"
+    assert restored.birth_time == 7
+    assert restored.in_hub == "main"
+    assert restored.in_hub_pack == "p"
+    assert restored.in_pack_slot == [1, (4, 6), 20], "4、5、6 相邻，按次序归成一段"
+    assert restored.attr_in_pack_slot == [(5, 6)]
+    assert restored.attr_slots == 1
+    assert restored.body_span == (1, 4, 20), "按格号做差"
+    assert restored.body_history == [((9, 10),)]
 
 
-def test_the_digest_algorithm_is_sha256():
-    """摘要口径就这一条，测试直接对算法：换算法必须是有意的。"""
-    assert digest(b"cairn") == sha256(b"cairn").hexdigest()
+def test_a_row_missing_a_credential_is_refused():
+    """分配形态凭证缺失即抛：半截身份读不得，补一个编的值更不行。"""
+    with pytest.raises(InvalidIdError):
+        ID.from_row({})
+    with pytest.raises(InvalidIdError):
+        ID.from_row({"value_uuid": ""})
+
+
+def test_a_row_without_a_place_reads_as_unplaced():
+    """只有凭证的行读成"还没落点"，位置段与历史都是空的。"""
+    restored = ID.from_row({"value_uuid": "u"})
+
+    assert restored.value_uuid == "u"
+    assert restored.name == ""
+    assert restored.birth_time == 0
+    assert not restored.located
+    assert restored.in_pack_slot == []
+
+
+def test_a_corrupt_integer_field_is_refused():
+    """整数字段形态非法即抛：不静默吞掉脏值。"""
+    with pytest.raises(InvalidIdError, match="整数字段非法"):
+        ID.from_row({"value_uuid": "u", "birth_time": "昨天"})
+
+
+def test_an_id_repr_shows_its_place():
+    """诊断用：名字、凭证前一段，以及位置（若已落盘）。"""
+    identity = ID(Notedata, value_uuid="abcdefgh")
+    identity.place(hub="main", pack="p", spans=[2])
+
+    text = repr(identity)
+
+    assert "notedata" in text
+    assert "abcdefgh" in text
+    assert "main" in text

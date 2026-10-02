@@ -25,16 +25,20 @@ class AttrTypeError(StorageError, ValueError):
     """块属性或内容编不进载荷：值不是 CBOR 认得的写法（如 `Path`、自定义对象）。"""
 
 
-class RecordFormatError(StorageError):
-    """载体记录非法：长度自框定不符、校验和不符、截断或 ID 段不可解析。"""
+class SlotFormatError(StorageError):
+    """槽的字节不合规：槽头读不满、内容长度越出格长，或校验和不符。"""
 
 
 class SlotError(StorageError):
-    """槽区间非法：槽长不合法、末格与记录长度不符，或读越界。"""
+    """槽号或格长非法：格号越界、格号写歪，或载体尾部不是整格。"""
+
+
+class SlotTooLargeError(SlotError):
+    """一格装不下：内容的字节数超过"格长减槽头"。**当场报错，不得静默截断。**"""
 
 
 class SlotSizeError(StorageError):
-    """格长配置不成立：五档一个都没写（等于零），或写成负数。
+    """格长配置不成立：两档一个都没写（等于零），或写成负数。
 
     格长是**格式事实**：它写进载体文件头，改一次配置即改变后续载体的布局。故配置写空
     不是"取个默认值"了事，而是当场报错——否则每一次定位都会算在错的基础上。
@@ -120,9 +124,10 @@ __all__ = [
     "InvalidIdError",
     "InvalidParamsError",
     "ObjectNotFoundError",
-    "RecordFormatError",
     "SlotError",
+    "SlotFormatError",
     "SlotSizeError",
+    "SlotTooLargeError",
     "StorageError",
     "UnknownMethodError",
 ]

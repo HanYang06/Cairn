@@ -19,7 +19,7 @@
 - **读路径不建 hub**：目录不在即报错，绝不悄悄建一个空的顶上——那会把"数据没了"伪装成
   "这里本来就是空的"。建立是显式动作（:meth:`Hub.create`）；
 - **hub 无状态、无自己的配置**：格长随载体走（写在文件头里），封口线是每次写入按当前值判的策略。
-  故这一层挪到哪儿都成立，索引库丢了也能顺扫回来；
+  故这一层挪到哪儿都成立，它只需要索引库告诉它"活口在哪儿"；
 - **多 hub 对上层只是一次分组**：引擎只需回答"这个身份在哪个 hub"。
 """
 
@@ -30,17 +30,25 @@ from uuid import uuid4
 
 from core.exc import HubNotFoundError, HubShapeError
 
-from .pack import DEFAULT_MAX_BYTES, MAGIC, Pack, Record
-from .slot import DEFAULT_SLOT_BYTES
+from .pack import DEFAULT_MAX_BYTES, MAGIC, Pack
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-    from .db.id import ID
-
 PACKS_DIRNAME = "packs"
 """载体所在的子目录名。它同时是"这个目录算不算 hub"的判据。"""
+
+DEFAULT_SLOT_BYTES = 512
+"""开箱格长（字节）：声明处（`storage/conf.py`）拿它当默认值。
+
+两档全不写等于零、等于错，故至少要有一档带默认值。取最小的一档带它，是因为**格长要小**：
+一格装不满就空着，故格长即每槽的平均浪费上限；512 B 是"装得下小字段、又不浪费大截"
+的那一档。要更大就往上写 ``kb``——**加一档是加法，不是替换**。
+
+**这个数住在这里**：它是格这一层的开箱值；把它抬进配置声明那份文件会让本模块反过来依赖
+配置引擎，而本模块只做算术（读配置是 `storage/conf.py` 的事）。
+"""
 
 
 class Hub:
@@ -51,7 +59,7 @@ class Hub:
     Args:
         directory: hub 目录（`vault/<名>`）。
         slot_bytes: 新建载体时写进文件头的格长；**读已有载体不看它**。
-        max_bytes: 封口线；只管"什么时候换文件"，不构成单条记录的硬上限。
+        max_bytes: 封口线；只管"什么时候换文件"，不是硬上限。
     """
 
     def __init__(
@@ -61,7 +69,7 @@ class Hub:
         slot_bytes: int = DEFAULT_SLOT_BYTES,
         max_bytes: int = DEFAULT_MAX_BYTES,
     ) -> None:
-        """接上一个 hub 目录。**不建目录、不建载体**：那是 `create` 与 `append_raw` 的事。"""
+        """接上一个 hub 目录。**不建目录、不建载体**：那是 `create` 与 `new_pack` 的事。"""
         self._dir = directory
         self._slot_bytes = slot_bytes
         self._max_bytes = max_bytes
@@ -182,23 +190,18 @@ class Hub:
             raise HubNotFoundError(f"载体不在: {name}（hub {self.name}）")
         return Pack.open(path, max_bytes=self._max_bytes)
 
-    def append(self, identity: ID, payload: bytes) -> Record:
-        """把一条记录追加进本 hub，返回**那条记录**（身份、格区间、载荷）。
+    def append(self, kind: int, content: bytes) -> tuple[str, int]:
+        """把一个槽追加进本 hub，返回（载体名，槽号）。
 
         hub 只负责"选地方"：选完就把请求转给 :meth:`Pack.append`，自己不碰字节。
 
-        两处细节都是刻意的：
-
-        - **先判再写**：活跃载体封口了就**当场另开一份**，不把这条记录塞进那份满载的。
-          若不先判，封口线小到"写一条就满"时，活跃判据会反复挑中同一份，来回摆；
-        - **封口线不拦单条记录**：一条记录大于封口线时照旧整条写入——否则大记录永远写不进去。
-          "封口"管的是下次换不换文件，不是这一次能不能写。
+        **先判再写**：活跃载体封口了就**当场另开一份**，不把这个槽塞进那份满载的。
+        若不先判，封口线小到"写一格就满"时，活跃判据会反复挑中同一份，来回摆。
         """
         pack = self.active()
         if pack is None or pack.sealed:
             pack = self.new_pack()
-        span = pack.append(identity, payload)
-        return Record(identity=identity, owner=pack.name, span=span, payload=payload)
+        return pack.name, pack.append(kind, content)
 
     def __repr__(self) -> str:
         """诊断用：名字与格长，不读盘。"""
@@ -233,4 +236,4 @@ def find_hubs(root: Path) -> tuple[Hub, ...]:
     return tuple(found)
 
 
-__all__ = ["PACKS_DIRNAME", "Hub", "find_hubs"]
+__all__ = ["DEFAULT_SLOT_BYTES", "PACKS_DIRNAME", "Hub", "find_hubs"]

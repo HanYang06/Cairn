@@ -5,7 +5,7 @@
 **与存储引擎的区别**（两者同名"引擎"，但面向的东西不同）：
 
 - `core.storage.engine` 面向载体：管 hub、写字节、读字节，**不认识数据库**；
-- 本引擎面向索引库：管行、建表、按身份查位置，**不认识 slot / pack / hub**。
+- 本引擎面向索引库：管行、建表、按身份查位置，**不认识 pack / hub**。
 
 它的复杂度来自一个明确的关系：**它与 ID 有直接关系**。库里的表不是"描述数据结构的表"，
 而是**身份表**——一个类型用了 ID，库里就为它产生一张真正意义上的索引表；不用 ID，
@@ -15,26 +15,24 @@
 
 | 库里的东西 | 来路 |
 |---|---|
-| 每个用 ID 的类型一张**身份表**（`notedata` / `attrindex` / …） | 表名 = 类型名；列 = `ID_FIELDS` |
-| `hub` 登记 | 目录是事实，登记是投影 |
+| 每个用 ID 的类型一张**身份表** | 表名 = 类型名；列见 `columns_of()` |
+| `hub` 登记 | 目录是事实，登记是库的一列 |
 | `meta` | 库自用（记录本库属于本设计） |
 
 **锚定是"用没用 ID"，不是"是不是 Block"**：`Block` 只是契约，故 `NoteData` 继承了它、
 又用了 ID，库里就有一张 `notedata` 表；`attrindex` 与它完全同路，没有第二套机制。
 
-**列全部以 ID 为事实结构**——`ID` 有几个字段就有几列，一个不多、一个不少。
-这在列数上是奢侈的，但它换来一条：**库里的行是 ID 的镜像**，"某个字段进不去库"
-这个问题在代码上不成立（`ID_FIELDS` 是从 `ID` 上数出来的）。
+**列不再等于 `ID` 的字段**：身份的字段有几个就有几列，**另加正文历史那一列**——
+布点（hub、载体、段列表）与正文历史都是库里的事实，载体上没有一个字节承载它们。
+列清单由 :func:`columns_of` 现算，没有第二份列清单。
 
-**载荷不进库**：正文、属性值都在块记录的载荷里（在载体上）。库只回答两件事——
-"这个身份在哪儿"，以及由索引块提供的"按这个值能查到谁"。
+**载荷不进库**：属性值与正文分片都在载体的槽里。库只回答三件事——
+"这个身份在哪儿"、"它的正文有哪几代"，以及由索引块提供的"按这个值能查到谁"。
 
-**库里的一切都能从载体算回来**：库是纯投影——每一行都要能从载体顺扫回来（缺表即建、
-缺行即补），故库丢了不是数据丢失，只是"查得慢"。判据：库里出现一个推不回来的值，
-它就不再是索引。
+**库是权威视角**：它装身份、位置与正文历史，是这三样的唯一来源。故**没有从载体重算
+这条路径**：库丢失即数据缺失，报"对象不在"，不回退顺扫，也不静默补一行。
 
-**不再有表结构声明文件**：表由"类型用了 ID"这件事诞生，不由文件声明。声明文件
-（`type.yml` 一类）即便写出，也只是给人看的参照——**系统不读它**。
+**不再有表结构声明文件**：表由"类型用了 ID"这件事诞生，不由文件声明。
 """
 
 from __future__ import annotations
@@ -44,14 +42,14 @@ from typing import TYPE_CHECKING
 
 from core.exc import IndexNotFoundError, IndexSchemaError
 
-from .id import ID_FIELDS
+from .id import ATTR_SLOT_FIELD, BODY_HISTORY_FIELD, ID_FIELDS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
     from pathlib import Path
 
 HUB_TABLE = "hub"
-"""登记表：回答"存在过哪些 hub"。真源是那些目录，故它是投影。"""
+"""登记表：回答"存在过哪些 hub"。真源是那些目录，登记是库的一列。"""
 
 META_TABLE = "meta"
 """库自用表：记录本库属于本设计，不是别人的 sqlite 文件。"""
@@ -59,12 +57,23 @@ META_TABLE = "meta"
 META_MARK = "cairn.catalog"
 """`meta` 里那一行的名字：它存在即"这是本设计的库"。"""
 
-#: 列类型：**ID 的字段一律按文本落**。
+#: 列类型：**库里的列一律按文本落**。
 #:
-#: 两套凭证、名字、hub 名、载体名本来就是字符串；`birth_time` 与格区间是整数，
-#: 但落成文本不影响"按值相等"的查询，而换取的是"加一个 ID 字段不必再想它该是什么类型"。
-#: 这个取舍是刻意的：**库里的行是 ID 的镜像**，镜像不该有自己的类型体系。
+#: 凭证、名字、hub 名、载体名本来就是字符串；`birth_time`、段列表与正文历史是整数或映射，
+#: 但落成文本不影响"按值相等"的查询，而段列表与正文历史**共用同一种文本编码**，
+#: 读侧因此只有一个解析函数。这个取舍是刻意的：**列以身份为事实结构**，
+#: 不另立一套类型体系。
 _COLUMN = "TEXT"
+
+
+def columns_of() -> tuple[str, ...]:
+    """一张身份表的列：**`ID_FIELDS` 加属性槽与正文历史两列**。
+
+    清单从 `ID` 的字段上现算，故"某个字段进不去库"在代码上不成立；属性槽与正文历史
+    是库的事实，而 `ID` 的字段里没有它们——位置之外，库里还装着"哪几格是属性槽"
+    与"正文有哪几代"。
+    """
+    return (*ID_FIELDS, ATTR_SLOT_FIELD, BODY_HISTORY_FIELD)
 
 
 class Index:
@@ -126,7 +135,7 @@ class Index:
     # ---- 身份表 ---- #
 
     def ensure_table(self, name: str) -> None:
-        """保证一个身份表在：**列全部由 `ID_FIELDS` 现算**。
+        """保证一个身份表在：**列全部由 :func:`columns_of` 现算**。
 
         表名就是类型的名字（下方写法）。列一个不多、一个不少——`ID` 加一个字段，
         下一趟开库就多一列。
@@ -134,7 +143,7 @@ class Index:
         Args:
             name: 表名（＝类型名）。
         """
-        columns = ", ".join(f"{field} {_COLUMN}" for field in ID_FIELDS)
+        columns = ", ".join(f"{_quote(field)} {_COLUMN}" for field in columns_of())
         self._db.execute(
             f"CREATE TABLE IF NOT EXISTS {_quote(name)} ({columns}, PRIMARY KEY (value_uuid))"
         )
@@ -149,18 +158,19 @@ class Index:
 
     # ---- 行 ---- #
 
-    def put(self, table: str, identity: Mapping[str, object]) -> None:
-        """把一份身份写成一行（**整行照 `ID_FIELDS` 搬**）。
+    def put(self, table: str, row: Mapping[str, object]) -> None:
+        """把一份身份写成一行（**整行照 :func:`columns_of` 搬**）。
 
-        同一身份写两次即覆盖：库里的行是投影，谁最后写谁说了算。
+        同一身份写两次即覆盖：库里那一行是身份、位置与正文历史的真源，谁最后写谁说了算。
 
         Args:
             table: 身份表名。
-            identity: `ID.to_record()` 的产物，外加位置段（它由引擎补）。
+            row: `ID.to_row()` 的产物。
         """
-        values = [identity.get(field) for field in ID_FIELDS]
-        placeholders = ", ".join("?" for _ in ID_FIELDS)
-        columns = ", ".join(ID_FIELDS)
+        names = columns_of()
+        values = [row.get(field) for field in names]
+        placeholders = ", ".join("?" for _ in names)
+        columns = ", ".join(_quote(field) for field in names)
         self._db.execute(
             f"INSERT OR REPLACE INTO {_quote(table)} ({columns}) VALUES ({placeholders})",
             [_plain(value) for value in values],
@@ -169,18 +179,23 @@ class Index:
 
     def get(self, table: str, value_uuid: str) -> dict[str, object] | None:
         """按分配形态凭证取一行；没有即 ``None``。"""
+        names = columns_of()
         cursor = self._db.execute(
-            f"SELECT {', '.join(ID_FIELDS)} FROM {_quote(table)} WHERE value_uuid = ?",
+            f"SELECT {', '.join(_quote(field) for field in names)}"
+            f" FROM {_quote(table)} WHERE value_uuid = ?",
             (value_uuid,),
         )
         row = cursor.fetchone()
-        return None if row is None else dict(zip(ID_FIELDS, row, strict=True))
+        return None if row is None else dict(zip(names, row, strict=True))
 
     def rows(self, table: str) -> Iterator[dict[str, object]]:
-        """逐行取出——**顺扫的入口**。"""
-        cursor = self._db.execute(f"SELECT {', '.join(ID_FIELDS)} FROM {_quote(table)}")
+        """逐行取出——**身份表的取数口**。"""
+        names = columns_of()
+        cursor = self._db.execute(
+            f"SELECT {', '.join(_quote(field) for field in names)} FROM {_quote(table)}"
+        )
         for row in cursor:
-            yield dict(zip(ID_FIELDS, row, strict=True))
+            yield dict(zip(names, row, strict=True))
 
     def drop_row(self, table: str, value_uuid: str) -> bool:
         """摘掉一行：返回是否确实摘掉了一个。"""
@@ -227,23 +242,21 @@ class Index:
 
 
 def _quote(name: str) -> str:
-    """把表名包成标识符：表名来自类名，故只做最基本的转义。"""
+    """把表名或列名包成标识符：名字来自类名与 `ID_FIELDS`，故只做最基本的转义。"""
     return '"' + name.replace('"', '""') + '"'
 
 
 def _plain(value: object) -> object:
-    """把值收进 sqlite 认的那几种：格区间那一对落成 ``头:末``，其余文本化。
+    """把值收进 sqlite 认的那几种：段列表与正文历史一律按文本落。
 
-    `in_pack_slot` 是 ID 上唯一对不上 sqlite 标量的字段（一对整数），
-    它落成 ``"头:末"``；读回来时由需要的调用方切回两个数。
+    `ID` 上需要文本化的字段是段列表（`in_pack_slot`）与正文历史；两者都由
+    `db/id.py` 的编码函数交出字符串，故这里只兜住 `None`。
     """
-    if isinstance(value, tuple):
-        return ":".join(str(item) for item in value)
     if value is None:
         return ""
-    if isinstance(value, int | float | str | bytes):
+    if isinstance(value, bool | int | float | str | bytes):
         return value
     return str(value)
 
 
-__all__ = ["HUB_TABLE", "META_MARK", "META_TABLE", "Index"]
+__all__ = ["HUB_TABLE", "META_MARK", "META_TABLE", "Index", "columns_of"]

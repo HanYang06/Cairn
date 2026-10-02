@@ -29,7 +29,6 @@ from __future__ import annotations
 
 from core.storage.db.id import ID
 from core.storage.engine import Block
-from core.storage.index.index import holds
 from core.storage.types import ATTR_KIND
 
 __all__ = ["AttrIndex"]
@@ -49,8 +48,3 @@ class AttrIndex(Block):
         """
         self.id = ID(self) if id is None else id
         super().__init__(self.id)
-
-    @classmethod
-    def holds(cls, block: Block) -> dict[str, object]:
-        """正表那一行：这个块的属性字段 → 值。"""
-        return holds(block, cls.manages)

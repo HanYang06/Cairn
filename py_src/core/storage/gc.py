@@ -2,71 +2,79 @@
 # SPDX-License-Identifier: Apache-2.0
 """GC：把没人要的字节真正抹掉。
 
-**它是引擎的另一种确定性形态**：走同一条 slot / pack / hub 的路，换一套判据——写入按
-"写进来就落"，GC 按"谁还活着"。故它不新开一套机制：读用 `pack.scan`，写用
-`pack.append`，位置回填照 `Engine` 那一套办。
+**它是引擎的另一种确定性形态**：走同一条 pack / hub 的路，换一套判据——写入按
+"写进来就落"，回收按"库里的行指着谁"。故它不新开一套机制：读用载体、写用载体，
+位置段照引擎那一套写。
 
-**四条判据，一条都不能少**：
+**按索引库收活槽**（不按载体上的标记收）：载体上没有一处字节说明"这些槽还算数"，
+故活口只有一个来源——索引库里的行。
 
-| 记录 | 活着的意思 |
+| 槽 | 活着的意思 |
 |---|---|
-| 块记录 | 同一个身份**最后**写的那一条，且没有被墓碑标记过 |
-| 内容记录 | 被某条活着的块记录的指针指着（内容按摘要寻址，同一份只留一条） |
-| 索引条目 | 它指的那个块还活着（指着已删的块的那一行是死重量） |
-| 墓碑 | **不保留**：它标记的那些字节这一趟就没了，留着它只是死重量 |
+| 属性槽 | 库里有一行，且那一行的位置段指着它 |
+| 正文槽 | 库里某一行的**当前世代**或**保留范围之内的旧世代**指着它 |
+| 索引条目 | 照 `read_index_rows` 那一条口径：同一个块同一列最后写的那一条说了算 |
 
-**判活按载荷摘要**：块身份随载荷，故"最后一条说了算"在摘要上判得准；而索引块的身份是个容器
-（一块装很多行），它自己那份摘要没有意义。
+**保护旧世代**：保留世代数取配置 `body.history.depth`，超出范围的最老世代可收；
+写序那一侧另有一条边界——新槽落定并通过校验之前，旧世代不得被回收。
 
-**开头只扫一遍**：全库记录连"它在哪个 hub 的哪份载体里"一起收下来，此后的判活、重写、报数字
-都读这一份抄本。分散去扫会出现"两处判得不一样"，而这种不一致不报错，只是多删或少删几条。
+**收敛零散段**：同一块分散在多处的槽，回收这一趟搬成**连续的一段**，位置段随之改写成
+规范形（升序、不重叠、相邻合并、段数最少）。
 
-**挑载体由 GC 自己办**：它写的是**新的一份**（`Hub.new_pack`），不参与 `hub.active` 的挑选——
-若交给 hub 去挑，它会挑中那些还没清干净的旧载体，把新记录又写回待删的文件里。
-**没有死记录的载体原地不动**，否则每一趟 GC 都要把整库抄一遍。
+**开头只扫一遍**：全库的行与全部槽一次收下来，此后的判活、重写、报数字都读这一份抄本。
+分散去扫会出现"两处判得不一样"，而这种不一致不报错，只是多删或少删几格。
 
-**崩在半路不坏库**：新字节全部落盘之后才删旧载体，故最坏的情形是"新旧两份并存、白占一份
-空间"，而两份内容逐字相同——记录自带身份，读哪一份都是同一个答案。下一趟 GC 会把重出来的
-那一份判成死记录收掉。
+**挑载体由回收自己办**：新字节写进**新的一份**，不参与 `hub.active` 的挑选——
+若交给 hub 去挑，它会挑中那些还没清干净的旧载体，把新槽又写回待回收的文件里。
+**没有死槽的载体原地不动**，否则每一趟回收都要把整库抄一遍。
 
-**库是投影，故这一趟一并扶正**：活着的身份按新坐标重写行、消失的身份摘掉行。这一步不是可选
-的：坐标一旦失效，"按身份问路"就走空（引擎会回退顺扫，故不至于读错，但每次都退化成扫全库）。
+**崩在半路不坏库**：新字节全部落盘之后才删旧载体，故最坏的情形是"新旧两份并存、
+白占一份空间"；库里的行先改成指着新的那一份，而旧的那一份还没删，读哪一份都是同一个答案。
+
+**两个触发点**：手动调用本模块的 :func:`sweep`，以及死字节达到配置 `gc.auto.byte`
+时自动——自动那一路的判据是 :func:`reclaimable_bytes`，**接线到后台线程尚未落码**。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.storage.db.engine import HUB_TABLE, META_TABLE
-from core.storage.db.id import digest
-from core.storage.db.payload import decode_block, decode_index, decode_tombstone
+from core.storage.db.id import (
+    ATTR_SLOT_FIELD,
+    BODY_HISTORY_FIELD,
+    ID,
+    canonical_segments,
+    encode_body_history,
+    pack_segments_ordered,
+)
 from core.storage.hub import PACKS_DIRNAME, Hub
-from core.storage.pack import Pack, Record
+from core.storage.pack import HEADER_SIZE, Pack, Slot
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
-    from pathlib import Path
+    from collections.abc import Callable, Iterable, Iterator
 
-    from core.storage.db.engine import Index
-    from core.storage.db.id import ID
-    from core.storage.db.payload import ContentRef
     from core.storage.engine import Engine
 
-#: 一趟开头那份抄本的一行：（hub 名，载体，它里面的记录）。**顺序即顺扫的顺序**。
-_Scanned = tuple[str, Pack, tuple[Record, ...]]
+#: 一趟开头那份抄本里的一行：（hub 名，载体路径，这一份载体上的全部槽）。
+_Scanned = tuple[str, Path, tuple[Slot, ...]]
+
+#: 落点的坐标：（hub 名，载体名，槽号）。
+_Where = tuple[str, str, int]
 
 
 @dataclass(frozen=True, slots=True)
 class SweepReport:
-    """一趟 GC 的结果：按载体与按字节两条口径各给一份数字。
+    """一趟回收的结果：按载体与按槽两条口径各给一份数字。
 
     Attributes:
         hubs: 这一趟走过的 hub 名（按名字排序）。
         packs_before: 开始时的载体份数。
         packs_after: 结束时的载体份数。
-        records_before: 开始时的记录条数。
-        records_after: 结束时的记录条数。
+        slots_before: 开始时的槽数。
+        slots_after: 结束时的槽数。
         bytes_before: 开始时全部载体的总字节数。
         bytes_after: 结束时全部载体的总字节数。
         cancelled: 是否被 `should_stop` 叫停（已处理的那几个 hub 保持不变）。
@@ -75,16 +83,33 @@ class SweepReport:
     hubs: tuple[str, ...]
     packs_before: int
     packs_after: int
-    records_before: int
-    records_after: int
+    slots_before: int
+    slots_after: int
     bytes_before: int
     bytes_after: int
     cancelled: bool = False
 
     @property
     def reclaimed(self) -> int:
-        """这一趟真正收回的字节数（可能为零：没有死记录时 GC 什么都不做）。"""
+        """这一趟真正收回的字节数（可能为零：没有死槽时回收什么都不做）。"""
         return self.bytes_before - self.bytes_after
+
+
+def reclaimable_bytes(engine: Engine) -> int:
+    """当前**可回收的字节数**：死槽那几格的字节数，即自动回收的判据。
+
+    判据与 :func:`sweep` 同一套（按库里的行收活槽），故"够不够触发"与实际会收掉多少一致。
+    配置 `gc.auto.byte` 为零即不自动回收，调用方按它决定要不要问这一问。
+    """
+    live = _live_slots(engine)
+    room = _slot_bytes(engine)
+    total = 0
+    for hub_name, path, slots in _scan(engine):
+        pack_name = path.name
+        for number, _slot in enumerate(slots):
+            if (hub_name, pack_name, number) not in live:
+                total += room
+    return total
 
 
 def sweep(
@@ -93,7 +118,7 @@ def sweep(
     on_progress: Callable[[int, int], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> SweepReport:
-    """走一趟：把全库的死字节去掉，并把索引库扶正。
+    """走一趟：把全库的死槽去掉，并把索引库扶正。
 
     Args:
         engine: 要整理的引擎。
@@ -104,131 +129,66 @@ def sweep(
         这一趟的数字。
     """
     scanned = tuple(_scan(engine))
-    live = _Live.of(scanned)
-    names = _hub_names(scanned)
-    bytes_before = sum(pack.size for _hub, pack, _records in scanned)
+    bytes_before = sum(_pack_bytes(path, slots) for _hub, path, slots in scanned)
     packs_before = len(scanned)
-    records_before = sum(len(records) for _hub, _pack, records in scanned)
+    slots_before = sum(len(slots) for _hub, _path, slots in scanned)
+    names = tuple(sorted({hub for hub, _path, _slots in scanned}))
+    live = _live_slots(engine)
     cancelled = False
     for done, hub_name in enumerate(names, start=1):
         if should_stop is not None and should_stop():
             cancelled = True
             break
-        _rewrite(engine, hub_name, scanned, live)
+        moved = _rewrite(engine, hub_name, scanned, live)
+        _reindex(engine, moved)
+        live.update(_live_slots(engine))
         if on_progress is not None:
             on_progress(done, len(names))
-
-    _reindex(engine, live)
-    after = tuple(_hub_packs(engine))
-    bytes_after, packs_after, records_after = _measure(after)
+    _forget_the_dead(engine, live)
+    after = tuple(_scan(engine))
     return SweepReport(
-        hubs=tuple(directory.name for directory, _ in after),
+        hubs=tuple(sorted({hub for hub, _path, _slots in after})),
         packs_before=packs_before,
-        packs_after=packs_after,
-        records_before=records_before,
-        records_after=records_after,
+        packs_after=len(after),
+        slots_before=slots_before,
+        slots_after=sum(len(slots) for _hub, _path, slots in after),
         bytes_before=bytes_before,
-        bytes_after=bytes_after,
+        bytes_after=sum(_pack_bytes(path, slots) for _hub, path, slots in after),
         cancelled=cancelled,
     )
 
 
-class _Live:
-    """这一趟的**活口清单**：谁还活着，以及它这一趟之后落在哪儿。
+def _live_slots(engine: Engine) -> set[_Where]:
+    """活口清单：**全部行的当前世代与保留范围之内的旧世代**。
 
-    判据集中在这里算一遍，重写与扶正两段都读它。
+    库是权威视角，故清单只从库里来：行的位置段给出当前世代，正文历史那一列给出旧世代。
+    保留世代数由 `keep_generations` 在写侧截过，故这里把两者一并收下即可——超出范围
+    的最老世代根本不在库里，那是可以收掉的。
     """
+    live: set[_Where] = set()
+    for table in _identity_tables(engine):
+        for row in engine.index.rows(table):
+            hub_name = str(row.get("in_hub") or "")
+            pack_name = str(row.get("in_hub_pack") or "")
+            if not hub_name or not pack_name:
+                continue
+            identity = ID.from_row(row)
+            for generation in identity.generations:
+                for slot in _slots_of(generation):
+                    live.add((hub_name, pack_name, slot))
+    return live
 
-    def __init__(self) -> None:
-        """空清单：活口摘要、身份与落点各一张表。"""
-        self.digests: set[str] = set()
-        """活着的载荷摘要。块身份随载荷，故摘要相同即同一条记录。"""
-        self.identities: dict[str, ID] = {}
-        """活着的身份：`value_uuid` → 身份（扶正索引库时按它写行）。"""
-        self.places: dict[str, tuple[str, str, tuple[int, int]]] = {}
-        """落点：`value_uuid` → （hub，载体，格区间）。**先记原样，搬动的改写它**。"""
 
-    @classmethod
-    def of(cls, scanned: tuple[_Scanned, ...]) -> _Live:
-        """由那份抄本算一遍：先认墓碑，再按"最后一条说了算"与"谁被指着"定活口。"""
-        live = cls()
-        blocks, contents, indexes = _classify(scanned)
-        for entry in blocks.values():
-            live._keep(*entry)
-        wanted = {_ref_of(entry[2][0]).value_hash for entry in blocks.values()}
-        for payload_digest, entry in contents.items():
-            if payload_digest in wanted:
-                live._keep(*entry)
-        for entry in indexes.values():
-            parsed = decode_index(entry[2][0].payload)
-            if parsed is not None and any(uuid in live.identities for uuid in parsed[3]):
-                live._keep(*entry)
-        return live
-
-    def _keep(self, hub_name: str, pack: Pack, records: tuple[Record, ...]) -> None:
-        """收下一条活记录：摘要、身份、**它现在的位置**（位置是扫出来的，不是猜的）。"""
-        for record in records:
-            self.digests.add(digest(record.payload))
-            self.identities[record.identity.value_uuid] = record.identity
-            self.places[record.identity.value_uuid] = (
-                hub_name,
-                pack.name,
-                (record.span.first, record.span.last),
-            )
+def _identity_tables(engine: Engine) -> tuple[str, ...]:
+    """库里的身份表：**库自用的那两张不算**（`hub` 与 `meta` 不是身份表）。"""
+    return tuple(table for table in engine.index.tables() if table not in {HUB_TABLE, META_TABLE})
 
 
 def _scan(engine: Engine) -> Iterator[_Scanned]:
-    """顺扫全库一遍，连"这条在哪个 hub 的哪份载体"一起收下来。"""
-    for directory, packs in _hub_packs(engine):
-        for pack in packs:
-            yield directory.name, pack, tuple(pack.scan())
-
-
-def _classify(
-    scanned: tuple[_Scanned, ...],
-) -> tuple[dict[str, _Scanned], dict[str, _Scanned], dict[tuple[str, str], _Scanned]]:
-    """把抄本分三拨收好：（块记录，内容记录，索引条目）。
-
-    三拨的判据只看载荷的保留键，故这一趟不需要任何领域知识。**同一个身份的块记录取最后一条**
-    （每存一次追加一条）；索引条目按（字段，它指的那些块）取最后一条——那正是
-    `Engine.read_index_rows` 翻反表时"最后写的说了算"的同一条口径。
-
-    **墓碑要等扫完再比**：墓碑是追加写的，它总排在它标记的那条记录**之后**，
-    故边扫边比会把"已删的块"留成活的。
-    """
-    marked: set[str] = set()
-    blocks: dict[str, _Scanned] = {}
-    contents: dict[str, _Scanned] = {}
-    indexes: dict[tuple[str, str], _Scanned] = {}
-    for hub_name, pack, records in scanned:
-        for record in records:
-            payload = record.payload
-            victim = decode_tombstone(payload)
-            if victim is not None:
-                marked.add(victim)
-            elif decode_block(payload) is not None:
-                blocks[record.identity.value_uuid] = (hub_name, pack, (record,))
-            else:
-                entry = decode_index(payload)
-                if entry is None:
-                    contents[digest(payload)] = (hub_name, pack, (record,))
-                else:
-                    indexes[(entry[1], ",".join(entry[3]))] = (hub_name, pack, (record,))
-    return (
-        {
-            uuid: entry
-            for uuid, entry in blocks.items()
-            if digest(entry[2][0].payload) not in marked
-        },
-        contents,
-        indexes,
-    )
-
-
-def _hub_packs(engine: Engine) -> Iterator[tuple[Path, tuple[Pack, ...]]]:
-    """每个 hub 与它当前的载体（按名字排序）。"""
+    """顺扫全库一遍，连"这一份在哪个 hub"一起收下来。"""
     for directory in _hub_dirs(engine):
-        yield directory, tuple(Hub.open(directory).packs())
+        for pack in Hub.open(directory).packs():
+            yield directory.name, pack.path, tuple(slot for _number, slot in pack.scan())
 
 
 def _hub_dirs(engine: Engine) -> Iterator[Path]:
@@ -241,82 +201,173 @@ def _hub_dirs(engine: Engine) -> Iterator[Path]:
             yield entry
 
 
-def _hub_names(scanned: tuple[_Scanned, ...]) -> tuple[str, ...]:
-    """抄本里出现过的 hub 名，按名字排序（去重）。"""
-    return tuple(sorted({hub_name for hub_name, _pack, _records in scanned}))
+def _pack_bytes(path: Path, slots: tuple[Slot, ...]) -> int:
+    """一份载体的字节数。
 
-
-def _measure(hubs: tuple[tuple[Path, tuple[Pack, ...]], ...]) -> tuple[int, int, int]:
-    """（总字节，载体份数，记录条数）：报告用的两条口径。"""
-    total = sum(pack.size for _directory, packs in hubs for pack in packs)
-    records = sum(len(tuple(pack.scan())) for _directory, packs in hubs for pack in packs)
-    return total, sum(len(packs) for _directory, packs in hubs), records
-
-
-def _rewrite(engine: Engine, hub_name: str, scanned: tuple[_Scanned, ...], live: _Live) -> None:
-    """重写一个 hub 里那些**有死记录**的载体：活的搬进新的一份，旧的删掉。
-
-    新的一份**按需开**（第一条要写的记录才开）：整份都死了的载体不该留下一个空壳。
+    **按已写过的格数算**（文件头加格数乘格长）：文件尾不会残留不足一格的部分，
+    故它与文件的实际长度一致，而格长由文件头的算术得出，不必再读一遍文件头。
     """
-    mine = [
-        (pack, records)
-        for name, pack, records in scanned
-        if name == hub_name
-        and any(digest(record.payload) not in live.digests for record in records)
+    size = path.stat().st_size
+    return size if slots else HEADER_SIZE
+
+
+def _slot_bytes(engine: Engine) -> int:
+    """这次装配的格长：报告与自动回收的判据按它计数。"""
+    return engine.slot_bytes
+
+
+def _rewrite(
+    engine: Engine,
+    hub_name: str,
+    scanned: tuple[_Scanned, ...],
+    live: set[_Where],
+) -> dict[_Where, tuple[str, int]]:
+    """重写一个 hub 里那些**有死槽**的载体：活的搬进新的一份，旧的删掉。
+
+    新的一份**按需开**（第一条要写的活槽才开）；搬动之后位置段改写成规范形，
+    故零散段在这一趟收敛成整段。
+
+    Returns:
+        搬动过的那几格：旧坐标 → （新载体名，新槽号）。**凡是指着旧坐标的行都要改**，
+        故它交给调用方去扶正，而不是在这里只改"拥有"那一格的那一行。
+    """
+    dirty = [
+        (path, slots)
+        for hub, path, slots in scanned
+        if hub == hub_name
+        and any((hub_name, path.name, number) not in live for number in range(len(slots)))
     ]
-    if not mine:
-        return
+    if not dirty:
+        return {}
     hub = Hub.create(
         engine.root / hub_name, slot_bytes=engine.slot_bytes, max_bytes=engine.max_bytes
     )
+    moved: dict[_Where, tuple[str, int]] = {}
     writer: Pack | None = None
-    for _pack, records in mine:
-        for record in records:
-            if digest(record.payload) not in live.digests:
+    target = 0
+    for path, slots in dirty:
+        for number, slot in enumerate(slots):
+            if (hub_name, path.name, number) not in live:
                 continue
             if writer is None or writer.sealed:
                 writer = hub.new_pack()
-            identity = record.identity
-            span = writer.append(identity, record.payload)
-            live.places[identity.value_uuid] = (hub_name, writer.name, (span.first, span.last))
-    for pack, _records in mine:
-        pack.path.unlink()
+                target = 0
+            writer.write_at(target, slot.kind, slot.content)
+            moved[(hub_name, path.name, number)] = (writer.name, target)
+            target += 1
+    for path, _slots in dirty:
+        path.unlink()
+    return moved
 
 
-def _ref_of(record: Record) -> ContentRef:
-    """块记录指向的内容凭证；不是块记录即抛（调用处只拿块记录进来）。"""
-    parsed = decode_block(record.payload)
-    if parsed is None:  # pragma: no cover — 调用处已经筛过
-        raise ValueError("这一条不是块记录")
-    return parsed[0]
+def _reindex(engine: Engine, moved: dict[_Where, tuple[str, int]]) -> None:
+    """把搬动过的槽写回库里那些行：**位置段照新落点重写，并归成规范形**。"""
+    for table in _identity_tables(engine):
+        for row in tuple(engine.index.rows(table)):
+            _rehome(engine, table, row, moved)
 
 
-def _reindex(engine: Engine, live: _Live) -> None:
-    """把索引库扶正：活着的身份按**新坐标**重写行，消失的身份摘掉行。"""
-    index = engine.index
-    for value_uuid, identity in live.identities.items():
-        table = identity.name
-        if not table:
+def _rehome(
+    engine: Engine, table: str, row: dict[str, object], moved: dict[_Where, tuple[str, int]]
+) -> None:
+    """扶正一行：它的每一个世代里被搬动的槽都换成新坐标。
+
+    **载体名也要跟着换**：旧的载体这一趟就被删了，只换格号不换名字，下一趟读就指向一个
+    已经不存在的文件——而**不报错**，只是读不出来。
+
+    **段边界按写侧的约定重建**：`attr_slots` 那一列数的是属性槽占几**段**，故扶正时
+    必须照"正文槽在前、属性槽在后、两段不相邻不合并"铺一遍。照旧那一份的格号次序铺会
+    让两段并成一段，读侧就再也切不开，而**不报错**。
+    """
+    hub_name = str(row.get("in_hub") or "")
+    pack_name = str(row.get("in_hub_pack") or "")
+    if not hub_name or not pack_name:
+        return
+    identity = ID.from_row(row)
+    hold = list(identity.attr_in_pack_slot)
+    targets: list[int] = []
+    attr_targets: list[int] = []
+    new_pack = pack_name
+    changed = False
+    for point in identity.in_pack_slot:
+        for slot in _slots_of([point]):
+            where = moved.get((hub_name, pack_name, slot))
+            target = slot if where is None else where[1]
+            if where is not None:
+                changed = True
+                new_pack = where[0]
+            if _holds(hold, slot):
+                attr_targets.append(target)
+                continue
+            targets.append(target)
+    if not changed:
+        return
+    identity.in_pack_slot = list(_merge_groups([targets, attr_targets]))
+    identity.attr_in_pack_slot = list(canonical_segments(attr_targets))
+    row["in_hub_pack"] = new_pack
+    row["in_pack_slot"] = pack_segments_ordered(_slots_of(identity.in_pack_slot))
+    row[ATTR_SLOT_FIELD] = pack_segments_ordered(attr_targets)
+    row[BODY_HISTORY_FIELD] = encode_body_history(identity.body_history)
+    engine.index.put(table, row)
+
+
+def _holds(attr_spans: Iterable[int | tuple[int, int]], slot: int) -> bool:
+    """这一格在不在属性槽那几段里。"""
+    return slot in set(_slots_of(attr_spans))
+
+
+def _merge_groups(groups: Iterable[Iterable[int]]) -> list[int | tuple[int, int]]:
+    """按分组把槽号折成段列表（组内相邻者并段，组与组之间不并）。"""
+    return [item for group in groups for item in _merge(group)]
+
+
+def _merge(slots: Iterable[int]) -> list[int | tuple[int, int]]:
+    """把一串槽号折成段（相邻者并段），次序照给的次序。"""
+    found: list[int | tuple[int, int]] = []
+    for slot in slots:
+        if found and isinstance(found[-1], tuple) and found[-1][1] + 1 == slot:
+            found[-1] = (found[-1][0], slot)
             continue
-        hub, pack, span = live.places[value_uuid]
-        index.ensure_table(table)
-        index.register_hub(hub)
-        index.put(
-            table,
-            identity.to_record() | {"in_hub": hub, "in_hub_pack": pack, "in_pack_slot": span},
-        )
-    _forget_the_dead(index, set(live.identities))
-
-
-def _forget_the_dead(index: Index, alive: set[str]) -> None:
-    """摘掉已消失的身份那一行：**只动身份表**，库自用的那两张不动。"""
-    for table in index.tables():
-        if table in {HUB_TABLE, META_TABLE}:
+        if found and isinstance(found[-1], int) and found[-1] + 1 == slot:
+            found[-1] = (found[-1], slot)
             continue
-        for row in tuple(index.rows(table)):
-            value_uuid = str(row.get("value_uuid") or "")
-            if value_uuid and value_uuid not in alive:
-                index.drop_row(table, value_uuid)
+        found.append(slot)
+    return found
 
 
-__all__ = ["SweepReport", "sweep"]
+def _forget_the_dead(engine: Engine, live: set[_Where]) -> None:
+    """摘掉位置段已全部不在活口里的行：**那些身份已经没有字节了**。
+
+    **只动身份表**：库自用的那两张（`hub` 与 `meta`）不动。
+    """
+    for table in _identity_tables(engine):
+        for row in tuple(engine.index.rows(table)):
+            identity = ID.from_row(row)
+            if not identity.in_hub or not identity.in_hub_pack:
+                continue
+            if any(
+                (identity.in_hub, identity.in_hub_pack, slot) in live
+                for generation in identity.generations
+                for slot in _slots_of(generation)
+            ):
+                continue
+            engine.index.drop_row(table, identity.value_uuid)
+
+
+def _slots_of(spans: Iterable[int | tuple[int, int]]) -> tuple[int, ...]:
+    """把段列表展开成升序的一串槽号。"""
+    found: list[int] = []
+    for item in spans:
+        if isinstance(item, int):
+            found.append(item)
+            continue
+        found.extend(range(item[0], item[1] + 1))
+    return tuple(found)
+
+
+def _int(value: object) -> int:
+    """把整数字段读回：缺失取 0。"""
+    return 0 if value in {None, ""} else int(str(value))
+
+
+__all__ = ["SweepReport", "reclaimable_bytes", "sweep"]
