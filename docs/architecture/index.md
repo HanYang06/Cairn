@@ -24,17 +24,18 @@
 
 | 文档 | 权威范围 | 与代码的对应 | 状态 |
 |---|---|---|---|
-| [L0 存储设计](storage-design.md) | **块 / 载体 / hub / 索引库 / 索引的总纲**；细判据以[块的组成与落点](py_core/storage/block-parts.md) 为准 | **裁定**（未落码；§0.1 逐条列现状落差） | 裁定 |
+| [L0 存储设计](storage-design.md) | **块 / 载体 / hub / 索引库 / 索引的总纲**；细判据以[块的组成与落点](py_core/storage/block-parts.md) 为准 | **现状**（2026-10-02 落码） | 现行 |
 | [块范式](block-model.md) | 块的**声明 / 身份 / 索引**：判据、代价、已否掉的路径 | **现状**（范式已落地；未接线处逐条标出） | 现行 |
-| [块的组成与落点](py_core/storage/block-parts.md) | 存储子层的**裁定主篇**：属性槽 / 正文槽、库里放什么、两个索引块的定位 | **裁定**（未落码） | 裁定 |
-| [载体的字节布局](py_core/storage/pack-format.md) | 逐字段的**字节图**：载体文件头、槽头、两类槽 | **裁定**（未落码） | 裁定 |
-| [查询链路](py_core/storage/query-path.md) | 列表页起点、定位跳数与失败语义 | **裁定**（未落码） | 裁定 |
+| [块的组成与落点](py_core/storage/block-parts.md) | 存储子层的**裁定主篇**：属性槽 / 正文槽、库里放什么、两个索引块的定位 | **现状**（2026-10-02 落码） | 现行 |
+| [载体的字节布局](py_core/storage/pack-format.md) | 逐字段的**字节图**：载体文件头、槽头、两类槽 | **现状**（2026-10-02 落码） | 现行 |
+| [查询链路](py_core/storage/query-path.md) | 列表页起点、定位跳数与失败语义 | **现状**（2026-10-02 落码；§4 的待裁项仍开着） | 现行 |
 | [配置引擎](py_core/config.md) | `conf` 面（声明 = 取值）、单文件投影、类型判据 | **现状** | 现行 |
 | [UI 主题](ui_design/ui-theme.md) | 令牌词表、色板与布局契约 | **意图**（令牌管线已落地：`tokens.json` → `tokens.css`；行为规格仍是意图） | 草案 |
 
-> **取代关系**：本次裁定改写的存储页有 [L0 存储设计](storage-design.md)、
-> [载体的字节布局](py_core/storage/pack-format.md) 与[查询链路](py_core/storage/query-path.md)；
+> **取代关系**：2026-10-02 的存储裁定改写了 [L0 存储设计](storage-design.md)、
+> [载体的字节布局](py_core/storage/pack-format.md) 与[查询链路](py_core/storage/query-path.md)，
 > 与[块的组成与落点](py_core/storage/block-parts.md) 冲突处以该篇为准，差异清单见其 §9。
+> 该裁定**已于同日落码**（`py_src/core/storage/`），故上述各篇描述的是现状。
 > 原「格与二进制格式」页已删除，仍然成立的部分并入载体的字节布局。
 
 **内核装配（`Kernel`）与命令面（`Api`）的现状口径写在 [L0 存储设计](storage-design.md) §9**，

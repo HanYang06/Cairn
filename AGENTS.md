@@ -110,8 +110,9 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 - `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源），
   **有冲突以代码为准，改实现后回写文档**；哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
 - 内部时间统一 unix 毫秒（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
-  对象身份是 `core/storage/db/id.py` 的 `ID`：字段为 `name` / `value_uuid` / `birth_time` 与位置段；
-  **2026-10-02 的存储裁定把 `value_hash` 移出身份**（尚未落码，见
+  对象身份是 `core/storage/db/id.py` 的 `ID`：字段为 `name` / `value_uuid` / `birth_time`
+  与位置段，另有两项库的事实 `attr_in_pack_slot`（哪几格是属性槽）与 `body_history`；
+  **2026-10-02 的存储裁定把 `value_hash` 移出身份**（同日落码，见
   `docs/architecture/py_core/storage/block-parts.md`）。
 
 ## 测试
