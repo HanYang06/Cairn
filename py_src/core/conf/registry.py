@@ -258,9 +258,9 @@ class Config:
         self._declarations[path] = item
         self._seen.add(path)
         if declared is not MISSING:
-            plain = cast("JsonValue", declared)
-            self._session[path] = plain
-            self._pending[path] = plain
+            # **只进落盘队列，不进本会话**：默认值是"建立值文件时写什么"，不是"本会话写下的值"。
+            # 塞进 `_session` 会让它冒充一条显式写，从而盖掉用户在文件里改过的值。
+            self._pending[path] = cast("JsonValue", declared)
         self._check_current_value(path)
         return declared
 
@@ -284,9 +284,17 @@ class Config:
         return self._check_read(path, cast("JsonValue", value))
 
     def _source(self, path: str) -> object:
-        """这条键此刻的值从哪来：待写（含强写）→ 本会话 → 文件 → 声明的默认值。"""
-        if path in self._pending:
-            return self._pending[path]
+        """这条键此刻的值从哪来：**本会话写下的值 → 值文件 → 声明的默认值**。
+
+        **文件压过默认值**：值文件是这份配置的真源，代码里那个默认值只负责"把文件建立起来"。
+        故声明过的键照样受文件管——用户改了值文件，程序读到的就是改后的值。
+
+        三段的来路各不相同：
+
+        - **本会话**：`force=True` 显式写下的值（唯一能顶掉文件的通路），批内立即可见；
+        - **值文件**：真正的配置值；
+        - **声明的默认值**：文件里还没有这一行时的退路，只在"文件刚建立、还没落盘"这一瞬用得上。
+        """
         if path in self._session:
             return self._session[path]
         loaded = self._load()
@@ -377,7 +385,10 @@ class Config:
         两段合成，次序即优先级：
 
         1. **用户留在文件里的键**（:meth:`_owns_value` 判为引擎没有值可写的那些）；
-        2. **本会话声明且带默认值的键**——声明是事实源，文件里的旧值在这里被顶掉。
+        2. **本会话声明且带默认值的键**——**文件里有就不写**，它只补文件里还没有的那些。
+
+        **文件优先**：值文件是真源，代码里的默认值只负责"把文件建立起来"。用户改过的值
+        在下一趟运行里不会被代码里的默认值顶回去。
 
         归属按"引擎手里有没有值"判，两条各堵住一类静默丢值：
 
@@ -388,8 +399,13 @@ class Config:
           也不从第一段里剔除（不会删掉用户已有的值）。
         """
         loaded = self._load()
-        user = {key: value for key, value in loaded.items() if not self._owns_value(key)}
-        merged = {**user, **self._session}
+        # 来路分三层，后者只在前面没给值时才补上：
+        #   1. **文件里的全部键**：真源，压过代码里的默认值（故不再按"归谁管"过滤——
+        #      那层过滤正是"声明顶掉文件"的旧口径）；
+        #   2. **声明的默认值**（`_pending`）：只负责把文件建立起来，故文件里已有就不写；
+        #   3. **本会话显式写下的值**（`_session`，即 `force=True`）：唯一能顶掉文件的通路。
+        merged: dict[str, JsonValue] = {**self._pending, **loaded}
+        merged.update(self._session)
         return {key: merged[key] for key in sorted(merged)}
 
     def _owns_value(self, key: str) -> bool:

@@ -32,6 +32,41 @@
       "default": 512,
       "x-cairn-owner": "core.storage.conf",
       "x-cairn-site": "py_src/core/storage/conf.py:32"
+    },
+    "slot.max.byte.b": {
+      "type": "integer",
+      "description": "格长档位之一：每单位 1 字节；五档相加即为格长，全不写则不成立",
+      "default": 512,
+      "x-cairn-owner": "core.storage.slot",
+      "x-cairn-site": "py_src/core/storage/slot.py:73"
+    },
+    "slot.max.byte.gb": {
+      "type": "integer",
+      "description": "格长档位之一：每单位 1073741824 字节；五档相加即为格长，全不写则不成立",
+      "default": 0,
+      "x-cairn-owner": "core.storage.slot",
+      "x-cairn-site": "py_src/core/storage/slot.py:73"
+    },
+    "slot.max.byte.kb": {
+      "type": "integer",
+      "description": "格长档位之一：每单位 1024 字节；五档相加即为格长，全不写则不成立",
+      "default": 0,
+      "x-cairn-owner": "core.storage.slot",
+      "x-cairn-site": "py_src/core/storage/slot.py:73"
+    },
+    "slot.max.byte.mb": {
+      "type": "integer",
+      "description": "格长档位之一：每单位 1048576 字节；五档相加即为格长，全不写则不成立",
+      "default": 0,
+      "x-cairn-owner": "core.storage.slot",
+      "x-cairn-site": "py_src/core/storage/slot.py:73"
+    },
+    "slot.max.byte.tb": {
+      "type": "integer",
+      "description": "格长档位之一：每单位 1099511627776 字节；五档相加即为格长，全不写则不成立",
+      "default": 0,
+      "x-cairn-owner": "core.storage.slot",
+      "x-cairn-site": "py_src/core/storage/slot.py:73"
     }
   }
 }

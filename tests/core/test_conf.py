@@ -185,10 +185,11 @@ def test_duplicate_inside_one_batch_is_refused(conf: Config):
         conf("a.b", 2)
 
 
-def test_value_in_the_file_does_not_block_a_declaration(conf: Config, root: Path):
-    """文件里有这个键不构成"不许再声明"：删了值文件的键之后再补回来是常态。
+def test_the_file_value_wins_over_the_declared_default(conf: Config, root: Path):
+    """**文件为准**：声明带默认值，而文件里已经有这一行时，读到的是文件里的那个值。
 
-    "已经有值"的判据是**本会话声明过**，不是"文件里有这一行"——否则补写会被自己的口径挡住。
+    默认值只负责"把值文件建立起来"；文件建立之后它就是真源。故这里断言 99 而不是 1——
+    否则"用户改了配置文件"这件事在程序里不生效。
     """
     conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
     conf.settings_path().write_text(
@@ -196,8 +197,10 @@ def test_value_in_the_file_does_not_block_a_declaration(conf: Config, root: Path
     )
     fresh = Config(root=root)
 
-    assert fresh("a.b", 1) == 1
-    assert fresh("a.b") == 1
+    assert fresh("a.b", 1) == 1, "声明的返回值是那一处写下的默认值"
+    assert fresh("a.b") == 99, "读出来的是文件里的值"
+    fresh.sync()
+    assert values(fresh)["a.b"] == 99, "落盘也不把文件里的值顶回默认值"
 
 
 def test_redeclaring_in_the_same_session_is_refused_by_the_ledger(conf: Config):
