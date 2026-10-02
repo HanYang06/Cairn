@@ -15,8 +15,9 @@ r"""边车：把命令面接到 stdio 上的一条帧协议。
 
 **日志绝不写 stdout**：那条流是帧的通道，掺一行日志就会让对面解析失败。日志走 stderr。
 
-**方向**：请求 → 回答是**配对**的（带 `id`）；内核 → 壳的**通知**尚未接线（事件总线那条
-扇出还没接到这儿），此处不假装它存在。
+**方向**：请求 → 回答是**配对**的（带 `id`）；内核 → 壳是**单向推送**的通知帧，
+由 `serve` 把事件日志的**反馈那一路**接成帧，循环收工即撤掉——订阅本身只发生在
+`core.event.logs` 那一处。
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ import sys
 from typing import TYPE_CHECKING
 
 from core.api import Api
-from core.event.catalog import ALL as ALL_EVENTS
 from core.exc import CairnError
 from core.init import Kernel
 
@@ -102,38 +102,35 @@ def serve(api: Api, *, stdin: BinaryIO, stdout: BinaryIO, notify: bool = True) -
     错误当场崩掉，对使用者更糟。但**帧本身读不出来**时不回：那时流已经没法保证对齐，
     再写只会让对面更困惑，直接收工更诚实。
 
-    `notify` 为真（默认）时把内核事件接成通知帧——那是这条链的**另一个方向**：请求 → 回答
-    是配对的，内核 → 壳是单向推送，对面按"有没有 `id`"把两者分开。
+    `notify` 为真（默认）时把事件接成通知帧——那是这条链的**另一个方向**：请求 → 回答
+    是配对的，内核 → 壳是单向推送，对面按"有没有 `id`"把两者分开。**反馈只在这一趟循环
+    里有效**：收工即撤掉，不再往一条已经结束的流上写。
+
+    事件在写路径里**同步**触发，而这一层是单线程的一问一答，故一条通知只会排在"它引发的
+    那条回答"**之前**，不会与别的帧交错——那是"不引异步"换来的一个便宜。
     """
-    if notify:
-        _subscribe(api, stdout)
-    count = 0
-    while True:
-        try:
-            request = read_frame(stdin)
-        except FrameError:
-            _LOGGER.exception("帧读不出来，收工")
-            return count
-        if request is None:
-            return count
-        write_frame(stdout, answer(api, request))
-        count += 1
-
-
-def _subscribe(api: Api, stdout: BinaryIO) -> None:
-    """把内核的事件接成通知帧。
-
-    订阅的是目录里**全部**类型：目录本身就是"有哪些事件"的唯一清单，新加的事件自动跟上。
-
-    事件在写路径里**同步**触发，而这一层是单线程的一问一答，故一条通知只会排在"它引发的那条
-    回答"**之前**，不会与别的帧交错——这是"不引异步"换来的一个便宜。
-    """
-    for event_type in ALL_EVENTS:
-        api.kernel.bus.subscribe(event_type, _notifier(stdout))
+    sink = _notifier(stdout) if notify else None
+    if sink is not None:
+        api.kernel.event_log.add_feedback(sink)
+    try:
+        count = 0
+        while True:
+            try:
+                request = read_frame(stdin)
+            except FrameError:
+                _LOGGER.exception("帧读不出来，收工")
+                return count
+            if request is None:
+                return count
+            write_frame(stdout, answer(api, request))
+            count += 1
+    finally:
+        if sink is not None:
+            api.kernel.event_log.remove_feedback(sink)
 
 
 def _notifier(stdout: BinaryIO) -> Callable[[Event], None]:
-    """造一个只认这条流的通知处理器。"""
+    """造一个只认这条流的反馈去向：事件来了就写一条通知帧。"""
 
     def notify(event: Event) -> None:
         write_frame(stdout, _notification(event))

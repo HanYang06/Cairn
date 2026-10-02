@@ -3,7 +3,10 @@
 #
 # PR 自动 AI 评审（OpenCodeReview, Apache-2.0）。
 # 复用官方 composite action：它自行完成 checkout / 装 OCR / 跑 review / 发评论。
-# 需要仓库 secret：DEEPSEEK_API_KEY（DeepSeek API key，映射到 OCR 的 llm_auth_token）。
+# LLM 底座为魔搭 API-Inference（OpenAI 兼容协议）：免费额度按调用次数计、每日重置，超限返回 429，
+# 故一次评审消耗的调用次数即额度消耗，额度用尽即该次评审失败。
+# 额度只覆盖魔搭 API-Inference 在架的模型，且 OCR 依赖原生 tool calling，两项都是选型的硬条件。
+# 需要仓库 secret：ModelScope_Token（魔搭访问令牌，映射到 OCR 的 llm_auth_token）。
 # 详细输入见 https://github.com/alibaba/open-code-review/blob/main/action.yml
 
 name: ocr-review
@@ -84,8 +87,15 @@ jobs:
         with:
           llm_url: https://api-inference.modelscope.cn/v1
           llm_auth_token: ${{ secrets.ModelScope_Token }}
-          llm_model: deepseek-flash
+          # 魔搭侧的模型标识是 Model ID（`owner/name`），不是服务商侧的模型别名。
+          llm_model: Qwen/Qwen3.8-27B
           llm_use_anthropic: 'false'
+          # action 的默认值是 `{"thinking": {"type": "disabled"}}`（Anthropic 形状），魔搭不认该键；
+          # 故显式清空，改由 reasoning_effort 控制思考深度。千问侧只认 xhigh / medium / low
+          # （xhigh 为默认值），与本 action 接受的 minimal / low / medium / high / max
+          # 只交于 low 与 medium 两档；需要 xhigh 时只能写进 llm_extra_body。
+          llm_extra_body: '{}'
+          llm_reasoning_effort: low
           language: Chinese
           # 显式给 PR 号：action 自行从载荷解析时会失败（实测报 "not a positive integer"），给出即稳定命中。
           pr_number: ${{ github.event.pull_request.number || github.event.issue.number }}

@@ -235,6 +235,18 @@ def test_notifications_can_be_turned_off(api: Api):
     assert all("event" not in frame for frame in _replies(stdout.getvalue()))
 
 
+def test_notifications_stop_when_the_loop_ends(api: Api):
+    """收工即撤掉那一路反馈：循环之后发事件，不再往一条已结束的流上写。"""
+    memo = _stored()
+    stdout = io.BytesIO()
+
+    serve(api, stdin=io.BytesIO(_frame({"id": 1, "method": "tables"})), stdout=stdout)
+    ended = stdout.getvalue()
+    memo.delete()
+
+    assert stdout.getvalue() == ended
+
+
 def _event_type(frame: Mapping[str, object]) -> object:
     """取一条通知帧里的类型名。"""
     event = frame["event"]

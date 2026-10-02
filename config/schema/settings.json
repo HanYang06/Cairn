@@ -7,7 +7,7 @@
   "properties": {
     "core.log.level": {
       "type": "string",
-      "description": "内核日志级别：导入内核时设到 core.* 这族记录器",
+      "description": "内核日志级别：导入内核时设到 cairn 这族记录器",
       "default": "WARNING",
       "x-cairn-owner": "core.conf.params",
       "x-cairn-site": "py_src/core/conf/params.py:16"

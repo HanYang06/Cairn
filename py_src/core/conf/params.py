@@ -13,6 +13,6 @@ from __future__ import annotations
 
 from core.conf import conf
 
-conf("core.log.level", "WARNING", type=str, doc="内核日志级别：导入内核时设到 core.* 这族记录器")
+conf("core.log.level", "WARNING", type=str, doc="内核日志级别：导入内核时设到 cairn 这族记录器")
 
 __all__: list[str] = []

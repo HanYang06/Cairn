@@ -42,11 +42,12 @@
 
 | 词 | 含义 | 不是什么 |
 |---|---|---|
-| **Kernel** | 内核装配：库根 ＋ 存储引擎 ＋ 事件总线（`core/init.py`）；只做路径约定、`bind(engine)`、失败钩子接日志三件事 | 没有 `store` / `load` / `patrol` / `repair` / `reindex` / `survey` / `compact` / `locate` |
+| **Kernel** | 内核装配：库根 ＋ 存储引擎 ＋ 事件总线 ＋ 事件日志（`core/init.py`）；只做路径约定、`bind(engine)`、事件日志装配、失败钩子接日志四件事 | 没有 `store` / `load` / `patrol` / `repair` / `reindex` / `survey` / `compact` / `locate` |
 | **bind / 那根线** | `Block` 的能力接到哪个库：**模块级、一个进程一根线**，`close()` 解开 | 不是"每个块自己记着往哪儿写" |
 | **Bus / 事件总线** | 事件引擎：订阅、按注册顺序投递、异常隔离并交回失败清单（`core/event/bus.py`） | 不做决策，也没有解析器 |
 | **Event** | 事件对象（冻结）：`type` / `source` / `subject` / `data` / `id` / `time`；字段名借 CloudEvents 口径 | 不代表实现该规范；也不进存储 |
 | **事件目录** | 内核当前会发出的**两条**类型常量（`object.put` / `object.deleted`，`core/event/catalog.py`），发布与订阅都引它 | 不是三条（`budget.exhausted` 已删：配额那套机制不存在） |
+| **事件日志** | `core/event/logs.py` 的 `EventLog`：**订阅的唯一一处**（一次订阅 `catalog.ALL`），按分流表 `ROUTES` 走诊断 / 落盘 / 反馈三路；落盘是 JSON Lines 的文本文件，得给落点才建 | **不是存储的记录**（不进载体、不建表、不占 ID）；也不是领域活动日志（那是业务语义，属领域层） |
 | **存储引擎 Engine** | 块 ↔ 记录：分配 hub / pack / slot、编码、落盘、读回、摘块（`core/storage/engine.py`） | 不认识数据库 |
 | **数据库引擎 Index** | 索引库那一侧：建身份表、写行、按身份查位置、登记 hub（`core/storage/db/engine.py`） | 不认识 slot / pack / hub |
 | **异常层** | `core/exc.py` 的层级：`CairnError` 兜底，存储 / 配置 / 命令面各族细分；与日志的联动点在 `Bus` 的失败钩子 | 不声明没有抛出点的异常 |

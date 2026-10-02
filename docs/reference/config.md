@@ -20,7 +20,7 @@
 
 | 键 | 类型 | 默认值 | 说明 | 声明处 |
 |---|---|---|---|---|
-| `core.log.level` | `string` | `WARNING` | 内核日志级别：导入内核时设到 core.* 这族记录器 | `py_src/core/conf/params.py:16` |
+| `core.log.level` | `string` | `WARNING` | 内核日志级别：导入内核时设到 cairn 这族记录器 | `py_src/core/conf/params.py:16` |
 | `hub.default` | `string` | `main` | 默认 hub 名：写入不点名时进这一个 | `py_src/core/storage/conf.py:87` |
 | `index.max.byte` | `integer` | `67108864` | 一个索引块的体积上限（字节）：写到这个数由引擎自动续下一块 | `py_src/core/storage/conf.py:88` |
 | `pack.max.byte` | `integer` | `2147483648` | 封口线（字节）：单个载体写满这个数就换新的一份；只管换文件，不是硬上限 | `py_src/core/storage/conf.py:81` |
