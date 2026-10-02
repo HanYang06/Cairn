@@ -157,7 +157,7 @@ config/schema/settings.json   ← 词表（给 IDE 悬停与分发看的 JSON Sc
 
 - **声明归属各自**：使用方在自己的包里声明（存储参数在 `core/storage/conf.py`，内核自己的在
   `core/conf/params.py`）；配置端只负责展开与取值，不替其他包管理；
-- **格式常量不进配置**：载体魔数、文件头长度、记录头布局这类改了会坏库的，留在实现处
+- **格式常量不进配置**：载体魔数、文件头长度、**槽头布局**这类改了会坏库的，留在实现处
   （`core/storage/pack.py` 的 `MAGIC` / `HEADER_SIZE` / `RECORD_HEAD_SIZE`）；
 - **已落盘的东西不被新配置改写**：格长写进载体文件头，此后按文件头读；
 - **引擎不依赖第三方**：只用标准库＋`core.exc`；

@@ -16,7 +16,7 @@
 | 档 | 范围 | 说明 |
 |---|---|---|
 | **公共面**（较稳） | `core` 的 `Kernel` / `Block` / `Engine` / `Bus` / `Event` / `ID`；`core.exc` 的异常层级 | 随设计演进，变更体现于本页，并尽量保留过渡 |
-| **格式面**（改即改格式） | `core.storage.pack` 的魔数与头长度、`core.storage.db.payload` 的保留键与编解码、`core.storage.db.id` 的落盘口径 | 动它们等于动落盘字节：旧库不兼容，须显式处置 |
+| **格式面**（改即改格式） | `core.storage.pack` 的魔数与头长度、`core.storage.db.payload` 的载荷编解码、`core.storage.db.id` 的落盘口径 | 动它们等于动落盘字节：旧库不兼容，须显式处置 |
 | **内部**（不依赖） | `_` 开头的名字、`core.storage.slot` 的格算术细节、`core.storage.engine` 的字段归类与位置回填 | 随时会变，不作依赖 |
 
 ## 层次

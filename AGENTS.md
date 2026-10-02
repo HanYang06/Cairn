@@ -91,9 +91,10 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 - **源码根有两个，名字不重**：Python 在 `py_src/`，前端在 `app/src/`（React）；
   Rust 壳在 `app/src-tauri/`。**顶层包在 `py_src/` 下、一律去 `cairn.` 前缀**（`from core.storage import …`）。
 - `py_src/core/`（L0）是公共底座：**必须 Qt-free、传输无关**。当前装着三件事：
-  **事件引擎**（`core/event/`：`Event` / `Bus` / 事件目录）、**存储引擎**（`core/storage/`：
-  格式与身份 `format/`、载体 `carrier.py`、hub `hub.py`、表声明 `tables.py`、索引库 `index.py`、
-  行层 `rows.py`、引擎 `engine.py`、巡检 `patrol.py`）、**异常层**（`core/exc.py`）；
+  **事件引擎**（`core/event/`：`Event` / `Bus` / 事件目录）、**存储层**（`core/storage/`：
+  格与算术定位 `slot.py`、载体 `pack.py`、hub `hub.py`、声明 `types.py`、配置声明 `conf.py`、
+  存储引擎 `engine.py`、回收 `gc.py`；身份、载荷与索引库在 `db/`（`id.py` / `payload.py` / `engine.py`）；
+  两类索引块在 `index/`）、**异常层**（`core/exc.py`）；
   装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置引擎**在 `core/conf/`
   （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/py_core/config.md`）。
 - `py_src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
@@ -109,8 +110,9 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 - `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源），
   **有冲突以代码为准，改实现后回写文档**；哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
 - 内部时间统一 unix 毫秒（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
-  对象身份是 `core/storage/format/id.py` 的 `ID`：两套凭证并存——`value_uuid`（签发时分配）
-  与 `value_hash`（由内容算出），算法分别是 `uuid4()` 与 `sha256`。
+  对象身份是 `core/storage/db/id.py` 的 `ID`：字段为 `name` / `value_uuid` / `birth_time` 与位置段；
+  **2026-10-02 的存储裁定把 `value_hash` 移出身份**（尚未落码，见
+  `docs/architecture/py_core/storage/block-parts.md`）。
 
 ## 测试
 

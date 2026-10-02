@@ -67,8 +67,8 @@ nav:
       - L0 存储设计: architecture/storage-design.md
       - 块范式: architecture/block-model.md
       - 存储子层:
+          - 块的组成与落点: architecture/py_core/storage/block-parts.md
           - 载体的字节布局: architecture/py_core/storage/pack-format.md
-          - 格与二进制格式: architecture/py_core/storage/slot.md
           - 查询链路: architecture/py_core/storage/query-path.md
       - 配置引擎: architecture/py_core/config.md
       - UI 主题: architecture/ui_design/ui-theme.md
