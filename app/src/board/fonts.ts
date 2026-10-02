@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * 字体替换机制的取值层（口径见 `docs/architecture/ui-theme.md` §3.8）。
+ * 字体替换机制的取值层（口径见 `docs/architecture/ui_design/ui-theme.md` §3.8）。
  *
  * 三件事在这里定：
  * ① **三层角色**（界面 / 编辑 / 阅读）各一个值；

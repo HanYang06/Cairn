@@ -26,7 +26,7 @@ async function invoke<Result>(name: string, args?: Record<string, unknown>): Pro
  * 列出**用户系统里已安装的字体**。
  *
  * 只报告"装了什么"——**不提供、不复制、不缓存字体文件**
- * （`docs/architecture/ui-theme.md` §3.8 的红线）。没有壳时返回空表，界面自行降级。
+ * （`docs/architecture/ui_design/ui-theme.md` §3.8 的红线）。没有壳时返回空表，界面自行降级。
  *
  * 壳返回的是一张**面孔表**（同族多面孔会重复出现，字段见
  * `app/src-tauri/src/system_fonts.rs`）；前端只要族名，故在这里收口——

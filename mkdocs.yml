@@ -60,11 +60,9 @@ nav:
       - 块范式（草案）: architecture/block-model.md
       - 内核: architecture/kernel.md
       - 领域: architecture/domains.md
-      - 配置引擎: architecture/config.md
+      - 配置引擎: architecture/py_core/config.md
       - 笔记模型: architecture/note-model.md
-      - 内嵌资源: architecture/access.md
-      - UI 内核: architecture/ui-kernel.md
-      - UI 主题: architecture/ui-theme.md
+      - UI 主题: architecture/ui_design/ui-theme.md
       - 设计档案: architecture/by-design.md
       - 网络与联邦: architecture/network.md
       - 生态与插件: architecture/ecosystem.md

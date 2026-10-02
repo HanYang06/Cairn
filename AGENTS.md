@@ -95,7 +95,7 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   格式与身份 `format/`、载体 `carrier.py`、hub `hub.py`、表声明 `tables.py`、索引库 `index.py`、
   行层 `rows.py`、引擎 `engine.py`、巡检 `patrol.py`）、**异常层**（`core/exc.py`）；
   装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置引擎**在 `core/conf/`
-  （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/config.md`）。
+  （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/py_core/config.md`）。
 - `py_src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
   **共享件**（`shared/`）；域之间互不依赖；领域结构直接继承 `Block`，扩展只走子类字段、
   新 `type` 或新关系 `kind`。
