@@ -28,18 +28,18 @@ uv sync                 # 建立 .venv 并装齐依赖（不含任何 Qt 组件�
 from core.init import Kernel
 from model.note.types import NoteGroup
 
-with Kernel.create("vault") as kernel:            # 建库并装配；已有库改用 Kernel.open
-    group = NoteGroup()                           # 零参构造：块自己现签一个身份
+with Kernel.create("vault") as kernel:  # 建库并装配；已有库改用 Kernel.open
+    group = NoteGroup()  # 零参构造：块自己现签一个身份
     group.title = "待整理"
     group.notes.extend(["n1", "n2"])
 
-    ident = group.save()                          # 落盘，返回块身份 ID
-    print(ident.value_uuid, ident.value_hash)     # uuid4 比较有效 / sha256 去重有效
+    ident = group.save()  # 落盘，返回块身份 ID
+    print(ident.value_uuid, ident.value_hash)  # uuid4 比较有效 / sha256 去重有效
 
-    fetched = NoteGroup.fetch(ident)              # 按身份读回同一个类
+    fetched = NoteGroup.fetch(ident)  # 按身份读回同一个类
     print(fetched.title, fetched.notes)
 
-    print(kernel.engine.index.tables())           # 库里有哪些身份表
+    print(kernel.engine.index.tables())  # 库里有哪些身份表
 ```
 
 要点：
