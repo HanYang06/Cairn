@@ -8,6 +8,7 @@
 
 **图元类型是开放字符串 + 一份图元库**（作者口径）：写作时写的是图元名，渲染时**先去库里找**，
 有就取出来、没有就报错。故加载顺序是**先读库**（我有哪些图），用户用的都是库里已有的。
+图元库本体是仓里的 `config/shapes.json`；**读它的那一层尚未实现**（渲染归界面层）。
 
 连线是**逻辑图**，故**不存折点**：只记"连哪些图、怎么连、标什么、线是什么形式"，
 几何由渲染时自动布局生成。于是手绘的走向不会被原样复现，而是给一套自动优化的——
@@ -18,8 +19,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from core.storage.format.block import Block, Body
-from core.storage.format.id import ID
+from core.storage.engine import Block
+from core.storage.types import Body
 
 __all__ = ["CanvasLink", "Figure", "NoteCanvas", "PlacedShape"]
 
@@ -91,14 +92,13 @@ class NoteCanvas(Block):
 
     编号一律是**字符串**：它要当映射的键，而 JSON 的键只能是字符串——
     契约面（Python → JSON → TS）过不去的东西，不该在存储面里先埋下。
+
+    表名只由类名算出来（``NoteCanvas`` → ``notecanvas``），故本类不写 ``__init__``：
+    基座那一支收下身份，不给就现签一个。
     """
 
-    def __init__(self) -> None:
-        """声明字段。"""
-        super().__init__()
-        self.id = ID()
-        self.shapes = Body(factory=list[tuple[str, PlacedShape]])
-        self.links = Body(factory=dict[str, CanvasLink])
+    shapes: list[tuple[str, PlacedShape]] = Body([])  # type: ignore[assignment]
+    links: dict[str, CanvasLink] = Body({})  # type: ignore[assignment]
 
     def shape(self, identifier: str) -> PlacedShape | None:
         """按编号取一枚图；没有即 ``None``。

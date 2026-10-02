@@ -11,8 +11,8 @@
 
 from __future__ import annotations
 
-from core.storage.format.block import Block, Body
-from core.storage.format.id import ID
+from core.storage.engine import Block
+from core.storage.types import Body
 
 __all__ = ["NoteTag"]
 
@@ -22,13 +22,12 @@ class NoteTag(Block):
 
     载荷是 KV（标签 → 笔记 ID 的列表）。键序与去重归编码那一侧，不在这里排——
     排序是落盘那一层的规范化，不是这张表的日常形态。
+
+    表名只由类名算出来（``NoteTag`` → ``notetag``），故本类不写 ``__init__``：
+    基座那一支收下身份，不给就现签一个。
     """
 
-    def __init__(self) -> None:
-        """声明字段。"""
-        super().__init__()
-        self.id = ID()
-        self.entries = Body(factory=dict[str, list[str]])
+    entries: dict[str, list[str]] = Body({})  # type: ignore[assignment]
 
     def notes_of(self, name: str) -> list[str]:
         """用了这个标签的笔记 ID；标签不在表里即空。

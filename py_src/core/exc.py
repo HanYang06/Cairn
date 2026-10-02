@@ -17,23 +17,12 @@ class InvalidIdError(CairnError, ValueError):
     """标识符格式非法：唯一标识凭证或内容摘要凭证不满足各自的形态约束。"""
 
 
-class AttrTypeError(CairnError, ValueError):
-    """属性声明非法：缺省值给重了或没给，或类型不在词表里。
-
-    判据与配置共用（`core.conf.types`），异常分开只为报错时说得准是哪一侧。
-    """
-
-
-class BlockShapeError(CairnError, ValueError):
-    """块形状立不起来：载荷声明非法，或这个类型的 `__init__` 没法零参探针。
-
-    参见 `core/storage/format/block.py`：形状是**在 `__init__` 里声明、由零参探针现算**的，
-    故"探不动"与"声明写歪了"都算这一类。
-    """
-
-
 class StorageError(CairnError):
     """存储侧异常的基类：调用方按它兜住整层，再按子类分流。"""
+
+
+class AttrTypeError(StorageError, ValueError):
+    """块属性或内容编不进载荷：值不是 CBOR 认得的写法（如 `Path`、自定义对象）。"""
 
 
 class RecordFormatError(StorageError):
@@ -44,6 +33,14 @@ class SlotError(StorageError):
     """槽区间非法：槽长不合法、末格与记录长度不符，或读越界。"""
 
 
+class SlotSizeError(StorageError):
+    """格长配置不成立：五档一个都没写（等于零），或写成负数。
+
+    格长是**格式事实**：它写进载体文件头，改一次配置即改变后续载体的布局。故配置写空
+    不是"取个默认值"了事，而是当场报错——否则每一次定位都会算在错的基础上。
+    """
+
+
 class HubNotFoundError(StorageError):
     """hub 目录或载体不存在。**读路径不建东西**：不在就报错，不悄悄建一个空的顶上。"""
 
@@ -52,35 +49,19 @@ class HubShapeError(StorageError):
     """hub 的形状或内容不合规：目录缺 `packs/`，或 `packs/` 里混着不是载体的文件。"""
 
 
-class TableDeclarationError(StorageError):
-    """表声明非法：未知项、非法标识符或类型、重复、缺必填项，或重建档与来源不匹配。"""
-
-
 class IndexNotFoundError(StorageError):
     """索引库文件不存在。**读路径不建库**：不在就报错，只有显式建立才创建文件。"""
 
 
 class IndexSchemaError(StorageError):
-    """库内结构与声明不一致，且该差异不允许自动处置（默认拒绝，须显式授权重建）。"""
+    """这个文件不是本程序的索引库（缺 `meta`）：**不把它人的 sqlite 当本库用**。
+
+    索引库是可整份重建的投影，但"重建"要显式下令；认不出形状时先拒绝，不做推断。
+    """
 
 
 class ObjectNotFoundError(StorageError):
     """对象不在存储里：索引没有这一行，或行指向的字节已经读不出来。"""
-
-
-class BlockTooLargeError(StorageError):
-    """块超出它声明的体积上限。
-
-    上限由类型声明给出（`__max_block_*__`）。**分片尚未接线**，故此刻的处置是拒绝写入，
-    而不是切开——切分是存储的活，落地时这条异常会变成"切完再写"。
-    """
-
-
-class BudgetExhaustedError(StorageError):
-    """配额用完，且该类型的档位声明为拒绝（`over_budget = deny`）。
-
-    声明为 `notify` 或 `extend` 的类型不会抛它：那两档都自动续一份，前者另发一条通知。
-    """
 
 
 class ConfigError(CairnError, ValueError):
@@ -124,9 +105,6 @@ class InvalidParamsError(CallError):
 
 __all__ = [
     "AttrTypeError",
-    "BlockShapeError",
-    "BlockTooLargeError",
-    "BudgetExhaustedError",
     "CairnError",
     "CallError",
     "ConfigDuplicateError",
@@ -144,7 +122,7 @@ __all__ = [
     "ObjectNotFoundError",
     "RecordFormatError",
     "SlotError",
+    "SlotSizeError",
     "StorageError",
-    "TableDeclarationError",
     "UnknownMethodError",
 ]

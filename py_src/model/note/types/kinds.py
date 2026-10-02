@@ -70,8 +70,9 @@ REFERENCE_TABLES: Mapping[LineKind, str] = MappingProxyType(
 `LINK` 的目标两可（站内 ID 或站外地址），由它自己的 `data` 说，不在这张表里；
 内容类的 `data` 就是正文，没有目标可查。
 
-表名带 `note` 前缀是刻意的：领域专属的类型以**域名开头**，于是 `project` 那边可以做出
-同名概念而互不相干（各自一张表、不互相引用），"这是谁的资产"看一眼表名就清楚。
+表名带 `note` 前缀是刻意的：它由载体的类名算出（`NoteData` → `notedata`），而领域专属的
+类型以**域名开头**，于是 `project` 那边可以做出同名概念而互不相干（各自一张表、不互相引用），
+"这是谁的资产"看一眼表名就清楚。
 """
 
 
@@ -82,6 +83,6 @@ def reference_table(kind: LineKind) -> str | None:
         kind: 行的语义类型。
 
     Returns:
-        目标表名（可拿去问登记表），或 `None`。
+        目标表名（载体那边也由类名算出同一个名字），或 `None`。
     """
     return REFERENCE_TABLES.get(kind)

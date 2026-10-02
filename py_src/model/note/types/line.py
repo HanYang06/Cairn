@@ -9,7 +9,7 @@
 - ``data``：随 ``kind`` 而定（判别联合）——内容类装文字，引用类装 ID 串；
 - ``spans``：行内样式区间，按起点有序；没有行内样式的行留空。
 
-**行不是块**：它不登记、不建表、没有自己那张 ID 表，只活在 ``NoteData`` 的载荷里。
+**行不是块**：它不建表、没有自己那张 ID 表，只活在 ``NoteData`` 的载荷里。
 
 **这里一律用可变容器（列表）**：行与区间都会被就地增删改，而盘上那条记录是追加写的、
 旧字节一个都不动——内存里"冻结"既换不来盘上的好处，又逼着每次编辑整份复制一遍。
@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from core.storage.format.id import new_uuid
+from core.storage.db.id import new_uuid
 from model.note.exc import LineShapeError, SpanRangeError
 from model.note.types.kinds import LineKind
 

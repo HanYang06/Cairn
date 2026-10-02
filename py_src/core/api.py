@@ -5,39 +5,38 @@
 它**传输无关**：这里只有"方法名 → 参数 → 结果"，没有 socket、没有 stdio、没有 JSON。
 接线（长度头分帧、序列化、子进程）在 `py_src/app/` 那一侧；壳只做转发，**不许认识领域字段**。
 
-**参数与结果都是 JSON 域里的值**：映射、列表、字符串、数字、布尔与空值。二进制（正文）
-这一版走 base64——小载荷够用；**大正文的原始字节通道尚未接线**，故此处不假装它存在。
+**结果必须落在 JSON 域里**：映射、列表、字符串、数字、布尔与空值。故这一面只交出
+四样东西——**身份、位置、计数、记录的原文（base64）**。它**不解领域载荷**：把载荷解成
+领域结构是领域格式层（`model/note/format/`）的活，尚未落地，这里就不假装解得出。
 
-**速查表在这里缓存**：`query` 要一份倒排，而它可整份重算。`store` / `drop` / `repair`
-之后缓存自动失效——它是纯派生物，丢了重建即可，不会与库分叉。
-
-**UI 需求**：这些方法都跑在内核里，界面只经 IPC 调它们。其中 `patrol` / `repair` /
-`survey` / `compact` / `reindex` 是**整库动作**，耗时随库体量增长，界面应放进后台线程
-并给进度（`compact` 还能取消）。
+**这一面是读与诊断**。写由领域块自己发起（`note.save()`），不能因为命令面里放一个
+`store` 就绕过领域——那样"谁决定落点"这条就断了。删除是例外：它是整库动作，落在这里。
 """
 
 from __future__ import annotations
 
 import base64
-import binascii
 from typing import TYPE_CHECKING
 
-from core.exc import InvalidParamsError, UnknownMethodError
+from core.exc import InvalidParamsError, ObjectNotFoundError, UnknownMethodError
+from core.storage.db.payload import decode_block, decode_index, decode_tombstone
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from core.init import Kernel
-    from core.storage.attrindex import AttributeIndex
+    from core.storage.db.id import ID
+
+#: 库自己的几张表：它们不是身份表，列举类型与统计时都不该混进去。
+_RESERVED_TABLES = frozenset({"hub", "meta"})
 
 
 class Api:
-    """命令面：一个内核，加一份随取随建的速查缓存。"""
+    """命令面：一个已装配的内核，加一张"方法名 → 处理器"的表。"""
 
     def __init__(self, kernel: Kernel) -> None:
         """接上一个已装配的内核。"""
         self._kernel = kernel
-        self._table: AttributeIndex | None = None
 
     @property
     def kernel(self) -> Kernel:
@@ -62,164 +61,178 @@ class Api:
             raise UnknownMethodError(f"命令面没有这个方法: {method!r}（有的是 {self.methods}）")
         return handler(self, {} if params is None else params)
 
-    def attribute_index(self) -> AttributeIndex:
-        """取速查表：没有就现建一份。它是派生物，随时可丢。"""
-        if self._table is None:
-            self._table = self._kernel.reindex()
-        return self._table
 
-    def reindex(self) -> AttributeIndex:
-        """重建速查表并缓存它。"""
-        self._table = self._kernel.reindex()
-        return self._table
-
-    def invalidate(self) -> None:
-        """丢掉速查缓存：写路径之后调它，下次查询会自动重建。"""
-        self._table = None
+# ---- 方法实现：每个都只做"读参数 → 问内核 → 折成 JSON" ----
 
 
-# ---- 方法实现：每个都只做"读参数 → 调内核 → 折成 JSON" ----
-
-
-def _store(api: Api, params: Mapping[str, object]) -> dict[str, object]:
-    identity = api.kernel.store(
-        _bytes(params, "data"),
-        kind=_optional_text(params, "kind") or "",
-        attrs=_optional_mapping(params, "attrs"),
-    )
-    api.invalidate()
-    return {"uuid": identity.value_uuid, "hash": identity.value_hash}
-
-
-def _load(api: Api, params: Mapping[str, object]) -> dict[str, object]:
-    return {"data": _as_base64(api.kernel.load(_text(params, "uuid")))}
-
-
-def _drop(api: Api, params: Mapping[str, object]) -> dict[str, object]:
-    dropped = api.kernel.drop(_text(params, "uuid"))
-    if dropped:
-        api.invalidate()
-    return {"dropped": dropped}
-
-
-def _locate(api: Api, params: Mapping[str, object]) -> object:
-    row = api.kernel.locate(_text(params, "uuid"))
-    if row is None:
-        return None
+def _tables(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
+    """库里有哪几张身份表：**用了 ID 的类型各有一张**，按名字排序。"""
     return {
-        "hub": row.in_hub,
-        "pack": row.in_hub_pack,
-        "first": row.in_pack_slot[0],
-        "last": row.in_pack_slot[1],
-    }
-
-
-def _payload(api: Api, params: Mapping[str, object]) -> object:
-    parsed = api.kernel.storage.block_payload(_text(params, "uuid"))
-    if parsed is None:
-        return None
-    return {
-        "attrs": dict(parsed.attrs),
-        "body_uuid": parsed.ref.value_uuid,
-        "body_hash": parsed.ref.value_hash,
-    }
-
-
-def _blocks(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
-    return {
-        "blocks": [
-            {
-                "uuid": row.value_uuid,
-                "hash": row.value_hash,
-                "kind": row.kind,
-                "hub": row.in_hub,
-                "pack": row.in_hub_pack,
-                "first": row.in_pack_slot[0],
-                "last": row.in_pack_slot[1],
-            }
-            for row in api.kernel.index.rows.blocks()
+        "tables": [
+            name for name in api.kernel.engine.index.tables() if name not in _RESERVED_TABLES
         ]
     }
 
 
-def _query(api: Api, params: Mapping[str, object]) -> dict[str, object]:
-    found = api.attribute_index().find(
-        _text(params, "kind"), _text(params, "attribute"), _value(params)
-    )
-    return {"uuids": list(found)}
+def _hubs(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
+    """已登记的 hub 名：登记是投影，真源是库根下那些目录。"""
+    return {"hubs": list(api.kernel.engine.index.hubs())}
 
 
-def _patrol(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
-    report = api.kernel.patrol()
+def _rows(api: Api, params: Mapping[str, object]) -> dict[str, object]:
+    """某个类型的身份行：一行是"这个身份在哪儿"。
+
+    **表名由参数给**，不由命令面去猜：库是一个类型一张表，故"查哪张"这一问只能由
+    调用方回答——它知道自己要什么类型。
+    """
+    table = _text(params, "table")
+    return {"rows": [_row(row) for row in api.kernel.engine.index.rows(table)]}
+
+
+def _locate(api: Api, params: Mapping[str, object]) -> object:
+    """按身份找位置：**逐张身份表找那一行**，返回它在哪张表、哪个 hub / 载体 / 格区间。
+
+    位置本来就是投影，故这一问的答案随时能由顺扫重算；这里只是走索引那条快路。
+    找不到即 ``None``。
+    """
+    value_uuid = _text(params, "uuid")
+    found = _catalog_row(api, value_uuid)
+    if found is None:
+        return None
+    table, row = found
+    return _row(row) | {"table": table}
+
+
+def _record(api: Api, params: Mapping[str, object]) -> dict[str, object]:
+    """块记录的**载荷原文**（base64）：不解释、不降级，解它的人自己知道那是什么。
+
+    这条是刻意留的"最低限度可读"：领域载荷解不成 JSON，而诊断与调试恰恰需要看到
+    原始字节。它顺带把身份两套凭证交回去，调用方据此核对"读到的确实是这一份"。
+
+    Raises:
+        ObjectNotFoundError: 盘上没有这个身份的块记录。
+    """
+    identity = _identity(api, _text(params, "uuid"))
+    found = api.kernel.engine.find_block(identity)
+    if found is None:
+        raise ObjectNotFoundError(f"块不在: {identity.value_uuid}")
+    hub, pack, span, payload = found
     return {
-        "clean": report.clean,
-        "hubs_scanned": report.hubs_scanned,
-        "records_scanned": report.records_scanned,
-        "finds": [
-            {
-                "kind": item.kind.value,
-                "hub": item.hub,
-                "subject": item.subject,
-                "detail": item.detail,
-            }
-            for item in report.finds
-        ],
+        "uuid": identity.value_uuid,
+        "hub": hub,
+        "pack": pack,
+        "first": span.first,
+        "last": span.last,
+        "hash": identity.value_hash,
+        "payload": _as_base64(payload),
     }
 
 
-def _repair(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
-    report = api.kernel.repair(api.kernel.patrol())
-    api.invalidate()
-    return {"applied": len(report.applied), "skipped": len(report.skipped)}
+def _stats(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
+    """整库的**计数**：顺扫一遍，按载荷把记录分成四类。
 
+    **数的是盘上的条数，不判死活**：载体是追加写，被墓碑标记过的块记录仍在盘上，
+    要等 GC 才回收——故 `tombstones` 与 `blocks` 会同时非零，那不是矛盾，是现状。
+    它也**不吐记录本身**：整库记录随库体量无限增长，而这一面要交出 JSON 域里的值。
 
-def _survey(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
-    report = api.kernel.survey()
+    四类各有自己的保留键，判据一起比——只比"不是块记录"会把索引条目也算进来。
+    """
+    records = blocks = contents = indexes = tombstones = 0
+    for record in api.kernel.engine.scan():
+        records += 1
+        if decode_block(record.payload) is not None:
+            blocks += 1
+        elif decode_index(record.payload) is not None:
+            indexes += 1
+        elif decode_tombstone(record.payload) is not None:
+            tombstones += 1
+        else:
+            contents += 1
     return {
-        "waste_ratio": report.waste_ratio,
-        "expected_ratio": report.expected_ratio,
-        "live_records": report.live_records,
-        "dead_records": report.dead_records,
-        "bytes_to_read": report.bytes_to_read,
-        "bytes_to_write": report.bytes_to_write,
-        "packs_to_rewrite": report.packs_to_rewrite,
-        "worth_it": report.worth_it,
+        "records": records,
+        "blocks": blocks,
+        "contents": contents,
+        "indexes": indexes,
+        "tombstones": tombstones,
+        "hubs": len(api.kernel.engine.index.hubs()),
     }
 
 
-def _compact(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
-    report = api.kernel.compact()
-    return {
-        "reclaimed": report.reclaimed,
-        "kept": report.kept,
-        "dropped": report.dropped,
-        "packs_before": report.packs_before,
-        "packs_after": report.packs_after,
-        "cancelled": report.cancelled,
-    }
+def _delete(api: Api, params: Mapping[str, object]) -> dict[str, object]:
+    """摘掉一个块：返回是否确实摘掉了一个。
 
-
-def _reindex(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
-    return {
-        "attributes": [{"kind": kind, "attribute": name} for kind, name in api.reindex().attributes]
-    }
+    载体是追加写，旧字节删不掉——删除的落法是一条墓碑（顺扫据此不再把它算数），
+    空间等 GC 回收。故"删掉"是**语义上不再存在**，不是字节消失。
+    """
+    identity = _identity(api, _text(params, "uuid"))
+    return {"deleted": api.kernel.engine.delete(identity)}
 
 
 #: 命令面那张表：方法名 → 处理器。**它是唯一的入口清单**，加方法只改这里。
 _METHODS: Mapping[str, Callable[[Api, Mapping[str, object]], object]] = {
-    "blocks": _blocks,
-    "compact": _compact,
-    "drop": _drop,
-    "load": _load,
+    "delete": _delete,
+    "hubs": _hubs,
     "locate": _locate,
-    "patrol": _patrol,
-    "payload": _payload,
-    "query": _query,
-    "reindex": _reindex,
-    "repair": _repair,
-    "store": _store,
-    "survey": _survey,
+    "record": _record,
+    "rows": _rows,
+    "stats": _stats,
+    "tables": _tables,
 }
+
+
+# ---- 内部：身份还原与行折形 ----
+
+
+def _catalog_row(api: Api, value_uuid: str) -> tuple[str, dict[str, object]] | None:
+    """逐张身份表找这个 uuid 的那一行；没有即 ``None``。"""
+    index = api.kernel.engine.index
+    for table in index.tables():
+        if table in _RESERVED_TABLES:
+            continue
+        row = index.get(table, value_uuid)
+        if row is not None:
+            return table, row
+    return None
+
+
+def _identity(api: Api, value_uuid: str) -> ID:
+    """由库里的那一行还原身份：**整行照 `ID.from_record` 搬**，故两套凭证都在。
+
+    库里没有这一行时退回"只有分配形态"的身份，让引擎顺扫去找——库是投影，
+    缺一行不该等于"这个块不存在"（那时摘要也真的没人给出，故它为空）。
+    """
+    from core.storage.db.id import ID  # noqa: PLC0415 — 只在这一处用到，按需取
+
+    found = _catalog_row(api, value_uuid)
+    if found is None:
+        return ID("", value_uuid=value_uuid)
+    _table, row = found
+    return ID.from_record(row)
+
+
+def _row(row: Mapping[str, object]) -> dict[str, object]:
+    """把一行身份折成 JSON：位置段落成两个数，其余照字符串交出去。"""
+    return {
+        "uuid": str(row.get("value_uuid") or ""),
+        "name": str(row.get("name") or ""),
+        "hash": str(row.get("value_hash") or ""),
+        "birth_time": str(row.get("birth_time") or ""),
+        "hub": str(row.get("in_hub") or ""),
+        "pack": str(row.get("in_hub_pack") or ""),
+        "first": _slot(row.get("in_pack_slot"), 0),
+        "last": _slot(row.get("in_pack_slot"), 1),
+    }
+
+
+def _slot(value: object, offset: int) -> int:
+    """取格区间的头 / 末格：库里落成 ``"头:末"``，读不回来即零。"""
+    head, sep, tail = str(value or "").partition(":")
+    if not sep:
+        return 0
+    try:
+        return int((head, tail)[offset])
+    except ValueError:
+        return 0
 
 
 # ---- 参数读取：缺了或类型不对就报错，不猜 ----
@@ -228,45 +241,9 @@ _METHODS: Mapping[str, Callable[[Api, Mapping[str, object]], object]] = {
 def _text(params: Mapping[str, object], key: str) -> str:
     """取一个必需的字符串参数。"""
     value = params.get(key)
-    if not isinstance(value, str):
-        raise InvalidParamsError(f"参数 {key} 必须是字符串: {value!r}")
+    if not isinstance(value, str) or not value:
+        raise InvalidParamsError(f"参数 {key} 必须是非空字符串: {value!r}")
     return value
-
-
-def _optional_text(params: Mapping[str, object], key: str) -> str | None:
-    """取一个可选的字符串参数：没给即 `None`，给了但不是字符串即报错。"""
-    value = params.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise InvalidParamsError(f"参数 {key} 必须是字符串: {value!r}")
-    return value
-
-
-def _optional_mapping(params: Mapping[str, object], key: str) -> Mapping[str, object] | None:
-    """取一个可选的映射参数（块属性就是它）。"""
-    value = params.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise InvalidParamsError(f"参数 {key} 必须是映射: {value!r}")
-    return value
-
-
-def _value(params: Mapping[str, object]) -> object:
-    """取要查的那个属性值：**必须给**，空值也是值。"""
-    if "value" not in params:
-        raise InvalidParamsError("参数 value 不能少：按属性查要给出要查的值")
-    return params["value"]
-
-
-def _bytes(params: Mapping[str, object], key: str) -> bytes:
-    """取一个 base64 编码的二进制参数。"""
-    text = _text(params, key)
-    try:
-        return base64.b64decode(text, validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise InvalidParamsError(f"参数 {key} 不是合法的 base64: {error}") from error
 
 
 def _as_base64(data: bytes) -> str:

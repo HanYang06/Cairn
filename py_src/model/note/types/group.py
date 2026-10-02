@@ -12,9 +12,8 @@
 
 from __future__ import annotations
 
-from core.attr import attr
-from core.storage.format.block import Block, Body
-from core.storage.format.id import ID
+from core.storage.engine import Block
+from core.storage.types import Attr, Body
 
 __all__ = ["NoteGroup"]
 
@@ -24,13 +23,12 @@ class NoteGroup(Block):
 
     名字走 ``title``：``ID`` 自己已经有一个 ``name`` 字段（可读名称），
     组的名字再用 ``name`` 就是同名两义，故不取。
+
+    表名只由类名算出来（``NoteGroup`` → ``notegroup``），故本类不写 ``__init__``：
+    基座那一支收下身份，不给就现签一个。
     """
 
-    def __init__(self) -> None:
-        """声明字段。成员与子组都是**载荷**：顺序即用户摆的顺序，是内容的一部分。"""
-        super().__init__()
-        self.id = ID()
-        self.title = attr(default="")
-        self.collapsed = attr(default=False)
-        self.notes = Body(factory=list[str])
-        self.groups = Body(factory=list[str])
+    title: str = Attr("")  # type: ignore[assignment]
+    collapsed: bool = Attr(False)  # type: ignore[assignment]
+    notes: list[str] = Body([])  # type: ignore[assignment]
+    groups: list[str] = Body([])  # type: ignore[assignment]
