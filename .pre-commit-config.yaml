@@ -30,7 +30,7 @@ repos:
       # 口径与换法见 `scripts/punct.py`；看过量再决定是否改成阻断。
       - id: punct
         name: punct (半角标点)
-        entry: uv run python scripts/punct.py --report
+        entry: uv run python scripts/punct.py --fix
         language: system
         types_or: [python]
         require_serial: true
