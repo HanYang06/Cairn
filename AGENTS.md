@@ -32,7 +32,7 @@ uv lock --check                           # 锁文件是否与声明同步
 
 uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
                                           # **先装钩子**，否则下面这条与提交时的门禁都不跑
-uv run pre-commit run --all-files         # 提交前全量门禁（11 个钩子；清单见 quality.md §4）
+uv run pre-commit run --all-files         # 提交前全量门禁（12 个钩子；清单见 quality.md §4）
 
 uv run mkdocs serve                       # 文档站本地预览 -> http://127.0.0.1:8000
 uv run mkdocs build --strict              # 文档站构建门禁（坏链接/缺页面/未知配置即失败）
@@ -111,9 +111,14 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   **有冲突以代码为准，改实现后回写文档**；哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
 - 内部时间统一 unix 毫秒（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
   对象身份是 `core/storage/db/id.py` 的 `ID`：字段为 `name` / `value_uuid` / `birth_time`
-  与位置段，另有两项库的事实 `attr_in_pack_slot`（哪几格是属性槽）与 `body_history`；
+  与位置段，另有**一项**库的事实 `body_history`（正文摘要链：一个世代一条摘要，
+  最新那一代就是当前用的那份正文的摘要）；
   **2026-10-02 的存储裁定把 `value_hash` 移出身份**（同日落码，见
   `docs/architecture/py_core/storage/block-parts.md`）。
+  **同日的修正裁定**：**槽号只在 pack 内有意义**，ID 是跨 pack、跨 hub 的坐标，
+  故"越 pack（甚至越 hub）的关联只能用摘要，不能用槽号"——"哪几格是属性槽"
+  **不再是库的一列**，属性槽与正文槽靠槽头种类分辨（`pack.ATTR_SLOT` / `pack.BODY_SLOT`），
+  正文的位置记在正文索引的位置行里（跨 pack/hub 的坐标）。
 
 ## 测试
 
