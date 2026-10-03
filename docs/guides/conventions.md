@@ -63,9 +63,14 @@ Python 侧（py_src/）：
 ## 4. 数据约定
 
 - 内部时间统一 **unix 毫秒**（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
-- 对象身份是 `core/storage/format/id.py` 的 **`ID`**：两套凭证并存——
-  `value_uuid`（`uuid4()`，比较有效）与 `value_hash`（`sha256` 十六进制，去重有效）。
-- 类型名由**程序**给出（`kind`），落盘不写类型标号；不认识的 ID 一律降级读回。
+- 对象身份是 `py_src/core/storage/db/id.py` 的 **`ID`**（身份属于数据库那一侧——它是索引的来路）：
+  字段为 `name`（由持有者推出，表名取自它）、`value_uuid`、`birth_time` 与位置段；
+  **`value_hash` 已按 2026-10-02 裁定移出身份**——去重只针对 `Body` 的内容，
+  走正文索引块。库里的列 = `ID_FIELDS` ＋ 属性槽那一列 ＋ 正文历史那一列。
+- **字段落点声明在类体上**（`core/storage/types.py` 的 `Attr` / `Body`）：用了 `Attr` 就进反表、
+  用了 `Body` 就进**正文槽**，**没有 `indexed=` 一类开关**；裸赋值照样落盘。
+- **表名只由类名算出**（`type(self).__name__.lower()`）：没有 `__table__` 覆盖、没有表结构声明文件，
+  库里的表由"这个类型用没用 ID"决定。
 - **未实现的设计标为「预留 / 草案」**；文档不得把未实现的内容写成已实现。
 
 ## 5. 质量门禁（企业级-ε）

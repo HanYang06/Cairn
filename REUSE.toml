@@ -46,7 +46,16 @@ SPDX-License-Identifier = "Apache-2.0"
 # —— 文档里的截图（装不下内联头）——
 # 手写文档在 `docs/**/*.md`，走内联头；文档配的位图（如窗口截图）走这里。
 [[annotations]]
-path = ["docs/**/*.png", "docs/**/*.jpg", "docs/**/*.webp"]
+# `scripts/spdx.py` 用 `PurePosixPath.match` 判路径，那里 `**` 等同 `*`（不跨层）——
+# 故每种深度各列一条：文档目录再深一层，照此补一条同形的。
+path = [
+  "docs/**/*.png",
+  "docs/**/**/*.png",
+  "docs/**/*.jpg",
+  "docs/**/**/*.jpg",
+  "docs/**/*.webp",
+  "docs/**/**/*.webp",
+]
 SPDX-FileCopyrightText = "2026 HanYang06"
 SPDX-License-Identifier = "Apache-2.0"
 

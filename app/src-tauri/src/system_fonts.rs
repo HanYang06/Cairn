@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 HanYang06
 // SPDX-License-Identifier: Apache-2.0
 
-//! 系统字体枚举：给前端的"字体替换"机制（`docs/architecture/ui-theme.md` §3.8）。
+//! 系统字体枚举：给前端的"字体替换"机制（`docs/architecture/ui_design/ui-theme.md` §3.8）。
 //!
 //! 归"窗口与系统"那一摊，**不是业务进壳**——壳只报告本机装了什么字体，
 //! 不挑字体、不复制字体文件、不缓存字体文件（那正是 §3.8 的红线）。

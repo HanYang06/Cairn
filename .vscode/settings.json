@@ -2,7 +2,6 @@
     "python.REPL.enableREPLSmartSend": false,
     "python.languageServer": "Pylance",
     "python.analysis.languageServerMode": "full",
-    "qtForPython.qmlls.path": "${workspaceFolder}/.venv/Lib/site-packages/PySide6/qmlls.exe",
     "python.analysis.autoFormatStrings": true,
     "python.analysis.autoTranslateDocstrings": true,
     "python.analysis.diagnosticsSource": "Pylance",

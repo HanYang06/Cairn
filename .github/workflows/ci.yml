@@ -46,6 +46,11 @@ jobs:
       - name: Punct check (半角标点 · 报告模式)
         run: uv run python scripts/punct.py --report
 
+      # 魔法用量（**阻断式**）：类上的 dunder 逐个比对豁免表，并卡"用到魔法的类"比例上限。
+      # 口径见 rules/references/quality.md「魔法：少用、不滥用」；豁免表在 scripts/magic.py。
+      - name: Magic budget (魔法用量)
+        run: uv run python scripts/magic.py --check
+
       # 配置投影（config/settings.json 与 config/schema/settings.json）**没有生成脚本**：
       # 跑一遍程序就顺带生成，入库的产物与声明是否分叉由 pytest 的投影契约用例拦住
       # （`tests/core/test_conf_projection.py`）。详情见 docs/architecture/config.md。

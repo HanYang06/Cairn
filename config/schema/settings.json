@@ -5,33 +5,61 @@
   "description": "由声明自动生成，勿手改：改配置请改声明的那个 conf(...) 调用点，改值请改 config/settings.json。",
   "type": "object",
   "properties": {
+    "body.history.depth": {
+      "type": "integer",
+      "description": "正文保留的世代数：改一段正文即新建一个槽，超出这个数的最老世代可被回收",
+      "default": 1,
+      "x-cairn-owner": "core.storage.conf",
+      "x-cairn-site": "py_src/core/storage/conf.py:91"
+    },
     "core.log.level": {
       "type": "string",
-      "description": "内核日志级别：导入内核时设到 core.* 这族记录器",
+      "description": "内核日志级别：导入内核时设到 cairn 这族记录器",
       "default": "WARNING",
       "x-cairn-owner": "core.conf.params",
       "x-cairn-site": "py_src/core/conf/params.py:16"
     },
-    "storage.block.max_bytes": {
+    "gc.auto.byte": {
       "type": "integer",
-      "description": "单个块的字节上限，超过即分片（预留，尚未接线）",
-      "default": 1048576,
+      "description": "自动回收的阈值（字节）：死字节到这个数即自动回收；0 即不自动回收",
+      "default": 0,
       "x-cairn-owner": "core.storage.conf",
-      "x-cairn-site": "py_src/core/storage/conf.py:39"
+      "x-cairn-site": "py_src/core/storage/conf.py:97"
     },
-    "storage.pack.max_bytes": {
+    "hub.default": {
+      "type": "string",
+      "description": "默认 hub 名：写入不点名时进这一个",
+      "default": "main",
+      "x-cairn-owner": "core.storage.conf",
+      "x-cairn-site": "py_src/core/storage/conf.py:84"
+    },
+    "index.max.byte": {
       "type": "integer",
-      "description": "单个载体的字节上限，写满即封口（只管封口线，不定槽长）",
+      "description": "一个索引块的体积上限（字节）：写到这个数由引擎自动续下一块",
+      "default": 67108864,
+      "x-cairn-owner": "core.storage.conf",
+      "x-cairn-site": "py_src/core/storage/conf.py:85"
+    },
+    "pack.max.byte": {
+      "type": "integer",
+      "description": "封口线（字节）：单个载体写满这个数就换新的一份；只管换文件，不是硬上限",
       "default": 2147483648,
       "x-cairn-owner": "core.storage.conf",
-      "x-cairn-site": "py_src/core/storage/conf.py:33"
+      "x-cairn-site": "py_src/core/storage/conf.py:78"
     },
-    "storage.pack.slot_bytes": {
+    "slot.max.byte.b": {
       "type": "integer",
-      "description": "槽长：载体内的定长分配与定位单位，写进文件头",
+      "description": "格长档位之一：每单位 1 字节；两档相加即为格长，全不写则不成立",
       "default": 512,
       "x-cairn-owner": "core.storage.conf",
-      "x-cairn-site": "py_src/core/storage/conf.py:32"
+      "x-cairn-site": "py_src/core/storage/conf.py:53"
+    },
+    "slot.max.byte.kb": {
+      "type": "integer",
+      "description": "格长档位之一：每单位 1024 字节；两档相加即为格长，全不写则不成立",
+      "default": 0,
+      "x-cairn-owner": "core.storage.conf",
+      "x-cairn-site": "py_src/core/storage/conf.py:53"
     }
   }
 }

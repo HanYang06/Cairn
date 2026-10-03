@@ -1,41 +1,172 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""存储那组配置声明。
+"""存储这一层的配置声明:格长,封口线,默认 hub,索引块上限,正文历史深度,自动回收阈值.
 
-**各管各的**：存储的参数由存储自己声明，配置端只负责展开与取值，不替别人管。
-内核那个模块（`core/conf/params.py`）声明的是日志级别一类，与这里互不干涉。
+**各管各的**:本包要用配置,就在本包声明——内核自身那几条在 `core/conf/params.py`.
+声明即事实:默认值只写这一份,值文件由引擎展开;改值改 `config/settings.json`,
+改默认值改这里.
 
-三条规矩（与设计篇 §5.5 同口径）：
+六组键,各自回答一个问题:
 
-- **格式常量不进配置**：载体魔数、文件头长度、记录头布局这类改了会坏库的，留在实现处；
-- **已落盘的东西不被新配置改写**：槽长在建载体时写进文件头，此后一律按文件头读——
-  改配置不会让老载体的偏移错位；
-- **取用点不抄默认值**：要值就向引擎要（`conf("storage.pack.slot_bytes")`），
-  默认值只写在下面这几行里。
+| 键 | 回答什么 | 取它用 |
+|---|---|---|
+| `slot.max.byte.{b,kb}` | 新建载体的格长 | :func:`slot_bytes` |
+| `pack.max.byte` | 一个载体写到多大换新的一份 | :func:`pack_max_bytes` |
+| `hub.default` | 不点名时写进哪个 hub | :func:`default_hub_name` |
+| `index.max.byte` | 一个索引块写到多大续下一块 | :func:`index_max_bytes` |
+| `body.history.depth` | 正文保留几个世代 | :func:`body_history_depth` |
+| `gc.auto.byte` | 死字节到多少自动回收(`0` 即不自动) | :func:`gc_auto_bytes` |
+
+**格长按两档相加**:任何一档不写都成立(那档算零),**两档全不写则不成立**——那等于格长为零,
+当场报错.相加是为了用整数精确表示:只给一个"带小数的兆"就得碰浮点,而格长是**格式事实**,
+浮点误差会直接错位到偏移算术里.**兆 / 吉 / 太三档按 2026-10-02 裁定清掉**:格长是格内浪费的
+上界,兆以上的档没有用处.
+
+**其余四条是策略,不是格式事实**:`pack.max.byte` / `index.max.byte` / `body.history.depth` /
+`gc.auto.byte` 只决定"什么时候换文件 / 续块 / 丢世代 / 回收",改大改小都不会让已落盘的字节错位——
+格长随载体走(写在文件头里),故它们读的是当前值,不缓存.
+
+格式常量(载体魔数,文件头长度,槽头布局这类改了会坏库的)**故意不进配置**,留在实现处.
 """
 
 from __future__ import annotations
 
 from core.conf import conf
-from core.storage.hub import DEFAULT_MAX_BYTES, DEFAULT_SLOT_BYTES
+from core.exc import SlotSizeError
 
-SLOT_BYTES = "storage.pack.slot_bytes"
-"""键名常量：取用点写常量而不是各处抄字符串，改名只改这一处。"""
+from .hub import DEFAULT_SLOT_BYTES
+from .pack import DEFAULT_MAX_BYTES
 
-PACK_MAX_BYTES = "storage.pack.max_bytes"
-"""键名常量：载体封口线。"""
+SLOT_MAX_BYTE = "slot.max.byte.b"
+"""格长档位：字节。**开箱的一档**：默认 512 B，另一档留空。"""
 
-BLOCK_MAX_BYTES = "storage.block.max_bytes"
-"""键名常量：块的分片粒度（**预留**：分片尚未接进块面）。"""
+SLOT_MAX_KBYTE = "slot.max.byte.kb"
+"""格长档位：千字节（1024 进制）。"""
 
-# 声明处的默认值直接引用实现里的那两个常量：一份事实、两处引用，比在这里抄一个数字好。
-conf(SLOT_BYTES, DEFAULT_SLOT_BYTES, type=int, doc="槽长：载体内的定长分配与定位单位，写进文件头")
+_TIERS: tuple[tuple[str, int], ...] = (
+    (SLOT_MAX_BYTE, 1),
+    (SLOT_MAX_KBYTE, 1024),
+)
+"""两档与各自的倍数，**顺序即书写的顺序**（相加与报告都按它走）。"""
+
+for _path, _factor in _TIERS:
+    conf(
+        _path,
+        DEFAULT_SLOT_BYTES if _path == SLOT_MAX_BYTE else 0,
+        type=int,
+        doc=f"格长档位之一：每单位 {_factor} 字节；两档相加即为格长，全不写则不成立",
+    )
+
+PACK_MAX_BYTE = "pack.max.byte"
+"""封口线（字节）：单个载体写满这个数就换新的一份。**只管换不换文件**，不是单条记录的硬上限。"""
+
+HUB_DEFAULT = "hub.default"
+"""默认 hub 名：写入时不点名就进这一个。"""
+
+INDEX_MAX_BYTE = "index.max.byte"
+"""一个索引块的体积上限（字节）：写完一块到这个数，引擎自动开下一块。
+
+索引块是块，块有体积上限：改它即改"隔多久续一块"。块自己可以用 `Block.max_bytes` 覆盖它。
+"""
+
+BODY_HISTORY_DEPTH = "body.history.depth"
+"""正文历史保留的世代数：改一段正文即新建一个槽，超出这个数的最老世代可被回收。"""
+
+GC_AUTO_BYTE = "gc.auto.byte"
+"""自动回收的阈值（字节）：死字节到这个数即自动回收；`0` 即不自动回收。"""
+
 conf(
-    PACK_MAX_BYTES,
+    PACK_MAX_BYTE,
     DEFAULT_MAX_BYTES,
     type=int,
-    doc="单个载体的字节上限，写满即封口（只管封口线，不定槽长）",
+    doc="封口线（字节）：单个载体写满这个数就换新的一份；只管换文件，不是硬上限",
 )
-conf(BLOCK_MAX_BYTES, 1024**2, type=int, doc="单个块的字节上限，超过即分片（预留，尚未接线）")
+conf(HUB_DEFAULT, "main", type=str, doc="默认 hub 名：写入不点名时进这一个")
+conf(
+    INDEX_MAX_BYTE,
+    64 * 1024**2,
+    type=int,
+    doc="一个索引块的体积上限（字节）：写到这个数由引擎自动续下一块",
+)
+conf(
+    BODY_HISTORY_DEPTH,
+    1,
+    type=int,
+    doc="正文保留的世代数：改一段正文即新建一个槽，超出这个数的最老世代可被回收",
+)
+conf(
+    GC_AUTO_BYTE,
+    0,
+    type=int,
+    doc="自动回收的阈值（字节）：死字节到这个数即自动回收；0 即不自动回收",
+)
 
-__all__ = ["BLOCK_MAX_BYTES", "PACK_MAX_BYTES", "SLOT_BYTES"]
+
+def slot_bytes() -> int:
+    """当前格长:两档相加归一成字节数.
+
+    它只决定**新建载体时写进文件头的那个数**;读取已有载体一律从文件头读格长,
+    改配置不会让已落盘的载体错位.
+
+    Returns:
+        格长(字节).
+
+    Raises:
+        SlotSizeError: 两档全为空(格长为零),或哪一档写了负数.
+    """
+    total = 0
+    for path, factor in _TIERS:
+        value = int(conf(path))
+        if value < 0:
+            raise SlotSizeError(f"格长档位 {path!r} 不能为负: {value}")
+        total += value * factor
+    if total <= 0:
+        raise SlotSizeError(
+            "格长没有来源："
+            f"{'、'.join(path for path, _ in _TIERS)} 至少要写一档"
+            "（两档相加即为格长；全不写等于零）"
+        )
+    return total
+
+
+def pack_max_bytes() -> int:
+    """当前封口线(字节):单个载体写满它就换新的一份."""
+    return int(conf(PACK_MAX_BYTE))
+
+
+def default_hub_name() -> str:
+    """当前默认 hub 名."""
+    return str(conf(HUB_DEFAULT))
+
+
+def index_max_bytes() -> int:
+    """当前索引块上限(字节)."""
+    return int(conf(INDEX_MAX_BYTE))
+
+
+def body_history_depth() -> int:
+    """当前正文保留的世代数:改一段正文即新建一个槽,超出这个数的最老世代可被回收."""
+    return int(conf(BODY_HISTORY_DEPTH))
+
+
+def gc_auto_bytes() -> int:
+    """当前自动回收的阈值(字节);`0` 即不自动回收."""
+    return int(conf(GC_AUTO_BYTE))
+
+
+__all__ = [
+    "BODY_HISTORY_DEPTH",
+    "DEFAULT_SLOT_BYTES",
+    "GC_AUTO_BYTE",
+    "HUB_DEFAULT",
+    "INDEX_MAX_BYTE",
+    "PACK_MAX_BYTE",
+    "SLOT_MAX_BYTE",
+    "SLOT_MAX_KBYTE",
+    "body_history_depth",
+    "default_hub_name",
+    "gc_auto_bytes",
+    "index_max_bytes",
+    "pack_max_bytes",
+    "slot_bytes",
+]

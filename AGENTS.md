@@ -32,7 +32,7 @@ uv lock --check                           # 锁文件是否与声明同步
 
 uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
                                           # **先装钩子**，否则下面这条与提交时的门禁都不跑
-uv run pre-commit run --all-files         # 提交前全量门禁（11 个钩子；清单见 quality.md §4）
+uv run pre-commit run --all-files         # 提交前全量门禁（12 个钩子；清单见 quality.md §4）
 
 uv run mkdocs serve                       # 文档站本地预览 -> http://127.0.0.1:8000
 uv run mkdocs build --strict              # 文档站构建门禁（坏链接/缺页面/未知配置即失败）
@@ -91,11 +91,12 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 - **源码根有两个，名字不重**：Python 在 `py_src/`，前端在 `app/src/`（React）；
   Rust 壳在 `app/src-tauri/`。**顶层包在 `py_src/` 下、一律去 `cairn.` 前缀**（`from core.storage import …`）。
 - `py_src/core/`（L0）是公共底座：**必须 Qt-free、传输无关**。当前装着三件事：
-  **事件引擎**（`core/event/`：`Event` / `Bus` / 事件目录）、**存储引擎**（`core/storage/`：
-  格式与身份 `format/`、载体 `carrier.py`、hub `hub.py`、表声明 `tables.py`、索引库 `index.py`、
-  行层 `rows.py`、引擎 `engine.py`、巡检 `patrol.py`）、**异常层**（`core/exc.py`）；
+  **事件引擎**（`core/event/`：`Event` / `Bus` / 事件目录）、**存储层**（`core/storage/`：
+  载体与槽 `pack.py`、hub `hub.py`、声明 `types.py`、配置声明 `conf.py`、
+  存储引擎 `engine.py`、回收 `gc.py`；身份与段算术、载荷与索引库在 `db/`
+  （`id.py` / `payload.py` / `engine.py`）；两类索引块在 `index/`）、**异常层**（`core/exc.py`）；
   装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置引擎**在 `core/conf/`
-  （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/config.md`）。
+  （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/py_core/config.md`）。
 - `py_src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
   **共享件**（`shared/`）；域之间互不依赖；领域结构直接继承 `Block`，扩展只走子类字段、
   新 `type` 或新关系 `kind`。
@@ -109,8 +110,15 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 - `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源），
   **有冲突以代码为准，改实现后回写文档**；哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
 - 内部时间统一 unix 毫秒（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
-  对象身份是 `core/storage/format/id.py` 的 `ID`：两套凭证并存——`value_uuid`（签发时分配）
-  与 `value_hash`（由内容算出），算法分别是 `uuid4()` 与 `sha256`。
+  对象身份是 `core/storage/db/id.py` 的 `ID`：字段为 `name` / `value_uuid` / `birth_time`
+  与位置段，另有**一项**库的事实 `body_history`（正文摘要链：一个世代一条摘要，
+  最新那一代就是当前用的那份正文的摘要）；
+  **2026-10-02 的存储裁定把 `value_hash` 移出身份**（同日落码，见
+  `docs/architecture/py_core/storage/block-parts.md`）。
+  **同日的修正裁定**：**槽号只在 pack 内有意义**，ID 是跨 pack、跨 hub 的坐标，
+  故"越 pack（甚至越 hub）的关联只能用摘要，不能用槽号"——"哪几格是属性槽"
+  **不再是库的一列**，属性槽与正文槽靠槽头种类分辨（`pack.ATTR_SLOT` / `pack.BODY_SLOT`），
+  正文的位置记在正文索引的位置行里（跨 pack/hub 的坐标）。
 
 ## 测试
 

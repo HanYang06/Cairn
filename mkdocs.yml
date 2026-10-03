@@ -54,27 +54,30 @@ nav:
       - 参与开发: guides/development.md
       - 约定与红线: guides/conventions.md
   - 架构:
-      - architecture/index.md
-      - 总纲（数据结构）: architecture/data-model.md
+      # 待重写的页：2026-09-29 的重建把 `docs/architecture/` 整批删了。页回来时按下标放开——
+      # 新路径以实际落点为准（根下与子目录都有），`--strict` 会因 nav 指向不存在的页而中止。
+      - 索引与状态: architecture/index.md
+      # - 总纲（数据结构）: architecture/data-model.md
+      # - 内核: architecture/kernel.md
+      # - 领域: architecture/domains.md
+      # - 笔记模型: architecture/note-model.md
+      # - 设计档案: architecture/by-design.md
+      # - 网络与联邦: architecture/network.md
+      # - 生态与插件: architecture/ecosystem.md
       - L0 存储设计: architecture/storage-design.md
-      - 内核: architecture/kernel.md
-      - 领域: architecture/domains.md
-      - 配置引擎: architecture/config.md
-      - 笔记模型: architecture/note-model.md
-      - 内嵌资源: architecture/access.md
-      - UI 内核: architecture/ui-kernel.md
-      - UI 主题: architecture/ui-theme.md
-      - 设计档案: architecture/by-design.md
-      - 网络与联邦: architecture/network.md
-      - 生态与插件: architecture/ecosystem.md
+      - 块范式: architecture/block-model.md
+      - 存储子层:
+          - 块的组成与落点: architecture/py_core/storage/block-parts.md
+          - 载体的字节布局: architecture/py_core/storage/pack-format.md
+          - 查询链路: architecture/py_core/storage/query-path.md
+      - 配置引擎: architecture/py_core/config.md
+      - UI 主题: architecture/ui_design/ui-theme.md
   - API 参考:
       - api/index.md
       - core（底座）: api/core.md
   - 术语: reference/glossary.md
   - 配置项参考: reference/config.md
   - 贡献与许可: contributing.md
-  - 博客:
-      - 滚轮选择器与物理引擎: blog/wheel-picker-physics-engine.md
 
 plugins:
   - search:

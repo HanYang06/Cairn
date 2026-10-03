@@ -57,7 +57,7 @@ py_src/
   model/       领域落点（note，重建中）
   app/         Python 侧入口：内核边车（python -m app.sidecar）
 app/           Tauri 壳 + Web 前端：app/src/（React/TS）、app/src-tauri/（Rust 壳）
-tools/         可 import 的开发件（mypy 插件、输出助手）
+tools/         可 import 的开发件（原子写与输出助手）
 scripts/       门禁 / 生成器 / 打包（不放 __init__.py；core 与 tools 不许依赖它）
 docs/          手写文档（事实源）
 tests/         pytest 用例

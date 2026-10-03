@@ -4,7 +4,7 @@
 # core（底座）
 
 > L0：内核——**事件引擎 + 存储引擎 + 配置引擎 + 异常层**，以及把它们装在一起的 `Kernel`；
-> 另有属性面与传输无关的命令面。**红线：Qt-free、传输无关。**
+> 另有传输无关的命令面。**红线：Qt-free、传输无关。**
 
 ## 包入口
 
@@ -14,7 +14,9 @@
 
 ## 内核装配
 
-库根 ＋ 引擎的装配处：库的开关（`create` / `open`）、引擎挂载与维护入口（`patrol` / `repair`）。
+库根 ＋ 存储引擎 ＋ 事件总线的装配处：库的开关（`create` / `open`）、`bind(engine)`、
+失败钩子接日志。**写与读都由块自己发起**（`block.save()` / `Note.fetch(identity)`），
+装配处不再有 `store` / `load` 一类方法。
 
 ::: core.init
 
@@ -30,6 +32,7 @@
 ## 事件引擎
 
 事件是**瞬时通知**：不进存储、不承载业务流转；总线只做扇出，不做决策。
+目录只有两条（`object.put` / `object.deleted`）。
 
 ::: core.event
     options:
@@ -43,7 +46,8 @@
 
 ## 存储引擎
 
-块落成记录、按身份读回、摘块，落盘后发事件；hub 是载体文件所在的一层目录。
+四层各管下一层：段算术与身份（`core.storage.db.id`）、载体、hub、块 ↔ 槽。一个块分属性槽与正文槽，
+落盘后发事件，删除即摘掉索引库那一行。
 
 ::: core.storage
     options:
@@ -51,43 +55,42 @@
 
 ::: core.storage.engine
 
-::: core.storage.index
+::: core.storage.types
+
+::: core.storage.pack
 
 ::: core.storage.hub
 
-::: core.storage.carrier
+## 数据库引擎与索引
 
-::: core.storage.rows
+库的结构只有一条来路：**ID**——一个类型一张身份表（列 ＝ `ID_FIELDS`），
+外加 `hub` 登记与 `meta`。两类索引块**直接继承 `Block`**、各有自己的身份表，
+只声明 `manages` 与 `holds`；正表存在索引块的载荷里，反表在读的时候现算。
 
-::: core.storage.tables
-
-::: core.storage.patrol
-
-## 属性面
-
-块上的字段经 `attr[T]` 声明才落盘（类型判据与配置共用一套）；按属性查询由可重建的索引承担。
-
-::: core.attr
-
-::: core.storage.attrindex
-
-## 字节格式
-
-身份、块载荷与载体记录：落盘字节的定义处，改它们就是改格式。
-
-::: core.storage.format
+::: core.storage.db
     options:
       members: false
 
-::: core.storage.format.id
+::: core.storage.db.id
 
-::: core.storage.format.block
+::: core.storage.db.payload
 
-::: core.storage.format.record
+::: core.storage.db.engine
+
+::: core.storage.index
+    options:
+      members: false
+
+::: core.storage.index.index
+
+::: core.storage.index.attrindex
+
+::: core.storage.index.bodyindex
 
 ## 命令面
 
-内核短面的方法表：给边车 / CLI / 测试用，传输无关，不含界面代码。
+内核命令面的方法表（七个：`tables` / `hubs` / `rows` / `locate` / `record` / `stats` / `delete`）：
+给边车 / CLI / 测试用，传输无关、不含界面代码。载荷原文以 base64 交出，**不解领域载荷**。
 
 ::: core.api
 

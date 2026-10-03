@@ -17,19 +17,22 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "argon2-cffi>=25.1.0",
-    "blake3>=1.0.9",
+    # 载荷编解码：canonical CBOR——块记录与内容记录都靠它落到字节。
     "cbor2>=6.1.4",
-    "cryptography>=50.0.1",
-    "fastcdc>=1.7.0",
-    "pyyaml>=6.0.3",
-    "tomli-w>=1.2.0",
 ]
+
+# 已撤掉的声明（2026-10-02，判据是"一处引用都没有"）：
+#   blake3 / cryptography / argon2-cffi —— 摘要取 sha256、库本地不加密，三者都没有调用点；
+#   fastcdc —— 媒体定了固定粒度分片，不上内容定义分块；
+#   pyyaml —— 表声明文件（`config/tables.yaml`）已取消，那是它唯一的用处；
+#   tomli-w —— 同一条链上的 TOML 写出，随表声明一并没了。
+# `cbor2` 留着：它是载荷的落盘形态，不是可替换的实现选择。
 
 # 桌面外壳与前端不在本文件里：`app/` 是一份 Tauri 工程（`app/src-tauri/` 的 Cargo 工程
 # ＋ `app/src/` 的 React 前端，同一个 pnpm 工程）。
 # 原先的 `pyside6` 随 2026-09-30「Qt 退场」一并移除。
-# 命令入口的脚本声明见下方 `[project.scripts]`。
+# **没有 `[project.scripts]`**：命令行入口的契约（库根旋钮名、子命令集、退出码口径）待作者裁定，
+# 未定之前不占一个入口名。内核侧那一面在 `core/api.py`，边车在 `app/sidecar.py`。
 
 [dependency-groups]
 dev = [
@@ -42,8 +45,6 @@ dev = [
     "modelscope>=1.40.1",
     "mkdocs-material>=9.7",
     "mkdocstrings[python]>=1.0.6",
-    # mypy strict 下 PyYAML 需要类型存根
-    "types-pyyaml>=6.0.12",
     "deptry>=0.25.1",
     "import-linter>=2.15",
     # 依赖 CVE 扫描（CI 的 security-scan 用）。与 import-linter 同类：
@@ -65,9 +66,9 @@ default = true
 
 [tool.hatch.build.targets.wheel]
 # Python 源码根是 `py_src/`（不叫 `src/`：仓里另有 `app/src/` 是 React 前端，两个 `src` 无法区分）。
-# `core` 是内核、`app` 是入口层（边车与命令行）；`feature` 待重建——
+# `core` 是内核、`model` 是领域层、`app` 是入口层（边车与命令行）。
 # 列不存在的目录不会报错（hatch 静默跳过），但配置与事实不符本身就是尾巴。
-packages = ["py_src/core", "py_src/app"]
+packages = ["py_src/core", "py_src/model", "py_src/app"]
 
 [tool.ruff]
 target-version = "py313"
@@ -111,73 +112,52 @@ ignore = [
 notice-rgx = "SPDX-FileCopyrightText: 2026 HanYang06"
 
 [tool.ruff.lint.isort]
-# `core` 是内核、`app` 是入口层；`feature` 随领域层重建加回。
-known-first-party = ["app", "core"]
+# `core` 是内核、`model` 是领域层、`app` 是入口层。三者都是本仓自己的包：
+# 不列进来时 `from model.… import …` 会被当成第三方，与 `core` 分成两段即报 I001。
+known-first-party = ["app", "core", "model"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+# 注：这里**没有** `[tool.ruff.lint.flake8-type-checking]` 那一节。旧范式下块类型的
+# `__init__` 体在构造时跑那些声明表达式，故要声明 `runtime-evaluated-base-classes`；
+# 现值范式把声明写回类体，而注解一个都不求值（`Attr` / `Body` 只认字段名，不读注解），
+# 故那一条按事实删掉——留着它会把"只给 mypy 看的领域类型"误判成运行期要用。
+
 [tool.ruff.lint.per-file-ignores]
-# 表名/列名来自声明层（tables.py）并经 quote_identifier 加引号，值全部参数化（无注入面）。
-"py_src/core/storage/rows.py" = ["S608"]
-"py_src/core/storage/index.py" = ["S608"]
+# 表名来自类名、列名来自 `ID_FIELDS`，两者都经 `Index._quote` 加引号，值全部参数化（无注入面）。
+"py_src/core/storage/db/engine.py" = ["S608"]
 # `conf` 的调用形是**对的形状本身就是契约**：声明与取值共用一个签名，`path` 之后全是可选副参数
 # （类型 / 说明 / 文件引用 / 强写）。拆成小对象会把"一种调用形"这个卖点拆掉。
 "py_src/core/conf/registry.py" = ["PLR0913"]
-# 表声明层要问"配置在哪"：`core.conf` 在函数里导入，免得"导入存储"就得先有配置文件在那儿。
-"py_src/core/storage/tables.py" = ["PLC0415"]
-# 测试与脚本：断言、注解、docstring、魔法数、打印等不按产品代码要求。
-# `FBT003` 也放行：配置面就是 `conf(键, 值)` 这种位置调用，测试里写布尔字面量是"取值"而非开关。
-# `scripts/**` 另需 `INP001`：那里**故意不放 `__init__.py`**（不成包 ⇒ 结构上不可 import）。
+# `Attr(False)` 这类写法里那个布尔是**声明的默认值**，不是"给函数加开关的布尔位置参数"：
+# 该规则防的是 `f(True, False)` 那种读不懂的调用，而 `Attr(<默认值>)` 恰恰是最清楚的写法。
+"py_src/model/**" = ["FBT003"]
 "tests/**" = ["ANN", "D", "S101", "S105", "S603", "PLR2004", "SLF001", "INP001", "FBT003"]
 "tools/**" = ["ANN", "D", "S101", "S603", "C901", "PLR2004", "T201", "INP001", "ERA001"]
 "scripts/**" = ["ANN", "D", "S101", "S603", "C901", "PLR2004", "T201", "INP001", "ERA001"]
 
 [tool.mypy]
 python_version = "3.13"
-# 企业级-ε：类型按静态语言口径，未注解 / 隐式 Any / Any 泄漏一律报错。
 strict = true
-plugins = ["tools/mypy_plugin.py"]
-# 源码根要显式指给 mypy：它不读 pytest 的 `pythonpath`，不指路时 `core` 会被认成
-# site-packages 里缺 `py.typed` 的第三方包，于是测试侧的 `core.*` 全成 Any——
-# 报错数看着不少，判据却已经失效。指路之后单独跑 `mypy tests` 也是同一口径。
 mypy_path = "py_src"
-
-# 原先这里给 `tools.preview_shell` 开了豁免（它依赖已删除的 `app` / `ui_tools`）。
-# 2026-09-30「Qt 退场」之后该文件已删除：它按新材质**永远不会恢复**，
-# 留着会一直让 `ruff check .` 报 I001（import 分块顺序），故与 Qt 一并清掉。
-# 打包脚本 `scripts/build.py` 的豁免同批摘除，见该文件 docstring 的状态说明。
-
-# 测试纳入扫描，但不强求函数签名注解（与 ruff 对 `tests/**` 豁免 `ANN` 同一口径）：
-# 236 个 `def test_*` 补 `-> None` 属机械改动，带来的常驻摩擦大于收益。
-# 放行的只是签名；`check_untyped_defs` 仍在 strict 内，函数体照常受检，
-# 对 `core.*` 的参数类型、返回类型、属性名的判据一条不少。
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 
 [tool.deptry]
-# 本项目的源码根是 `py_src/`（不叫 `src/`），deptry 认不出 `core` 是本仓自己的包；
-# 不指路就会把它当成传递依赖，一次报几十条 DEP003。
-known_first_party = ["core"]
-# 前端、文档产物、虚拟环境与 vendored 技能不参与 Python 依赖盘点。
+known_first_party = ["core", "model"]
 extend_exclude = ["app", "site", "docs", ".agents"]
 
+# 注：这里**没有** `DEP002` 的豁免清单。旧稿列了六个"声明了没用"的包当例外，
+# 那等于把盘点结果写成"已知问题"；它们已经撤掉声明，故清单也一并删了。
 [tool.deptry.per_rule_ignores]
-# 已声明、尚未接线：这些依赖随各自模块重建才会用上（`progress.md` 有记录）。
-# 冻结已知项，门禁便能拦住**新增**的未用依赖——这才是它存在的意义。
-DEP002 = ["argon2-cffi", "blake3", "cryptography", "fastcdc", "tomli-w"]
-# `tools/mypy_plugin.py` 是 mypy 插件，本就依赖开发依赖。
+# `mypy` 是类型门禁本身要用的开发依赖，产品代码不 import 它。
 DEP004 = ["mypy"]
 
 [tool.importlinter]
-# 架构校验：把"分层"与"内核 Qt-free"变成机器拦得住的规矩（`uv run lint-imports`）。
-# **配置放这里而不是 `.importlinter`**：后者由 import-linter 按系统默认编码读取，
-# 在 Windows（cp936）下遇到中文即解码失败——本文件按 UTF-8 读，没有这个问题。
-# `tools` 也要列进根包：`lint-imports` 是控制台脚本，跑起来时仓根**不在** `sys.path` 上，
-# 只列 `core`（它已装进虚拟环境）时，契约里一写 `tools` 就会报"模块不存在"。
-root_packages = ["app", "core", "tools"]
+root_packages = ["app", "core", "model", "tools"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -206,6 +186,7 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--cov=core",
+    "--cov=model",
     "--cov-branch",
     "--cov-report=term-missing:skip-covered",
 ]
