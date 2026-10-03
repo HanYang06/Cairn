@@ -1,20 +1,21 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""命令面契约：方法表、参数校验，以及它交出来的东西**确实落在 JSON 域里**。
+"""命令面契约:方法表,参数校验,以及它交出来的东西**确实落在 JSON 域里**.
 
-这一层是**传输无关**的，所以测试也不需要任何 stdio——帧协议在 `app/` 那一侧。
-本文件钉五件事：
+这一层是**传输无关**的,所以测试也不需要任何 stdio——帧协议在 `app/` 那一侧.
+本文件钉五件事:
 
-- **方法表就是入口清单**：不认识的名字当场报错，并把有的报出来；
-- **结果只有四种东西**：身份、位置、计数、槽的原文（base64）。故这里逐条检查它们的形状；
-- **位置段按段列表交出去**：不再切成"头格与末格"两半；
-- **`stats` 里没有墓碑那一栏**：删除即摘掉库里那一行，载体上不留标记；
-- **写不由命令面发起**：块自己 `save()`，命令面是读与诊断（删除除外）。
+- **方法表就是入口清单**:不认识的名字当场报错,并把有的报出来;
+- **结果只有四种东西**:身份,位置,计数,槽的原文(base64).故这里逐条检查它们的形状;
+- **位置段按段列表交出去**:不再切成"头格与末格"两半;
+- **`stats` 里没有墓碑那一栏**:删除即摘掉库里那一行,载体上不留标记;
+- **写不由命令面发起**:块自己 `save()`,命令面是读与诊断(删除除外).
 """
 
 from __future__ import annotations
 
 import base64
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 
 
 class Memo(Block):
-    """命令面用例用的最小块：一个可索引属性，外加一段正文。"""
+    """命令面用例用的最小块:一个可索引属性,外加一段正文."""
 
     title: str = Attr("")  # type: ignore[assignment]
     lines: list[str] = Body([])  # type: ignore[assignment]
@@ -40,13 +41,13 @@ class Memo(Block):
 
 @pytest.fixture
 def api(tmp_path: Path) -> Iterator[Api]:
-    """一个接了临时库的命令面（内核关掉时那根线自动解开）。"""
+    """一个接了临时库的命令面(内核关掉时那根线自动解开)."""
     with Kernel.create(tmp_path / "vault") as kernel:
         yield Api(kernel)
 
 
 def _stored() -> Memo:
-    """造一个填好的块并存进去。"""
+    """造一个填好的块并存进去."""
     memo = Memo(ID(Memo))
     memo.title = "标题"
     memo.lines = ["第一行"]
@@ -58,19 +59,19 @@ def _stored() -> Memo:
 
 
 def test_methods_lists_the_surface(api: Api):
-    """表上有哪些方法是可问的，且顺序确定。"""
+    """表上有哪些方法是可问的,且顺序确定."""
     assert set(api.methods) == {"delete", "hubs", "locate", "record", "rows", "stats", "tables"}
     assert api.methods == tuple(sorted(api.methods))
 
 
 def test_unknown_method_is_refused(api: Api):
-    """不认识的方法名当场报错，顺带把有的报出来。"""
+    """不认识的方法名当场报错,顺带把有的报出来."""
     with pytest.raises(UnknownMethodError, match="没有这个方法"):
         api.call("没有这个方法")
 
 
 def test_a_call_without_params_is_taken_as_an_empty_mapping(api: Api):
-    """参数不给即当空映射：`tables` 一类没有参数的方法照旧可用。"""
+    """参数不给即当空映射:`tables` 一类没有参数的方法照旧可用."""
     assert api.call("tables") == api.call("tables", {})
 
 
@@ -78,7 +79,7 @@ def test_a_call_without_params_is_taken_as_an_empty_mapping(api: Api):
 
 
 def test_tables_lists_the_identity_tables(api: Api):
-    """库里有哪些身份表：用了 ID 的类型各有一张，而库自用的那两张不算。"""
+    """库里有哪些身份表:用了 ID 的类型各有一张,而库自用的那两张不算."""
     _stored()
 
     listed = api.call("tables")
@@ -92,7 +93,7 @@ def test_tables_lists_the_identity_tables(api: Api):
 
 
 def test_rows_gives_the_place_of_each_identity(api: Api):
-    """一行身份就是"这个身份在哪儿、它的正文有哪几代"：位置段按**段列表**交出来。"""
+    """一行身份就是"这个身份在哪儿,它的正文是哪一份,经过哪几代":位置段按**段列表**交出来."""
     memo = _stored()
 
     listed = api.call("rows", {"table": "memo"})
@@ -107,12 +108,13 @@ def test_rows_gives_the_place_of_each_identity(api: Api):
     assert row["pack"], "载体名是随机串，但不该为空"
     assert row["segments"], "位置段是段列表的文本写法"
     assert row["slots"], "另给一份展开之后的槽号"
-    assert row["attr_slots"], "属性槽那一段单独交出来"
+    assert json.loads(str(row["history"])) == memo.id.body_history, "摘要链原样交出来"
+    assert "attr_slots" not in row, "哪几格是属性槽由槽头回答，库里不再有那一列"
     assert "hash" not in row, "摘要形态已移出身份"
 
 
 def test_a_row_carries_no_tombstone_column(api: Api):
-    """**库里没有墓碑那一栏**：删除即摘掉那一行，载体上不留标记。"""
+    """**库里没有墓碑那一栏**:删除即摘掉那一行,载体上不留标记."""
     memo = _stored()
 
     listed = api.call("rows", {"table": "memo"})
@@ -125,7 +127,7 @@ def test_a_row_carries_no_tombstone_column(api: Api):
 
 
 def test_locate_finds_where_a_block_lives(api: Api):
-    """按身份找位置：逐张身份表找那一行，交出它在哪张表与哪个坐标。"""
+    """按身份找位置:逐张身份表找那一行,交出它在哪张表与哪个坐标."""
     memo = _stored()
 
     found = api.call("locate", {"uuid": memo.id.value_uuid})
@@ -137,12 +139,12 @@ def test_locate_finds_where_a_block_lives(api: Api):
 
 
 def test_locate_says_nothing_for_an_unknown_identity(api: Api):
-    """不认识的 uuid 不是错：找不到就是找不到。"""
+    """不认识的 uuid 不是错:找不到就是找不到."""
     assert api.call("locate", {"uuid": "没有这个块"}) is None
 
 
 def test_record_returns_the_raw_slots(api: Api):
-    """`record` 的字面意思：**读出该块各槽的原文**（base64），逐格交出。"""
+    """`record` 的字面意思:**读出该块各槽的原文**(base64),逐格交出."""
     memo = _stored()
 
     found = api.call("record", {"uuid": memo.id.value_uuid})
@@ -162,7 +164,7 @@ def test_record_returns_the_raw_slots(api: Api):
 
 
 def test_record_separates_the_attributes_from_the_body(api: Api):
-    """原文里分得清哪一格是属性、哪一格是正文——判据只在槽头上。"""
+    """原文里分得清哪一格是属性,哪一格是正文——判据只在槽头上."""
     memo = _stored()
 
     found = api.call("record", {"uuid": memo.id.value_uuid})
@@ -175,13 +177,13 @@ def test_record_separates_the_attributes_from_the_body(api: Api):
 
 
 def test_record_of_an_unknown_identity_is_refused(api: Api):
-    """取不出来的东西就报"不在"，不交一个空壳回去。"""
+    """取不出来的东西就报"不在",不交一个空壳回去."""
     with pytest.raises(ObjectNotFoundError, match="对象不在"):
         api.call("record", {"uuid": "没有这个块"})
 
 
 def test_stats_counts_slots_by_their_kind(api: Api):
-    """整库计数按**槽的种类**数：属性槽、正文槽、没写过的格，各算各的。"""
+    """整库计数按**槽的种类**数:属性槽,正文槽,没写过的格,各算各的."""
     _stored()
 
     counted = api.call("stats")
@@ -196,7 +198,7 @@ def test_stats_counts_slots_by_their_kind(api: Api):
 
 
 def test_delete_reports_whether_it_hit(api: Api):
-    """删除报真假：第二次删同一个就是假。"""
+    """删除报真假:第二次删同一个就是假."""
     memo = _stored()
 
     assert api.call("delete", {"uuid": memo.id.value_uuid}) == {"deleted": True}
@@ -204,7 +206,7 @@ def test_delete_reports_whether_it_hit(api: Api):
 
 
 def test_delete_takes_the_row_away_without_touching_the_pack(api: Api):
-    """删除只摘掉那一行：载体上不留标记，故 `stats` 的槽数一个都不变。"""
+    """删除只摘掉那一行:载体上不留标记,故 `stats` 的槽数一个都不变."""
     memo = _stored()
     before = api.call("stats")
 
@@ -219,13 +221,13 @@ def test_delete_takes_the_row_away_without_touching_the_pack(api: Api):
 
 
 def test_hubs_lists_the_default_one(api: Api):
-    """已登记的 hub 名：写一次就登记一个。"""
+    """已登记的 hub 名:写一次就登记一个."""
     _stored()
 
     assert api.call("hubs") == {"hubs": ["main"]}
 
 
-# ---- 参数校验：缺了、类型不对 ----
+# ---- 参数校验:缺了,类型不对 ----
 
 
 def test_missing_parameter_is_refused(api: Api):
@@ -239,21 +241,19 @@ def test_wrong_type_is_refused(api: Api):
 
 
 def test_empty_parameter_is_refused(api: Api):
-    """空串不是"随便找一个"：身份是必须给出的东西。"""
+    """空串不是"随便找一个":身份是必须给出的东西."""
     with pytest.raises(InvalidParamsError, match="table"):
         api.call("rows", {"table": ""})
 
 
 def test_kernel_errors_pass_through(api: Api):
-    """内核自己抛的异常原样交给调用方：命令面不吞它、也不改名。"""
+    """内核自己抛的异常原样交给调用方:命令面不吞它,也不改名."""
     with pytest.raises(ObjectNotFoundError):
         api.call("record", {"uuid": "没有这个块"})
 
 
 def test_the_result_stays_inside_json(api: Api):
-    """结果必须落在 JSON 域里：交出来的每一层都是映射、列表、字符串或数字。"""
-    import json  # noqa: PLC0415 — 用例自己验一遍可序列化
-
+    """结果必须落在 JSON 域里:交出来的每一层都是映射,列表,字符串或数字."""
     _stored()
 
     for method in ("tables", "hubs", "stats"):
