@@ -1,19 +1,19 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""魔法用量门禁：**扫类上的 dunder，超范围即失败**。
+"""魔法用量门禁:**扫类上的 dunder,超范围即失败**.
 
-口径见 `rules/references/quality.md` 的「魔法：少用、不滥用」。门禁做两件事：
+口径见 `rules/references/quality.md` 的「魔法:少用,不滥用」.门禁做两件事:
 
-1. **逐个方法名比对豁免表**（:data:`ALLOWED`）：表里没有的 dunder 一律失败——
-   这是主要的那道闸，因为它挡的是"新写法"，而新写法不可能恰好落进豁免表；
-2. **算比例并卡上限**（:data:`MAX_RATIO`）：用魔法的类占全部类的比例。
+1. **逐个方法名比对豁免表**(:data:`ALLOWED`):表里没有的 dunder 一律失败——
+   这是主要的那道闸,因为它挡的是"新写法",而新写法不可能恰好落进豁免表;
+2. **算比例并卡上限**(:data:`MAX_RATIO`):用魔法的类占全部类的比例.
 
-`__init__` **不算魔法**：它是正常写法（几乎每个类都有），算进去会把比例搅成噪音。
+`__init__` **不算魔法**:它是正常写法(几乎每个类都有),算进去会把比例搅成噪音.
 
 用法::
 
-    uv run python scripts/magic.py --check      # 门禁（CI 与 pre-commit 用）
-    uv run python scripts/magic.py --report     # 只报告，不判失败（看现状用）
+    uv run python scripts/magic.py --check      # 门禁(CI 与 pre-commit 用)
+    uv run python scripts/magic.py --report     # 只报告,不判失败(看现状用)
 """
 
 from __future__ import annotations
@@ -59,25 +59,25 @@ MAX_RATIO = 0.30
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    """一处不该有的魔法。"""
+    """一处不该有的魔法."""
 
     path: str
     owner: str
     method: str
 
     def __str__(self) -> str:
-        """给人看的一行。"""
+        """给人看的一行."""
         return f"{self.path}:{self.owner}.{self.method}"
 
 
 def scan(paths: tuple[str, ...]) -> tuple[list[Finding], int, int]:
-    """扫一遍：返回（越界的魔法，类的总数，用到魔法的类数）。
+    """扫一遍:返回(越界的魔法,类的总数,用到魔法的类数).
 
     Args:
-        paths: 要扫的源码根。
+        paths: 要扫的源码根.
 
     Returns:
-        三元组：越界清单、类的总数、用到魔法的类数（都按文件去重）。
+        三元组:越界清单,类的总数,用到魔法的类数(都按文件去重).
     """
     findings: list[Finding] = []
     classes = 0
@@ -99,7 +99,7 @@ def scan(paths: tuple[str, ...]) -> tuple[list[Finding], int, int]:
 
 
 def main(argv: list[str]) -> int:
-    """跑一次扫描；`--check` 判失败，`--report` 只报告。"""
+    """跑一次扫描;`--check` 判失败,`--report` 只报告."""
     check = "--check" in argv
     findings, classes, using = scan(SCAN_ROOTS)
     ratio = using / classes if classes else 0.0
@@ -124,12 +124,12 @@ def main(argv: list[str]) -> int:
 
 
 def _python_files(paths: tuple[str, ...]) -> list[Path]:
-    """源码根下全部 `.py` 文件，按路径排序。"""
+    """源码根下全部 `.py` 文件,按路径排序."""
     return sorted(path for root in paths for path in Path(root).rglob("*.py"))
 
 
 def _dunders(node: ast.ClassDef) -> set[str]:
-    """一个类里出现的全部 dunder **方法名**（同名重载只算一次）。"""
+    """一个类里出现的全部 dunder **方法名**(同名重载只算一次)."""
     names: set[str] = set()
     for item in node.body:
         if not isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):

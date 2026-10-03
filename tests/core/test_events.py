@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""事件对象契约：字段、不可变性、默认值独立性。"""
+"""事件对象契约:字段,不可变性,默认值独立性."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from core.event.events import Event
 
 
 def test_event_carries_type_source_subject_and_payload():
-    """事件说清四件事：什么类型、谁发的、针对谁、带了什么。"""
+    """事件说清四件事:什么类型,谁发的,针对谁,带了什么."""
     event = Event(
         type="object.put",
         source="core.storage",
@@ -28,15 +28,15 @@ def test_event_carries_type_source_subject_and_payload():
 
 
 def test_event_ids_are_unique():
-    """两个事件不得共用标识。
+    """两个事件不得共用标识.
 
-    这条是回归线：dataclass 的默认值若在类定义时求值，全部事件会共用同一份 id 与时间。
+    这条是回归线:dataclass 的默认值若在类定义时求值,全部事件会共用同一份 id 与时间.
     """
     assert Event(type="a").id != Event(type="a").id
 
 
 def test_event_time_is_unix_milliseconds():
-    """时间取 unix 毫秒，且落在当前时刻附近。"""
+    """时间取 unix 毫秒,且落在当前时刻附近."""
     before = time.time_ns() // 1_000_000
     event = Event(type="a")
     after = time.time_ns() // 1_000_000
@@ -45,7 +45,7 @@ def test_event_time_is_unix_milliseconds():
 
 
 def test_event_is_immutable():
-    """事件冻结：发出之后不得再被改写。"""
+    """事件冻结:发出之后不得再被改写."""
     event = Event(type="object.put")
 
     with pytest.raises(FrozenInstanceError, match="cannot assign to field"):
@@ -53,7 +53,7 @@ def test_event_is_immutable():
 
 
 def test_event_optional_fields_default_to_empty():
-    """可选字段的默认值：空来源、空对象、无载荷。"""
+    """可选字段的默认值:空来源,空对象,无载荷."""
     event = Event(type="a")
 
     assert event.source == ""

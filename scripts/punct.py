@@ -1,26 +1,26 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-"""标点门禁：把源码**注释与 docstring**里的中文标点换成半角 ASCII（开发工具，不参与产品）。
+"""标点门禁:把源码**注释与 docstring**里的中文标点换成半角 ASCII(开发工具,不参与产品).
 
-口径（作者 2026-09-30 定）：中英混排时用半角标点——全角标点是等宽字，与代码、标识符
-混在一行里既不对齐也难读；纯中文的正文（`docs/` 的散文）不受此限。
+口径(作者 2026-09-30 定):中英混排时用半角标点——全角标点是等宽字,与代码,标识符
+混在一行里既不对齐也难读;纯中文的正文(`docs/` 的散文)不受此限.
 
-三条边界：
+三条边界:
 
-- **只碰注释与 docstring**：字符串字面量里的标点属于**行为**（错误消息、日志文案、用户可见文本），
-  换掉等于改了输出，不属于排版；
-- **只收一对一映射**：`，` → `,` 之类。`——` 破折号与 `……` 省略号是排版符号，且长度不是一对一，
-  一律不动；
-- **第三方技能目录不扫**：`.agents/skills/git-commit/` 与 `skill-creator/` 保持上游原样；
+- **只碰注释与 docstring**:字符串字面量里的标点属于**行为**(错误消息,日志文案,用户可见文本),
+  换掉等于改了输出,不属于排版;
+- **只收一对一映射**:`,` → `,` 之类.`——` 破折号与 `……` 省略号是排版符号,且长度不是一对一,
+  一律不动;
+- **第三方技能目录不扫**:`.agents/skills/git-commit/` 与 `skill-creator/` 保持上游原样;
 - **行内豁免**：说明映射表本身的那几行以 `punct-ignore` 结尾。 <!-- 该标记只在同一行生效 -->
 
-用法：
+用法:
 
-    uv run python scripts/punct.py            # 全仓检查（退出码 1 = 有命中）
+    uv run python scripts/punct.py            # 全仓检查(退出码 1 = 有命中)
     uv run python scripts/punct.py py_src     # 只查指定目录 / 文件
-    uv run python scripts/punct.py --report   # 报告模式：有命中也不阻断（门禁接线初期用）
-    uv run python scripts/punct.py --fix      # 就地替换（一对一映射，位置安全）
+    uv run python scripts/punct.py --report   # 报告模式:有命中也不阻断(门禁接线初期用)
+    uv run python scripts/punct.py --fix      # 就地替换(一对一映射,位置安全)
     uv run python scripts/punct.py --list     # 打印映射表
 """
 
@@ -35,10 +35,10 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: 行内豁免标记：该行用于**说明映射表本身**时使用（只在同一行生效，不提供文件级豁免）。
+#: 行内豁免标记:该行用于**说明映射表本身**时使用(只在同一行生效,不提供文件级豁免).
 IGNORE = "punct-ignore"
 
-#: 映射表：中文标点 → 半角 ASCII。**只收一对一映射**，见模块 docstring 的口径。
+#: 映射表:中文标点 → 半角 ASCII.**只收一对一映射**,见模块 docstring 的口径.
 _MAP: dict[str, str] = {
     "，": ",",
     "。": ".",
@@ -62,10 +62,10 @@ _MAP: dict[str, str] = {
     "＿": "_",
 }
 
-#: 扫描范围：入库的手写源码。
+#: 扫描范围:入库的手写源码.
 _SUFFIXES = frozenset({".py"})
 
-#: 不扫的路径前缀（第三方技能保持上游原样）。
+#: 不扫的路径前缀(第三方技能保持上游原样).
 _SKIP_PREFIXES = (
     ".agents/skills/git-commit/",
     ".agents/skills/skill-creator/",
@@ -88,14 +88,14 @@ _SKIP_DIRS = frozenset(
 
 @dataclass(frozen=True)
 class Hit:
-    """一处命中：位置、字符与它该换成的 ASCII。
+    """一处命中:位置,字符与它该换成的 ASCII.
 
     Attributes:
-        path: 仓库相对路径。
-        line: 行号（1 起）。
-        column: 列号（1 起）。
-        char: 命中的中文标点。
-        replacement: 应换成的半角字符。
+        path: 仓库相对路径.
+        line: 行号(1 起).
+        column: 列号(1 起).
+        char: 命中的中文标点.
+        replacement: 应换成的半角字符.
     """
 
     path: str
@@ -106,7 +106,7 @@ class Hit:
 
 
 def _say(message: str) -> None:
-    """打印一行：一律按 UTF-8 写，避免 CI 的 Windows 控制台按活动代码页编码而抛错。"""
+    """打印一行:一律按 UTF-8 写,避免 CI 的 Windows 控制台按活动代码页编码而抛错."""
     stream = getattr(sys.stdout, "buffer", None)
     if stream is None:
         print(message)
@@ -116,10 +116,10 @@ def _say(message: str) -> None:
 
 
 def _docstring_spans(tree: ast.AST) -> list[tuple[int, int, int, int]]:
-    """取出全部 docstring 的**位置范围**（头行、头列、末行、末列，行 1 起、列 0 起）。
+    """取出全部 docstring 的**位置范围**(头行,头列,末行,末列,行 1 起,列 0 起).
 
-    只认真正的文档字符串：模块、类、函数体里的第一条表达式语句且为字符串常量。
-    普通字符串（错误消息、日志文案）不在此列——它们属于行为，不归排版管。
+    只认真正的文档字符串:模块,类,函数体里的第一条表达式语句且为字符串常量.
+    普通字符串(错误消息,日志文案)不在此列——它们属于行为,不归排版管.
     """
     spans: list[tuple[int, int, int, int]] = []
     holders = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
@@ -142,7 +142,7 @@ def _docstring_spans(tree: ast.AST) -> list[tuple[int, int, int, int]]:
 
 
 def _inside(span: tuple[int, int, int, int], line: int, column: int) -> bool:
-    """点 `(line, column)` 是否落在 docstring 范围里（列号按 tokenize 的 0 起口径）。"""
+    """点 `(line, column)` 是否落在 docstring 范围里(列号按 tokenize 的 0 起口径)."""
     start_line, start_col, end_line, end_col = span
     if line < start_line or line > end_line:
         return False
@@ -152,7 +152,7 @@ def _inside(span: tuple[int, int, int, int], line: int, column: int) -> bool:
 
 
 def _scan(path: Path) -> list[Hit]:
-    """扫一个 `.py` 文件：只报注释与 docstring 里的中文标点。"""
+    """扫一个 `.py` 文件:只报注释与 docstring 里的中文标点."""
     text = path.read_text(encoding="utf-8")
     relative = path.relative_to(ROOT).as_posix()
     try:
@@ -191,20 +191,20 @@ def _scan(path: Path) -> list[Hit]:
 
 
 def _skip_relative(relative: str) -> bool:
-    """按仓库相对路径判断是否排除。"""
+    """按仓库相对路径判断是否排除."""
     if any(part in _SKIP_DIRS for part in PurePosixPath(relative).parts):
         return True
     return any(relative.startswith(prefix) for prefix in _SKIP_PREFIXES)
 
 
 def _absolute(item: str) -> Path:
-    """把命令行条目折成绝对路径。"""
+    """把命令行条目折成绝对路径."""
     candidate = Path(item)
     return candidate.resolve() if candidate.is_absolute() else (Path.cwd() / candidate).resolve()
 
 
 def _targets(argv: list[str]) -> tuple[list[Path], list[str]]:
-    """展开待检文件；仓库外的路径跳过并显式列出。"""
+    """展开待检文件;仓库外的路径跳过并显式列出."""
     given = [arg for arg in argv if not arg.startswith("--")]
     roots = [_absolute(item) for item in given] if given else [ROOT]
     found: list[Path] = []
@@ -227,9 +227,9 @@ def _targets(argv: list[str]) -> tuple[list[Path], list[str]]:
 
 
 def _fix(path: Path, hits: list[Hit]) -> int:
-    """就地替换一个文件里的命中；返回替换处数。
+    """就地替换一个文件里的命中;返回替换处数.
 
-    只做一对一映射，故按位置替换即可，不触碰行长度以外的任何东西。
+    只做一对一映射,故按位置替换即可,不触碰行长度以外的任何东西.
     """
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     by_line: dict[int, list[Hit]] = {}
@@ -248,13 +248,13 @@ def _fix(path: Path, hits: list[Hit]) -> int:
 
 
 def _print_map() -> None:
-    """打印映射表（`--list`）。"""
+    """打印映射表(`--list`)."""
     for char, replacement in _MAP.items():
         _say(f"{char}\t{replacement}")
 
 
 def _apply(hits: list[Hit]) -> None:
-    """按文件分组就地替换（`--fix`）。"""
+    """按文件分组就地替换(`--fix`)."""
     by_path: dict[str, list[Hit]] = {}
     for hit in hits:
         by_path.setdefault(hit.path, []).append(hit)
@@ -264,7 +264,7 @@ def _apply(hits: list[Hit]) -> None:
 
 
 def _report(files: list[Path], hits: list[Hit], skipped: list[str]) -> None:
-    """打印跳过项、按文件计数与命中明细。"""
+    """打印跳过项,按文件计数与命中明细."""
     for item in skipped:
         _say(f"[punct] 跳过（不在本仓库内）：{item}")
     by_file: dict[str, int] = {}
@@ -283,9 +283,9 @@ def _report(files: list[Path], hits: list[Hit], skipped: list[str]) -> None:
 
 
 def main(argv: list[str]) -> int:
-    """检查、报告或替换；返回退出码。
+    """检查,报告或替换;返回退出码.
 
-    默认有命中即返回 1；`--report` 为报告模式，有命中仍返回 0。
+    默认有命中即返回 1;`--report` 为报告模式,有命中仍返回 0.
     """
     if "--list" in argv:
         _print_map()
