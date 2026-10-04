@@ -505,7 +505,7 @@ class Engine:
             for candidate in self.index.rows(table):
                 if str(candidate.get("in_hub") or "") == hub_name:
                     latest = candidate
-        except (IndexNotFoundError, IndexSchemaError):  # pragma: no cover — 表由引擎补齐
+        except IndexNotFoundError, IndexSchemaError:  # pragma: no cover — 表由引擎补齐
             return None
         if latest is None or len(_slots_of_place(latest)) * self._slot_bytes >= limit:
             return None
@@ -585,7 +585,7 @@ class Engine:
             return None
         try:
             return self.index.get(table, identity.value_uuid)
-        except (IndexNotFoundError, IndexSchemaError):
+        except IndexNotFoundError, IndexSchemaError:
             return None
 
     # ---- 索引:**由正表现算反表**,索引块只声明参数 ---- #
@@ -638,7 +638,7 @@ class Engine:
         """逐张身份表逐行交出来:**库自用的那两张不在其中**."""
         try:
             tables = self.index.tables()
-        except (IndexNotFoundError, IndexSchemaError):  # pragma: no cover — 库刚开过
+        except IndexNotFoundError, IndexSchemaError:  # pragma: no cover — 库刚开过
             return
         for table in tables:
             if table in {HUB_TABLE, META_TABLE}:
@@ -659,7 +659,7 @@ class Engine:
         table = owner.__name__.lower()
         try:
             rows = tuple(self.index.rows(table))
-        except (IndexNotFoundError, IndexSchemaError):  # pragma: no cover — 表由引擎补齐
+        except IndexNotFoundError, IndexSchemaError:  # pragma: no cover — 表由引擎补齐
             return
         for row in rows:
             hub_name = _hub_of(row)
@@ -828,7 +828,7 @@ class Engine:
             return False
         try:
             dropped = self.index.drop_row(_table_of(identity), identity.value_uuid)
-        except (IndexNotFoundError, IndexSchemaError):
+        except IndexNotFoundError, IndexSchemaError:
             return False
         if not dropped:
             return False
