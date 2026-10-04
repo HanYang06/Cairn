@@ -123,14 +123,15 @@
 - [ ] `LICENSES/Apache-2.0.txt` 未建（`reuse lint` 才需要，而该 CLI 是 GPL，不引）。
 - [ ] docstring 覆盖补到 ≥95% 后，把 `scripts/docgen.py` 的 `DOCSTRING_MIN` 接成
   `--coverage --strict` 门禁。
-- [ ] 中文搜索分词（`jieba` 未引，本机构 sdist 失败）。
-- [ ] **配置引擎改造（已项目化到隔壁 `auto_conf`）**：约定与改动清单见
-  `D:\Project\PyProject\auto_conf\docs\design\cairn-config.md`。待做的是：八条键按
-  `<架构层>.<功能域>.<对象>.<属性>` 改名（两份入库产物重生成）、加一道 AST 门禁
-  （键必须是字面量 ＋ 声明处的层前缀与文件位置一致 ＋ 一个键只声明一处）、`storage/conf.py`
-  去掉键名常量与 `for` 循环、修五处实测缺陷（哨兵返回值 / `doc=""` 退化成读取 / 报错不可区分 /
-  可空写不出 / 声明返回默认值而取值返回文件值）、删纯转手包装函数与 `pack` / `hub` 签名里的策略默认值。
-  **等 auto_conf 定案后回接**。GitHub 侧 issue 待提（本机未装 `gh`）。
+- [ ] **中文搜索分词**（`jieba` 未引，本机构 sdist 失败）。
+- [ ] **给上游 OnConf 提两个 issue**（本机未装 `gh`，待提）：① wheel 缺 `py.typed`
+  （`pyproject.toml` 已声明 `Typing :: Typed`，实际包内没有，害得下游 strict 只能忽略它）；
+  ② `EngineParams` 少了 `lock_timeout`，`conf(**engine)` 透传它会抛 `UnknownEngineParamError`。
+  口径与后果见 `references/decisions/配置.md`「上游待办」。
+- [ ] **配置键名与一道 AST 门禁**（从换引擎那次摘出来的独立任务）：八条键按
+  `<架构层>.<功能域>.<对象>.<属性>` 改名（两份入库产物随之重生成）；门禁要管三件事——
+  键必须是字面量、声明处的层前缀与文件位置一致、一个键只声明一处
+  （最后一条正是 OnConf 不再提供的"重复声明即炸"，见 `references/decisions/配置.md`）。
 
 ## 六、远期
 

@@ -42,7 +42,7 @@
 
 ## 快速开始
 
-需要 **Python 3.13** 与 [`uv`](https://docs.astral.sh/uv/)：
+需要 **Python 3.14** 与 [`uv`](https://docs.astral.sh/uv/)：
 
 ```powershell
 uv sync                 # 安装/同步依赖

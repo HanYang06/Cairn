@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """存储这一层的配置声明:格长,封口线,默认 hub,索引块上限,正文历史深度,自动回收阈值.
 
-**各管各的**:本包要用配置,就在本包声明——内核自身那几条在 `core/conf/params.py`.
-声明即事实:默认值只写这一份,值文件由引擎展开;改值改 `config/settings.json`,
+**各管各的**:本包要用配置,就在本包声明——内核自身那几条在 `core/params.py`.
+声明即事实:默认值只写这一份,值文件由引擎(OnConf)展开;改值改 `config/settings.json`,
 改默认值改这里.
 
 六组键,各自回答一个问题:

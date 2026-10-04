@@ -3,7 +3,7 @@
 
 # AGENTS.md
 
-Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.13；内核 Qt-free。**当前只有内核一层在位**（`py_src/core/`）；领域与界面（`feature` / `app`）随 2026-09-29 的重建被整条删除、待重建，且界面材质已于 2026-09-30 由 Qt 改为 **Tauri 壳 + Web 前端**（`app/` 是那份 Tauri 工程）——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
+Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.14；内核 Qt-free。**当前只有内核一层在位**（`py_src/core/`）；领域与界面（`feature` / `app`）随 2026-09-29 的重建被整条删除、待重建，且界面材质已于 2026-09-30 由 Qt 改为 **Tauri 壳 + Web 前端**（`app/` 是那份 Tauri 工程）——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
 
 ## 开工前 SOP（每个任务都先做）
 
@@ -36,7 +36,7 @@ uv run pre-commit run --all-files         # 提交前全量门禁（12 个钩子
 
 uv run mkdocs serve                       # 文档站本地预览 -> http://127.0.0.1:8000
 uv run mkdocs build --strict              # 文档站构建门禁（坏链接/缺页面/未知配置即失败）
-uv run python scripts/docgen.py --check   # 生成页防漂移（配置参考 vs 声明现算的词表）
+uv run python scripts/docgen.py --check   # 生成页防漂移（配置参考 vs 入库词表 + AST 扫的声明处）
 uv run python scripts/docgen.py --write   # 重新生成配置参考页（改了配置声明后跑）
 uv run python scripts/docgen.py --coverage # docstring 覆盖报告（没写的公共成员会从 API 页消失）
 
@@ -51,8 +51,9 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 > **前端门禁已接线**（`pnpm --dir app check`，七道合一；pre-commit 只在 `app/` 变动时跑，
 > CI 走 `web` job）——规矩与门禁的对照表见 `rules/references/frontend.md` §四。
 >
-> 配置投影**没有生成脚本**：跑一遍程序即可（值文件与词表在退出时落盘），
-> 入库产物与声明是否分叉由 `tests/core/test_conf_projection.py` 拦。
+> 配置投影**没有生成脚本**：跑一遍程序即可（值文件与词表在提交点落盘），
+> 入库产物与声明是否分叉由 `tests/core/test_conf_projection.py` 拦
+> （拿空目录里新生成的那一份当基准，读当前这份再比是自证）。
 
 提交前顺序：`ruff -> mypy -> pytest`（全量一次跑完用 `pre-commit run --all-files`）。
 质量口径见 `.agents/skills/rules/references/quality.md`
@@ -95,8 +96,10 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   载体与槽 `pack.py`、hub `hub.py`、声明 `types.py`、配置声明 `conf.py`、
   存储引擎 `engine.py`、回收 `gc.py`；身份与段算术、载荷与索引库在 `db/`
   （`id.py` / `payload.py` / `engine.py`）；两类索引块在 `index/`）、**异常层**（`core/exc.py`）；
-  装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置引擎**在 `core/conf/`
-  （`conf` 面 + 单文件投影；照旧「各管各的声明」，见 `docs/architecture/py_core/config.md`）。
+  装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置**在 `core/conf.py`
+  （外层：定配置根 + 转发 `conf`；**引擎是上游 PyPI 包 `onconf`**，声明各归各家——
+  内核那条在 `core/params.py`、存储那组在 `core/storage/conf.py`，
+  见 `docs/architecture/py_core/config.md`）。
 - `py_src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
   **共享件**（`shared/`）；域之间互不依赖；领域结构直接继承 `Block`，扩展只走子类字段、
   新 `type` 或新关系 `kind`。
@@ -133,7 +136,9 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 - 配置根有一个旋钮 `CAIRN_CONFIG`：只给测试与部署重定向，**不是配置项**
   （它是"找到配置的办法"）；不给就用仓根下的 `config/`。
 - `.gitignore` 里仍留着 `vault/`（开发库的默认位置）：开发时别把库提交进来。
-- Python 3.13；`uv.lock` + 阿里云 PyPI 镜像（`pyproject.toml` 的 `[[tool.uv.index]]`）。
+- Python 3.14；`uv.lock` + 阿里云 PyPI 镜像（`pyproject.toml` 的 `[[tool.uv.index]]`）。
+  **`onconf` 是唯一例外**：阿里云镜像没同步这个包（实测 `simple/onconf/` 返 404），
+  故 `pyproject.toml` 里给它单开了一个 `explicit = true` 的 PyPI 索引（只服务这一个包）。
 - 图片走 Git LFS（`.gitattributes`）；未装 LFS 时 clone 到的 png 只是指针。
 
 ## 规则 / 记忆 / Skills（`.agents/skills/`）

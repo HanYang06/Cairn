@@ -318,7 +318,7 @@ vault/
 
 ### 5.6 配置参数
 
-存储那一层的键在 `core/storage/conf.py` 声明，内核自身那条在 `core/conf/params.py`。
+存储那一层的键在 `core/storage/conf.py` 声明，内核自身那条在 `core/params.py`。
 取值与落盘口径见[配置引擎](py_core/config.md)与[配置项参考](../reference/config.md)。
 
 | 键 | 开箱值 | 含义 | 现状 |
