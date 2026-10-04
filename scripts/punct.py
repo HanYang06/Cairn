@@ -15,6 +15,11 @@
 - **第三方技能目录不扫**:`.agents/skills/git-commit/` 与 `skill-creator/` 保持上游原样;
 - **行内豁免**：说明映射表本身的那几行以 `punct-ignore` 结尾。 <!-- 该标记只在同一行生效 -->
 
+**解析不了的文件不许静默跳过**:注释与 docstring 的位置由 AST 与 tokenize 一起定位,故一个
+文件解析不过(AST 或 tokenize 任一失败),本工具就**对它没有判断力**;这时"没命中"是假的,
+会让坏文件从门禁底下溜过去(实测踩过一次:文件已坏,门禁照样绿).故那种文件被当**错误**
+列出来:检查模式因此失败,`--fix` 也不去动它——坏掉的文件要先修好,再谈标点.
+
 用法:
 
     uv run python scripts/punct.py            # 全仓检查(退出码 1 = 有命中)
@@ -85,6 +90,10 @@ _SKIP_DIRS = frozenset(
     }
 )
 
+#: 解析不了的文件(仓库相对路径, 原因).**每次 `main` 开头清空**——它是这一轮的账,
+#: 不是跨轮累计的状态;留下上一轮的名字只会让人以为那个文件这一轮也没通过.
+_UNPARSEABLE: list[tuple[str, str]] = []
+
 
 @dataclass(frozen=True)
 class Hit:
@@ -152,19 +161,25 @@ def _inside(span: tuple[int, int, int, int], line: int, column: int) -> bool:
 
 
 def _scan(path: Path) -> list[Hit]:
-    """扫一个 `.py` 文件:只报注释与 docstring 里的中文标点."""
+    """扫一个 `.py` 文件:只报注释与 docstring 里的中文标点.
+
+    **解析失败不当作"没命中"**:那种文件记进 :data:`_UNPARSEABLE` 并留空手而回——
+    本工具对它的标点没有判断力,说"干净"是假话.调用方据此把它当错误报出来.
+    """
     text = path.read_text(encoding="utf-8")
     relative = path.relative_to(ROOT).as_posix()
     try:
         tree = ast.parse(text)
-    except SyntaxError:
+    except SyntaxError as error:
+        _UNPARSEABLE.append((relative, f"ast: {error.msg}（第 {error.lineno} 行）"))
         return []
     spans = _docstring_spans(tree)
     lines = text.splitlines()
     hits: list[Hit] = []
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
-    except tokenize.TokenError:
+    except tokenize.TokenError as error:
+        _UNPARSEABLE.append((relative, f"tokenize: {error.args[0]}"))
         return []
     for token in tokens:
         in_comment = token.type == tokenize.COMMENT
@@ -264,9 +279,11 @@ def _apply(hits: list[Hit]) -> None:
 
 
 def _report(files: list[Path], hits: list[Hit], skipped: list[str]) -> None:
-    """打印跳过项,按文件计数与命中明细."""
+    """打印跳过项,解析不了的项,按文件计数与命中明细."""
     for item in skipped:
         _say(f"[punct] 跳过（不在本仓库内）：{item}")
+    for relative, reason in _UNPARSEABLE:
+        _say(f"[punct] 解析不了（对它没有判断力）：{relative} —— {reason}")
     by_file: dict[str, int] = {}
     for hit in hits:
         by_file[hit.path] = by_file.get(hit.path, 0) + 1
@@ -282,10 +299,22 @@ def _report(files: list[Path], hits: list[Hit], skipped: list[str]) -> None:
         _say(f"  …… 其余 {len(hits) - 40} 处")
 
 
+def _advisory() -> int:
+    """`--report` 的收尾:解析不了的照旧只提醒,有命中也不阻断(报告模式的既有口径).
+
+    报告模式是门禁接线初期用的过渡档,它连"有命中"都不阻断,更不该把解析失败升成失败;
+    但这一行必须打出来——否则坏文件在报告模式下彻底隐身.
+    """
+    if _UNPARSEABLE:
+        _say(f"[punct] 注意：{len(_UNPARSEABLE)} 个文件解析不了，报告模式下不阻断。")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     """检查,报告或替换;返回退出码.
 
-    默认有命中即返回 1;`--report` 为报告模式,有命中仍返回 0.
+    默认有命中**或**有文件解析不了即返回 1;`--report` 为报告模式,两者都只提醒不阻断.
+    `--fix` 只动有命中的文件,解析不了的一个字节都不碰.
     """
     if "--list" in argv:
         _print_map()
@@ -294,6 +323,7 @@ def main(argv: list[str]) -> int:
     fix = "--fix" in argv
     report_only = "--report" in argv
     files, skipped = _targets(argv)
+    _UNPARSEABLE.clear()
     hits: list[Hit] = []
     for path in files:
         hits.extend(_scan(path))
@@ -303,8 +333,8 @@ def main(argv: list[str]) -> int:
         _apply(hits)
         return 0
     if report_only:
-        return 0
-    return 1 if hits else 0
+        return _advisory()
+    return 1 if (hits or _UNPARSEABLE) else 0
 
 
 if __name__ == "__main__":
