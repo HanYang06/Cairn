@@ -53,7 +53,7 @@ dev = [
     # 传递依赖的下限，只为把 CVE 顶掉：`pre-commit` 会拉 `virtualenv`，
     # 而 21.7.10 有四个已知漏洞（PYSEC-2026-4011/4012/4013/4014，修复版 21.7.13）。
     # 写在这里比"等 pre-commit 自己放开"可靠——它是 CI 门禁真会拦的那条线。
-    "virtualenv>=21.7.13",
+    "virtualenv>=21.14.5",
 ]
 
 [build-system]
