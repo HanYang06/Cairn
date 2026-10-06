@@ -3,7 +3,7 @@
 
 # AGENTS.md
 
-Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.14；内核 Qt-free。**当前只有内核一层在位**（`py_src/core/`）；领域与界面（`feature` / `app`）随 2026-09-29 的重建被整条删除、待重建，且界面材质已于 2026-09-30 由 Qt 改为 **Tauri 壳 + Web 前端**（`app/` 是那份 Tauri 工程）——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
+Cairn（巨石堆）：本地优先的内容寻址对象池 / 笔记·资产·项目工作台。Python 3.14；内核 Qt-free。**当前在位的是内核、领域形状层与 Python 边车**（`py_src/core/`、`py_src/model/note/`、`py_src/app/sidecar.py`）；`feature` 随 2026-09-29 的重建删除、待重建，界面材质为 **Tauri 壳 + Web 前端**（`app/` 是那份 Tauri 工程，功能未齐）——现状与意图的对照见 `docs/architecture/index.md`。用 `uv` 管理；Apache-2.0。
 
 ## 开工前 SOP（每个任务都先做）
 
@@ -45,8 +45,8 @@ pnpm --dir app gen:tokens                 # 由 config/theme/tokens.json 重新�
 pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 ```
 
-> 桌面外壳（Tauri 壳 + Web 前端）已在 `app/` 立项（脚手架已生成、图标与名字已换成 Cairn），
-> 但**功能未落地**：Python 内核的边车与 IPC 转发口尚未实现。
+> 桌面外壳（Tauri 壳 + Web 前端）已在 `app/` 立项（脚手架、图标与名字都换成 Cairn）：
+> 边车 `py_src/app/sidecar.py` 与前端转发口 `app/src/ipc/index.ts` 已接线，**界面功能未齐**。
 > 旧打包脚本（`scripts/build.py` 与 `build-windows.yml`）依赖 Qt 时代已删除的层级，**待重做**。
 > **前端门禁已接线**（`pnpm --dir app check`，七道合一；pre-commit 只在 `app/` 变动时跑，
 > CI 走 `web` job）——规矩与门禁的对照表见 `rules/references/frontend.md` §四。
@@ -82,8 +82,8 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 
 ## 架构分层（别越界）
 
-**现状**：`py_src/` 下只有 `core` 一层；`feature` / `app` 两层已在 2026-09-29 的重建里删除，
-下面是它们的**目标形态**（回来时按此落，别在 core 里提前实现它们）。
+**现状**：`py_src/` 下在位的是 `core`（L0 内核）、`model/`（领域形状层）与 `app/`（命令面与内核边车）；
+`feature` 随 2026-09-29 的重建删除，下面是它的**目标形态**（回来时按此落，别在 core 里提前实现）。
 
 > **2026-09-30 起界面材质为 Tauri 壳 + Web 前端**（React / TypeScript），Python 内核以边车运行。
 > 故下面按 `py_src/` 描述的分层只覆盖 Python 一侧；界面侧的边界见
@@ -100,18 +100,24 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   （外层：定配置根 + 转发 `conf`；**引擎是上游 PyPI 包 `onconf`**，声明各归各家——
   内核那条在 `core/params.py`、存储那组在 `core/storage/conf.py`，
   见 `docs/architecture/py_core/config.md`）。
+- `py_src/model/`（领域形状层）：`model/note/types/` 落五个载体（`NoteData` / `NoteTag` / `NoteGroup` /
+  `NoteAsset` / `NoteCanvas`）与值对象（`NoteLine` / `Span` / `Figure` …）的形状，见 `decisions/笔记.md` §四；
+  **缺规范化字节层**（`model/note/format/` 不存在，`NoteData.lines` 里的行对象还存不下去）。
 - `py_src/feature/`（L3）**待重建**：只依赖 core 公共 API，内部分**域**（`note` / `project`）与
   **共享件**（`shared/`）；域之间互不依赖；领域结构直接继承 `Block`，扩展只走子类字段、
   新 `type` 或新关系 `kind`。
 - 类型词表（`Kind` 一类）随领域层重建再定：plain `Enum`、值即落盘字符串（如 `notedata`），
   第三方类型用自有前缀。
-- `py_src/app/`（Python 侧入口：命令行、未来的内核边车）**待落地**；
+- `py_src/app/`（Python 侧入口：命令行与内核边车）：边车 `app/sidecar.py` 与命令面 `core/api.py`
+  已落地，**缺一个面向人的命令行壳**；
   原「按平台分目录」的口径**随 Qt 作废**（Tauri 壳是跨平台的同一份工程）。
   界面侧**不认识领域内部、也不碰 `core.storage`**，只经契约与命令过边界。
 - `py_src/net/`、`py_src/server/` 曾为 P2P / 服务端实验顶层包，**当前已删除、待重设**。
 - 存储的路径约定只在 `core/init.py` 定：`<root>/catalog.db` 是索引库、`<root>/<hub>/packs/` 是载体。
-- `docs/architecture/*.md` 是设计事实来源（`storage-design.md` 为 L0 存储的唯一事实来源），
-  **有冲突以代码为准，改实现后回写文档**；哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
+- **权威顺序 `路线图 > 设计 > 代码`**：路线图（`docs/roadmap/1.x.md`）管「要什么」，代码管「现在是什么」
+  ——路线图里对现状的转述与代码不符时，改路线图那一行。`docs/architecture/*.md` 是设计事实来源
+  （`storage-design.md` 为 L0 存储的唯一事实来源），设计与代码往路线图收；改实现后回写文档。
+  哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
 - 内部时间统一 unix 毫秒（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
   对象身份是 `core/storage/db/id.py` 的 `ID`：字段为 `name` / `value_uuid` / `birth_time`
   与位置段，另有**一项**库的事实 `body_history`（正文摘要链：一个世代一条摘要，
@@ -168,4 +174,4 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
 - **进度文件只记"还没做"**：做完的条目**删掉**，不改 `[x]` 留作历史。
 - 每次任务收尾一并清理：过期、已废弃、与代码或文档不符的条目 → **删除或改写**。
   只增不减会腐化失真；记忆必须比代码更短、更新更快。
-- 冲突时以代码与 `docs/architecture/*.md` 为准，记忆服从事实。
+- 冲突时以路线图、`docs/architecture/*.md` 与代码为准（`路线图 > 设计 > 代码`），记忆服从事实。

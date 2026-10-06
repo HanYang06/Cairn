@@ -86,4 +86,5 @@ Python 侧（py_src/）：
 ## 6. 文档与提交
 
 - 文档、注释、commit message 用**中文**；commit 用 Conventional Commits（`feat(ui): …`）。
-- **代码是唯一事实**；改了实现就回写 `docs/architecture/*.md`，不得留下与代码不符的文档。
+- **权威顺序 `路线图 > 设计 > 代码`**（路线图管「要什么」、代码管「现在是什么」）；
+  改了实现就回写 `docs/architecture/*.md`，不得留下与代码不符的文档。
