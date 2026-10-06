@@ -13,8 +13,31 @@ name: ocr-review
 
 on:
   # pull_request_target 才能在 fork PR 上拿到 secret；OCR 只读 diff、不执行 PR 代码。
+  #
+  # `paths-ignore` 是这份工作流的降噪阀（2026-10-06）：实测 91 次运行里 29 次失败（33%），
+  # 而触发面覆盖每一次 PR 事件——纯文档改动、锁文件与包清单的机器生成改动也照跑，
+  # 跑完多半只是模型侧没吐出结果。机器生成物本就不适合逐行评审（依赖风险归
+  # dependency-review 与 pip-audit / pnpm audit），故这类文件不再触发。
+  #
+  # 注意：`paths-ignore` 对 `issue_comment` **不生效**，所以改了这些文件仍可用
+  # `/open-code-review` 评论手动点一次评审——降噪不等于堵死。
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "uv.lock"
+      - "app/pnpm-lock.yaml"
+      - "app/src-tauri/Cargo.lock"
+      - "app/package.json"
+      - "pyproject.toml"
+      - "**/pyproject.toml"
+      - "config/**"
+      - "REUSE.toml"
+      - "LICENSE"
+      - "NOTICE"
+      - ".agents/**"
+      - ".github/workflows/ocr-review.yml"
   issue_comment:
     types: [created]
 
