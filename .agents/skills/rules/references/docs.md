@@ -53,7 +53,8 @@
 5. **图文扩展**：Mermaid 用 ` ```mermaid ` 围栏（本站与 GitHub 都能渲染）；
    提示块用三叹号 admonition 语法；引入新的 Markdown 扩展时必须同步修改 `mkdocs.yml`。
 6. **中文写作**、术语按 `docs/reference/glossary.md`；未实现的东西标「预留 / 草案 / 待定」。
-7. **代码是唯一事实**：改了实现就回写 `docs/architecture/*.md`（回写是任务的一部分）。
+7. **权威顺序 `路线图 > 设计 > 代码`**（路线图管「要什么」、代码管「现在是什么」）：
+   改了实现就回写 `docs/architecture/*.md`（回写是任务的一部分）。
 8. `README.md` 是 GitHub 门面，**不重复** `docs/` 里会长大的内容（两处必然分叉）——
    只放入口、定位、最短命令，细节链接过去。
 

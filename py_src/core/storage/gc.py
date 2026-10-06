@@ -244,7 +244,7 @@ def _each_body_placement(
             continue
         try:
             pack = Hub.open(engine.root / hub_name).pack(pack_name)
-        except (HubNotFoundError, HubShapeError):  # pragma: no cover — 库刚开过
+        except HubNotFoundError, HubShapeError:  # pragma: no cover — 库刚开过
             continue
         for slot in _slots_of(parse_segments(str(row.get("in_pack_slot") or ""))):
             parsed = decode_index_row(pack.content_at(slot))
@@ -283,7 +283,7 @@ def _body_index_rows(engine: Engine) -> Iterator[dict[str, object]]:
         return
     try:
         yield from engine.index.rows(table)
-    except (IndexNotFoundError, IndexSchemaError):  # pragma: no cover — 表由引擎补齐
+    except IndexNotFoundError, IndexSchemaError:  # pragma: no cover — 表由引擎补齐
         return
 
 
@@ -440,7 +440,7 @@ def _body_slots(engine: Engine, row: Mapping[str, object]) -> set[int]:
         return set()
     try:
         pack = Hub.open(engine.root / hub_name).pack(pack_name)
-    except (HubNotFoundError, HubShapeError):  # pragma: no cover — 库刚开过
+    except HubNotFoundError, HubShapeError:  # pragma: no cover — 库刚开过
         return set()
     found: set[int] = set()
     for slot in _slots_of(parse_segments(str(row.get("in_pack_slot") or ""))):

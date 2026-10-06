@@ -28,7 +28,7 @@
 **未落地项**（§11 列全）：领域载荷的规范化字节层（`py_src/model/note/format/`）、
 跨行事务、备份、拒开与迁移的显式入口。
 
-权威顺序：`代码 > docs/architecture/<具体篇> > <总纲篇> > 记忆 / 其它`（[架构索引](index.md)）。
+权威顺序：`路线图 > docs/architecture/<具体篇> > <总纲篇> > 记忆 / 其它`（[架构索引](index.md)）。
 
 ## 0. 一句话
 
@@ -318,7 +318,7 @@ vault/
 
 ### 5.6 配置参数
 
-存储那一层的键在 `core/storage/conf.py` 声明，内核自身那条在 `core/conf/params.py`。
+存储那一层的键在 `core/storage/conf.py` 声明，内核自身那条在 `core/params.py`。
 取值与落盘口径见[配置引擎](py_core/config.md)与[配置项参考](../reference/config.md)。
 
 | 键 | 开箱值 | 含义 | 现状 |

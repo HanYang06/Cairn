@@ -72,6 +72,9 @@ nav:
           - 查询链路: architecture/py_core/storage/query-path.md
       - 配置引擎: architecture/py_core/config.md
       - UI 主题: architecture/ui_design/ui-theme.md
+  - 路线图:
+      - 1.x: roadmap/1.x.md
+      - 结构说明: roadmap/README.md
   - API 参考:
       - api/index.md
       - core（底座）: api/core.md

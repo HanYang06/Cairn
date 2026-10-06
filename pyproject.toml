@@ -6,33 +6,20 @@ name = "cairn"
 version = "0.0.1"
 description = "巨石堆 — 本地优先的个人知识 / 资产 / 项目工作台"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "HanYang06", email = "jihanyang123@163.com" }]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    # 载荷编解码：canonical CBOR——块记录与内容记录都靠它落到字节。
-    "cbor2>=6.1.5",
+    "cbor2>=6.1.4",
+    "onconf>=1.0.0",
 ]
-
-# 已撤掉的声明（2026-10-02，判据是"一处引用都没有"）：
-#   blake3 / cryptography / argon2-cffi —— 摘要取 sha256、库本地不加密，三者都没有调用点；
-#   fastcdc —— 媒体定了固定粒度分片，不上内容定义分块；
-#   pyyaml —— 表声明文件（`config/tables.yaml`）已取消，那是它唯一的用处；
-#   tomli-w —— 同一条链上的 TOML 写出，随表声明一并没了。
-# `cbor2` 留着：它是载荷的落盘形态，不是可替换的实现选择。
-
-# 桌面外壳与前端不在本文件里：`app/` 是一份 Tauri 工程（`app/src-tauri/` 的 Cargo 工程
-# ＋ `app/src/` 的 React 前端，同一个 pnpm 工程）。
-# 原先的 `pyside6` 随 2026-09-30「Qt 退场」一并移除。
-# **没有 `[project.scripts]`**：命令行入口的契约（库根旋钮名、子命令集、退出码口径）待作者裁定，
-# 未定之前不占一个入口名。内核侧那一面在 `core/api.py`，边车在 `app/sidecar.py`。
 
 [dependency-groups]
 dev = [
@@ -47,12 +34,7 @@ dev = [
     "mkdocstrings[python]>=1.0.6",
     "deptry>=0.25.1",
     "import-linter>=2.15",
-    # 依赖 CVE 扫描（CI 的 security-scan 用）。与 import-linter 同类：
-    # 只是"跑一次看看"的命令行工具，不由代码 import。
     "pip-audit>=2.10.1",
-    # 传递依赖的下限，只为把 CVE 顶掉：`pre-commit` 会拉 `virtualenv`，
-    # 而 21.7.10 有四个已知漏洞（PYSEC-2026-4011/4012/4013/4014，修复版 21.7.13）。
-    # 写在这里比"等 pre-commit 自己放开"可靠——它是 CI 门禁真会拦的那条线。
     "virtualenv>=21.7.13",
 ]
 
@@ -63,15 +45,19 @@ build-backend = "hatchling.build"
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple/"
+explicit = true
+
+[tool.uv.sources]
+onconf = { index = "pypi" }
 
 [tool.hatch.build.targets.wheel]
-# Python 源码根是 `py_src/`（不叫 `src/`：仓里另有 `app/src/` 是 React 前端，两个 `src` 无法区分）。
-# `core` 是内核、`model` 是领域层、`app` 是入口层（边车与命令行）。
-# 列不存在的目录不会报错（hatch 静默跳过），但配置与事实不符本身就是尾巴。
 packages = ["py_src/core", "py_src/model", "py_src/app"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 100
 # 第三方技能（vendored）保持上游原样，不参与本项目 lint。
 extend-exclude = [".agents"]
@@ -138,13 +124,21 @@ convention = "google"
 "scripts/**" = ["ANN", "D", "S101", "S603", "C901", "PLR2004", "T201", "INP001", "ERA001"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 mypy_path = "py_src"
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
+
+# `onconf` 1.0.0 的 wheel 里**没有 `py.typed`**（源码注解齐全，包却没声明可类型化，
+# 实测 `.venv/Lib/site-packages/onconf/` 下没有该文件），故 strict 下 import 它必报
+# `import-untyped`。对策只能是这一处忽略：分发包里没有类型信息，任何"建模它"的写法
+# 都等于在一份随时会变的上游 API 上抄一份影子声明。上游补了 `py.typed` 就删掉这段。
+[[tool.mypy.overrides]]
+module = ["onconf", "onconf.*"]
+ignore_missing_imports = true
 
 [tool.deptry]
 known_first_party = ["core", "model"]

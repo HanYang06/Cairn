@@ -37,12 +37,12 @@
 - 🔜 未做：回收的触发点（`sweep` 与 `reclaimable_bytes` 都已可用，但**没有调用方**）、
   检索、P2P / 服务端、打包与桌面入口。
 
-**详细进度与取舍不在本文件**——事实源是代码本身与 `docs/architecture/**`；
+**详细进度与取舍不在本文件**——事实源是[路线图](docs/roadmap/1.x.md)、`docs/architecture/**` 与代码本身；
 存储子层的裁定见 `docs/architecture/py_core/storage/`。
 
 ## 快速开始
 
-需要 **Python 3.13** 与 [`uv`](https://docs.astral.sh/uv/)：
+需要 **Python 3.14** 与 [`uv`](https://docs.astral.sh/uv/)：
 
 ```powershell
 uv sync                 # 安装/同步依赖
