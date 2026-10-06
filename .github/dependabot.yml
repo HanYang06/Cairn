@@ -7,11 +7,24 @@
 # （`pip-audit` / `pnpm audit`，见 `.github/workflows/ci.yml` 的 security-scan）。
 # 两者都要：前者让依赖保持新，后者让"不新"这件事在合并前就拦下。
 #
-# 两个要点：
+# 三个要点：
 # · `uv` 是 Dependabot 的独立生态（不只是 `pip`）：它会连 `uv.lock` 一起更新，
 #   这正是本仓"锁文件即事实源"需要的。见 https://docs.astral.sh/uv/guides/integration/dependabot/
 # · `github-actions` 那条与工作流里**按 SHA 钉住**配套：钉住才不会被上游偷偷换代码，
 #   而 Dependabot 负责在**有意的**版本更新时把 SHA 与注释一起抬上去。
+# · **一生态两组**（2026-10-06 改）。判据是"一次问出几条"，与频率无关：此前按依赖族细分
+#   （react / tooling / tauri / codeql …），族外的依赖仍各开一条，一次运行攒出十条分支；
+#   现在每个生态只留 `routine`（patch + minor）与 `major`（大版本）两组。
+#   频率只定"多久问一次"：本仓仍是每周一次（Dependabot 的频率档里没有"每几天"这一档）。
+#
+# 为什么不把大版本并进 `routine`：大版本会改行为。十几条升级挤在一条 PR 里时，CI 红了
+# 要自己分辨是哪一条；分开了，"红的就是那条大版本"。要彻底并成一条，删掉 `major` 分组
+# 与两处 `update-types` 即可（`routine` 的 `*` 会全收）。
+#
+# 各生态错开星期，避免同一天齐发一串通知：uv 周一、github-actions 周二、npm 周三、cargo 周五。
+#
+# 安全更新（Dependabot alerts / security updates）不归这里：它们在仓库 Settings 里开，
+# 与版本更新互不替代。见 `.agents/skills/rules/references/quality.md`。
 
 version: 2
 
@@ -22,81 +35,97 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    # 两个分组各占一条：常规更新与 major 并存时不会互相挤掉（限额按分组计）。
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "chore"
       include: "scope"
     groups:
-      # 开发工具扎堆更新，避免一个工具一条 PR。
-      dev-tools:
+      # 开发工具与运行时依赖原先分列两个分组；`*` 之下它们同住一条 PR，分列不再必要。
+      routine:
         patterns:
-          - "pytest*"
-          - "ruff"
-          - "mypy"
-          - "mkdocs*"
-          - "mkdocstrings*"
-          - "deptry"
-          - "import-linter"
-          - "pip-audit"
-          - "pre-commit"
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
 
   # 前端：`app/package.json` + `pnpm-lock.yaml`。
   - package-ecosystem: "npm"
     directory: "/app"
     schedule:
       interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
+      day: "wednesday"
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "chore"
       include: "scope"
     groups:
-      react:
+      # `react` 与 `react-dom`、`@tauri-apps/*` 原先各占一个分组，为的是同版本一起动；
+      # `*` 之下它们仍在同一条 PR 里，故不再单列。
+      routine:
         patterns:
-          - "react"
-          - "react-dom"
-          - "@types/react"
-          - "@types/react-dom"
-      tooling:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+      major:
         patterns:
-          - "vite"
-          - "vitest"
-          - "@biomejs/*"
-          - "stylelint*"
-          - "typescript"
-          - "jscpd"
-          - "dependency-cruiser"
+          - "*"
+        update-types:
+          - "major"
 
   # 壳：`app/src-tauri/Cargo.toml` + `Cargo.lock`。
   - package-ecosystem: "cargo"
     directory: "/app/src-tauri"
     schedule:
       interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 3
+      day: "friday"
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "chore"
       include: "scope"
     groups:
-      tauri:
+      # `tauri` 与 `tauri-*` 原先单列分组（同版本一起抬）；`*` 之下它们仍在同一条 PR 里。
+      routine:
         patterns:
-          - "tauri"
-          - "tauri-*"
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
 
   # 工作流里钉住的那些 action：让 SHA 与注释随上游发布一起抬。
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
+      day: "tuesday"
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "ci"
       include: "scope"
     groups:
       # CodeQL 的 `init` 与 `analyze` 同属一个 release，**只抬一个就是坏的**
       # （实测：init 4.38.2 写出的配置文件被 analyze 3.38.2 拒收，`main` 上的 codeql
-      # 由此红了一整天）。故把这一族锁进一个分组，让它们始终同一个 PR、同一个版本。
-      codeql:
+      # 由此红了一整天）。原先是给它单列 `codeql` 分组；`routine` 的 `*` 收全仓 action，
+      # 这一族仍在同一条 PR 里同进同出，故单列分组不再必要。
+      routine:
         patterns:
-          - "github/codeql-action*"
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+      major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
