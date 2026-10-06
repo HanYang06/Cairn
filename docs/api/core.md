@@ -22,10 +22,13 @@
 
 ## 配置引擎
 
-声明即事实：声明时校验、取值时给类型判据。存储的参数由存储自己声明（`core/storage/conf.py`），
-配置端只负责展开与取值。
+声明即事实：**引擎是上游库 OnConf**（PyPI `onconf`），`core.conf` 只定配置根（`CAIRN_CONFIG`）
+并把 `conf` 转发出去；存储的参数由存储自己声明（`core/storage/conf.py`），内核自身那条在
+`core/params.py`。语义与差异见[配置引擎](../architecture/py_core/config.md)。
 
 ::: core.conf
+
+::: core.params
 
 ::: core.storage.conf
 

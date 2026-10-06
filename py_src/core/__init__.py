@@ -3,7 +3,7 @@
 """Cairn 内核包.
 
 导入本包即声明内核自己那组配置,并把 `core.log.level` 设到 `cairn` 这族记录器上
-(见 `core/conf/params.py`).**不劫持 root**:只动自己这一族,别人的日志级别不受影响;
+(见 `core/params.py`).**不劫持 root**:只动自己这一族,别人的日志级别不受影响;
 级别名认不出来(或只读部署下取不到值)就退回默认,不因此让导入失败.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-import core.conf.params  # noqa: F401 — 导入即声明内核自己那组配置(声明是事实源)
+import core.params  # noqa: F401 — 导入即声明内核自己那组配置(声明是事实源)
 from core.conf import conf
 
 _FAMILY = "cairn"

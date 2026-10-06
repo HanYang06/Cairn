@@ -4,6 +4,9 @@
 
 异常层只做一件事:把"哪一层在什么情况下退出"写成一个类型,调用方按类型分流,
 日志按类型定级.此处只声明当前确有抛出点的异常;尚无抛出点的层不得预先占位.
+
+**配置侧不在这里**:配置引擎已换成 OnConf,它那套异常(`ConfError` 一族)由
+`onconf` 自己声明,内核不再转抄一份.
 """
 
 from __future__ import annotations
@@ -68,33 +71,6 @@ class ObjectNotFoundError(StorageError):
     """对象不在存储里:索引没有这一行,或行指向的字节已经读不出来."""
 
 
-class ConfigError(CairnError, ValueError):
-    """配置侧异常的基类:调用方按它兜住整层,再按子类分流."""
-
-
-class ConfigTypeError(ConfigError):
-    """类型与值对不上:声明的类型不是允许的写法,或默认值 / 写进来的值与该键的类型不符."""
-
-
-class ConfigDuplicateError(ConfigError):
-    """重复声明:这个键已经有值(文件里,或本会话已声明过),代码不许再给它赋值.
-
-    **写入方向只有一个:代码 → 文件**.改值只能从配置文件改回来,除非显式 `force=True`.
-    """
-
-
-class ConfigKeyError(ConfigError):
-    """配置项没有值可读:键不在值文件里,而声明处也没有默认值."""
-
-
-class ConfigFileError(ConfigError):
-    """值文件读不成配置:不是合法 JSON,或根不是对象."""
-
-
-class ConfigReferenceError(ConfigError):
-    """文件引用不成立:引用名指向仓根之外,或被引用的文件不存在."""
-
-
 class CallError(CairnError, ValueError):
     """命令面异常:方法名不认识,或参数缺了 / 多了 / 类型不对."""
 
@@ -111,12 +87,6 @@ __all__ = [
     "AttrTypeError",
     "CairnError",
     "CallError",
-    "ConfigDuplicateError",
-    "ConfigError",
-    "ConfigFileError",
-    "ConfigKeyError",
-    "ConfigReferenceError",
-    "ConfigTypeError",
     "HubNotFoundError",
     "HubShapeError",
     "IndexNotFoundError",

@@ -6,7 +6,7 @@
 ## 环境
 
 ```powershell
-uv sync                                  # 安装/同步依赖（Python 3.13，走 uv.lock + 阿里云镜像）
+uv sync                                  # 安装/同步依赖（Python 3.14，走 uv.lock + 阿里云镜像）
 ```
 
 内核不设库旋钮：库根由调用方显式给出（`Kernel.create(root)` / `Kernel.open(root)`）；

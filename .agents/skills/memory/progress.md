@@ -113,7 +113,9 @@
 - [ ] **AI 评审未验证**：底座已切魔搭 API-Inference（按调用次数计的每日免费额度，超限 429），
   模型 `Qwen/Qwen3.8-27B`；待 `ocr llm test` 验证令牌与 Model ID 在架，并实测 tool calling
   与单次评审耗时（OCR 的流程完全依赖工具调用）——该模型仓的 `SupportApiInference` 字段此刻为 `false`，
-  免费名单是否覆盖以实测为准。**否掉的两条路**：官方 DeepSeek API（调用量低，且按提示缓存命中
+  免费名单是否覆盖以实测为准。**2026-10-04 实测**：首个真 PR（#45）上 `review` job
+  11 秒即失败，且 `/tmp/ocr-result.json` 未产出（OCR 侧错误日志未上传），
+  失败原因仍未定——这一条从"未验证"升级为"已验证会失败，原因待查"。**否掉的两条路**：官方 DeepSeek API（调用量低，且按提示缓存命中
   计价的档位对评审负载不友好；原 key 失效返回 401）、本地 Ollama（下列实测边界）。
   Ollama 实测边界：可用 `qwen3.5:2b` / `qwen3.5:4b`（`qwen2.5-coder:3b` 无结构化 `tool_calls`）；
   上下文限 4096 token 且超长保留尾部、丢头部（须以 `OLLAMA_CONTEXT_LENGTH` 重启 serve）；
@@ -123,14 +125,15 @@
 - [ ] `LICENSES/Apache-2.0.txt` 未建（`reuse lint` 才需要，而该 CLI 是 GPL，不引）。
 - [ ] docstring 覆盖补到 ≥95% 后，把 `scripts/docgen.py` 的 `DOCSTRING_MIN` 接成
   `--coverage --strict` 门禁。
-- [ ] 中文搜索分词（`jieba` 未引，本机构 sdist 失败）。
-- [ ] **配置引擎改造（已项目化到隔壁 `auto_conf`）**：约定与改动清单见
-  `D:\Project\PyProject\auto_conf\docs\design\cairn-config.md`。待做的是：八条键按
-  `<架构层>.<功能域>.<对象>.<属性>` 改名（两份入库产物重生成）、加一道 AST 门禁
-  （键必须是字面量 ＋ 声明处的层前缀与文件位置一致 ＋ 一个键只声明一处）、`storage/conf.py`
-  去掉键名常量与 `for` 循环、修五处实测缺陷（哨兵返回值 / `doc=""` 退化成读取 / 报错不可区分 /
-  可空写不出 / 声明返回默认值而取值返回文件值）、删纯转手包装函数与 `pack` / `hub` 签名里的策略默认值。
-  **等 auto_conf 定案后回接**。GitHub 侧 issue 待提（本机未装 `gh`）。
+- [ ] **中文搜索分词**（`jieba` 未引，本机构 sdist 失败）。
+- [ ] **给上游 OnConf 提两个 issue**（本机未装 `gh`，待提）：① wheel 缺 `py.typed`
+  （`pyproject.toml` 已声明 `Typing :: Typed`，实际包内没有，害得下游 strict 只能忽略它）；
+  ② `EngineParams` 少了 `lock_timeout`，`conf(**engine)` 透传它会抛 `UnknownEngineParamError`。
+  口径与后果见 `references/decisions/配置.md`「上游待办」。
+- [ ] **配置键名与一道 AST 门禁**（从换引擎那次摘出来的独立任务）：八条键按
+  `<架构层>.<功能域>.<对象>.<属性>` 改名（两份入库产物随之重生成）；门禁要管三件事——
+  键必须是字面量、声明处的层前缀与文件位置一致、一个键只声明一处
+  （最后一条正是 OnConf 不再提供的"重复声明即炸"，见 `references/decisions/配置.md`）。
 
 ## 六、远期
 

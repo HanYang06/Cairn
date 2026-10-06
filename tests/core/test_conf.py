@@ -1,485 +1,121 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""配置引擎契约:一种调用形(声明 / 取值),引擎自组批次,单向写入,类型判据,单文件投影."""
+"""配置契约:内核只做"把引擎指到哪儿"这一件事,配置语义全部由 OnConf 承担.
+
+故这里**不重复测 OnConf 的引擎**(它的对账,锁,后端各有自己的用例),只盯内核侧那两件
+容易悄悄坏掉的事:
+
+1. **配置根的决定权**:`CAIRN_CONFIG` 指的目录说了算,不给才是仓根下的 `config/`;
+2. **引擎的日志不落终端**:OnConf 每次读都留一行,落到 stderr 会淹掉命令行与测试输出,
+   故内核把它指向 `<root>/logs/config.log`.
+
+两条都在子进程里验:引擎是**单例**且"起来之后不能改配置",同一个进程里换不了根,
+要验"换根之后落在哪儿"只能换一个进程.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
-import pytest
+from core.conf import CONFIG_DIRNAME, ROOT_ENV, config_root
 
-from core.conf import Config
-from core.conf.types import JsonValue, check_type, spec_of
-from core.exc import (
-    ConfigDuplicateError,
-    ConfigFileError,
-    ConfigKeyError,
-    ConfigReferenceError,
-    ConfigTypeError,
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PY_SRC = _REPO_ROOT / "py_src"
+
+#: 子进程里跑的一段:导入内核(声明那一组键)后读一条,给退出时的落盘留出时机.
+_RUN_KERNEL = (
+    "import core, core.storage.conf\nfrom core.conf import conf\nprint(conf('core.log.level'))\n"
 )
 
 
-@pytest.fixture
-def root(tmp_path: Path) -> Path:
-    """一个空的配置根:值文件与词表都落在它下面."""
-    return tmp_path / "config"
-
-
-@pytest.fixture
-def conf(root: Path) -> Config:
-    """一份独立的配置面(不碰进程级那个 `conf`,免得用例互相污染)."""
-    return Config(root=root)
-
-
-def values(conf: Config) -> dict[str, object]:
-    """读回值文件里的键与值(去掉开头的 `$schema` 那一行)."""
-    data: dict[str, object] = json.loads(conf.settings_path().read_text(encoding="utf-8"))
-    data.pop("$schema", None)
-    return data
-
-
-# ---- 一种调用形:声明与取值 ---- #
-
-
-def test_declare_then_read_back(conf: Config):
-    """声明即拿到默认值;同一形状的取值拿到同一个值."""
-    assert conf("demo.size", 65536, type=int) == 65536
-    assert conf("demo.size") == 65536
-
-
-def test_declaration_without_default_is_read_only(conf: Config):
-    """只给 `type` / `doc` 是在声明"没有默认值"的项:不补进文件,读不到就报错."""
-    conf("core.mode", type=str, doc="运行模式")
-
-    with pytest.raises(ConfigKeyError):
-        conf("core.mode")
-    assert conf.plan() == ()
-
-
-def test_reading_an_undeclared_key_is_an_error(conf: Config):
-    """没声明的键读不出来:不猜,不自动造."""
-    with pytest.raises(ConfigKeyError):
-        conf("nobody.knows")
-
-
-def test_values_of_every_json_type(conf: Config):
-    """六种 JSON 值各走一遍:写出去,读回来,类型不变."""
-    conf("a.int", 1)
-    conf("a.float", 1.5)
-    conf("a.bool", True)
-    conf("a.str", "文字")
-    conf("a.list", [1, 2], type=list[int])
-    conf("a.dict", {"k": "v"}, type=dict[str, str])
-    conf("a.null", None)
-    conf.sync()
-
-    assert conf("a.int") == 1
-    assert conf("a.float") == 1.5
-    assert conf("a.bool") is True
-    assert conf("a.str") == "文字"
-    assert conf("a.list") == [1, 2]
-    assert conf("a.dict") == {"k": "v"}
-    assert conf("a.null") is None
-
-
-def test_pending_value_is_visible_before_flush(conf: Config):
-    """写了立刻读必须拿到刚写的值:批内可见,不然用法自相矛盾."""
-    conf("a.b", 1)
-
-    assert conf("a.b") == 1
-    assert not conf.settings_path().exists()
-
-
-# ---- 批:写只记一笔,落盘一次 ---- #
-
-
-def test_dense_writes_flush_once(conf: Config):
-    """密集调用只落一次盘:默认通路不即时,`sync()` 才写文件."""
-    for index in range(20):
-        conf(f"a.k{index}", index)
-
-    assert not conf.settings_path().exists()
-    result = conf.sync()
-    assert len(result.added) == 20
-    assert len(values(conf)) == 20
-
-
-def test_sync_is_idempotent_and_does_not_touch_an_unchanged_file(conf: Config):
-    """第二次落盘没有内容变化:不重写文件(时间戳也不动)."""
-    conf("a.b", 1)
-    conf.sync()
-    stamp = conf.settings_path().stat().st_mtime_ns
-
-    result = conf.sync()
-
-    assert result.added == ()
-    assert result.changed == ()
-    assert conf.settings_path().stat().st_mtime_ns == stamp
-
-
-def test_plan_reports_only_real_changes(conf: Config):
-    """`plan()` 按内容判:写进文件之后就没有待落盘的变化了."""
-    conf("a.b", 1)
-    assert conf.plan() == ("a.b",)
-
-    conf.sync()
-    assert conf.plan() == ()
-
-
-def test_sync_keeps_a_key_that_is_only_scanned(root: Path):
-    """扫描登记不等于本会话声明:没 import 到声明模块的键,值文件里那份要留住.
-
-    `reduce()` 只说明"全仓有这一条声明",本会话手里并没有可写的值;若把它计入引擎的账,
-    `_payload` 就会把它从用户段剔除,`_flush` 随即当成"应删除"清掉用户写下的那一行.
-    """
-    root.mkdir(parents=True)
-    settings = root / "settings.json"
-    settings.write_text(
-        json.dumps({"$schema": "schema/settings.json", "old.key": 1}) + "\n", encoding="utf-8"
+def _run(code: str, config_root_dir: Path) -> subprocess.CompletedProcess[str]:
+    """在另指配置根的干净进程里跑一段代码(导入路径与 pytest 的 `pythonpath` 一致)."""
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            ROOT_ENV: str(config_root_dir),
+            "PYTHONPATH": str(_PY_SRC),
+        },
     )
-    fresh = Config(root=root)
-    fresh.reduce({"old.key": "core.somewhere"})
-
-    fresh.sync()
-
-    assert values(fresh) == {"old.key": 1}
 
 
-def test_declared_key_without_default_keeps_its_file_value(root: Path):
-    """只声明,没给默认值的键:值只能由文件给,落盘时不得把它当"应删除"清掉."""
-    root.mkdir(parents=True)
-    settings = root / "settings.json"
-    settings.write_text(
-        json.dumps({"$schema": "schema/settings.json", "core.mode": "strict"}) + "\n",
+def test_config_root_defaults_to_the_repo_config_dir(monkeypatch):
+    """不给旋钮时,配置根是仓根下的 `config/`(值与事实源一起入库)."""
+    monkeypatch.delenv(ROOT_ENV, raising=False)
+
+    assert config_root() == _REPO_ROOT / CONFIG_DIRNAME
+
+
+def test_config_root_follows_the_environment_knob(monkeypatch, tmp_path: Path):
+    """`CAIRN_CONFIG` 是**找到配置的办法**,不是配置项:它一指,根就换过去."""
+    monkeypatch.setenv(ROOT_ENV, str(tmp_path / "elsewhere"))
+
+    assert config_root() == tmp_path / "elsewhere"
+
+
+def test_a_fresh_process_generates_both_projections_at_the_knob(tmp_path: Path):
+    """跑一遍就生成:值文件与词表都落在 `CAIRN_CONFIG` 指的目录里,不需要生成脚本."""
+    result = _run(_RUN_KERNEL, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "WARNING"
+
+    values = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert values["$schema"] == "schema/settings.json"
+    assert values["core.log.level"] == "WARNING"
+    assert values["slot.max.byte.b"] == 512
+    assert values["hub.default"] == "main"
+
+    vocabulary = json.loads((tmp_path / "schema" / "settings.json").read_text(encoding="utf-8"))
+    assert "core.log.level" in vocabulary["properties"]
+
+
+def test_the_engines_log_goes_to_a_file_not_the_terminal(tmp_path: Path):
+    """引擎每次读都留一行,故内核把它指向 `<root>/logs/config.log`,终端保持干净.
+
+    这一条是回归:默认 `log="stderr"` 时,一次导入就会往 stderr 倒十几行记录,
+    命令行与 pytest 的输出都被它淹掉.
+    """
+    result = _run(_RUN_KERNEL, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == "", "引擎的日志不该出现在 stderr"
+    log = tmp_path / "logs" / "config.log"
+    assert log.is_file()
+    assert "[Read]" in log.read_text(encoding="utf-8")
+
+
+def test_a_key_nobody_declared_is_cleaned_at_exit(tmp_path: Path):
+    """值文件里**没被声明过**的键会在退出时被清掉:库的键空间由声明定,不由文件定.
+
+    OnConf 的规则 1(事实有,期望没有 ⇒ 清理)在**提交点**执行,而进程退出就是提交点.
+    这条与旧引擎相反(旧口径是"用户自加的键留着"),是换引擎时最该记住的一处语义变化:
+    `config/settings.json` 不是"用户想写什么就写什么"的地方,往那里加自己的键留不住.
+    """
+    (tmp_path / "settings.json").write_text(
+        json.dumps(
+            {
+                "$schema": "schema/settings.json",
+                "core.log.level": "WARNING",
+                "ghost.key": 1,
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
-    fresh = Config(root=root)
-    fresh("core.mode", type=str, doc="运行模式")
 
-    assert fresh("core.mode") == "strict"
-    fresh.sync()
+    result = _run(_RUN_KERNEL, tmp_path)
 
-    assert values(fresh) == {"core.mode": "strict"}
-
-
-# ---- 写入方向:代码 → 文件,单向 ---- #
-
-
-def test_second_assignment_in_code_is_refused(conf: Config):
-    """同一键再赋值即报错,报错里带上先声明那一处(模块 + 文件 + 行号)."""
-    conf("a.b", 1)
-
-    with pytest.raises(ConfigDuplicateError) as caught:
-        conf("a.b", 2)
-
-    assert "test_conf.py" in str(caught.value)
-
-
-def test_duplicate_inside_one_batch_is_refused(conf: Config):
-    """一批里写两次同一个键同样报错:判据含待写项,不看落盘了没有."""
-    conf("a.b", 1)
-
-    with pytest.raises(ConfigDuplicateError):
-        conf("a.b", 2)
-
-
-def test_the_file_value_wins_over_the_declared_default(conf: Config, root: Path):
-    """**文件为准**:声明带默认值,而文件里已经有这一行时,读到的是文件里的那个值.
-
-    默认值只负责"把值文件建立起来";文件建立之后它就是真源.故这里断言 99 而不是 1——
-    否则"用户改了配置文件"这件事在程序里不生效.
-    """
-    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
-    conf.settings_path().write_text(
-        json.dumps({"$schema": "schema/settings.json", "a.b": 99}) + "\n", encoding="utf-8"
-    )
-    fresh = Config(root=root)
-
-    assert fresh("a.b", 1) == 1, "声明的返回值是那一处写下的默认值"
-    assert fresh("a.b") == 99, "读出来的是文件里的值"
-    fresh.sync()
-    assert values(fresh)["a.b"] == 99, "落盘也不把文件里的值顶回默认值"
-
-
-def test_redeclaring_in_the_same_session_is_refused_by_the_ledger(conf: Config):
-    """同一会话里第二次声明同一个键:登记账说了算,与文件里有没有无关."""
-    conf("a.b", 1)
-
-    with pytest.raises(ConfigDuplicateError):
-        conf("a.b", 1)
-
-
-def test_force_overwrites(conf: Config):
-    """强写:`force=True` 是唯一能顶掉已有值的通路."""
-    conf("a.b", 1)
-
-    assert conf("a.b", 2, force=True) == 2
-    assert conf("a.b") == 2
-    conf.sync()
-    assert values(conf)["a.b"] == 2
-
-
-def test_force_still_checks_type(conf: Config):
-    """强写只放开"能不能改",不放开类型判据."""
-    conf("a.b", 1, type=int)
-
-    with pytest.raises(ConfigTypeError):
-        conf("a.b", 1.5, force=True)
-
-
-# ---- 用户手改的文件 ----
-
-
-def test_user_edited_value_wins_and_is_not_overwritten(conf: Config, root: Path):
-    """用户改过的值永不被覆写:代码手里的默认值顶不掉文件里的改动."""
-    conf("a.b", 1)
-    conf.sync()
-    data = values(conf)
-    data["a.b"] = 4096
-    conf.settings_path().write_text(json.dumps(data) + "\n", encoding="utf-8")
-
-    fresh = Config(root=root)
-    assert fresh("a.b") == 4096
-    assert fresh.plan() == ()
-    fresh.sync()
-    assert values(fresh)["a.b"] == 4096
-
-
-def test_user_added_keys_are_kept(conf: Config, root: Path):
-    """用户自己加的键留着:引擎只补缺失的键,不删不改别人的东西."""
-    conf("a.b", 1)
-    conf.sync()
-    data = values(conf)
-    data["user.mine"] = {"hello": "world"}
-    conf.settings_path().write_text(json.dumps(data) + "\n", encoding="utf-8")
-
-    fresh = Config(root=root)
-    assert fresh("user.mine") == {"hello": "world"}
-    fresh.sync()
-    assert values(fresh)["user.mine"] == {"hello": "world"}
-
-
-def test_missing_default_is_filled_back(conf: Config, root: Path):
-    """文件里少了带默认值的键:模块一跑(声明一次)就补回来."""
-    conf("a.b", 7)
-    conf.sync()
-    conf.settings_path().write_text(json.dumps({"$schema": "schema/settings.json"}) + "\n")
-
-    fresh = Config(root=root)
-    assert fresh("a.b", 7) == 7
-    fresh.sync()
-
-    assert values(fresh) == {"a.b": 7}
-
-
-# ---- 类型判据 ---- #
-
-
-@pytest.mark.parametrize(
-    ("value", "declared", "expected"),
-    [
-        (1, float, 1.0),
-        (1.5, float, 1.5),
-        (True, bool, True),
-        ("x", str, "x"),
-        (None, type(None), None),
-    ],
-)
-def test_type_rules_that_pass(conf: Config, value: object, declared: object, expected: object):
-    """判据放行的几种:整数在浮点键上按浮点算,其余要求类型同一."""
-    conf("a.b", value, type=declared)
-
-    assert conf("a.b") == expected
-    assert conf("a.b") is not True or expected is True
-
-
-@pytest.mark.parametrize("bad", [1.5, "x", None, True])
-def test_int_key_refuses_everything_but_int(conf: Config, bad: object):
-    """`type=int` 只收整数:浮点,字符串,空值,布尔一律拦下(`True` 也不放行)."""
-    with pytest.raises(ConfigTypeError):
-        conf("a.b", bad, type=int)
-
-
-def test_bool_does_not_masquerade_as_int(conf: Config):
-    """`isinstance(True, int)` 为真,但 `type=int` 配 `True` 必须拦下."""
-    with pytest.raises(ConfigTypeError):
-        conf("a.b", True, type=int)
-
-
-def test_widening_writes_a_float(conf: Config):
-    """整数默认值在浮点键上按浮点写出:否则读回变整数,会自己把自己拦下."""
-    conf("a.b", 65536, type=float)
-    conf.sync()
-
-    assert values(conf)["a.b"] == 65536.0
-    assert isinstance(values(conf)["a.b"], float)
-
-
-def test_type_is_inferred_from_the_default(conf: Config):
-    """省略 `type` 时按默认值自身的类型判."""
-    conf("a.b", "文字")
-
-    assert conf("a.b") == "文字"
-
-
-@pytest.mark.parametrize("bad_type", [bytes, set, tuple, object])
-def test_unsupported_types_are_refused_at_declaration(conf: Config, bad_type: object):
-    """落不成 JSON 的类型在声明期就拒,而不是等落盘时崩."""
-    with pytest.raises(ConfigTypeError):
-        conf("a.b", 1, type=bad_type)
-
-
-def test_containers_take_one_level_of_element(conf: Config):
-    """容器类型可以带一层元素,非法元素当场拦下."""
-    conf("a.list", [1, 2], type=list[int])
-    conf("a.dict", {"k": 1}, type=dict[str, int])
-    conf.sync()
-
-    assert conf("a.list") == [1, 2]
-    assert conf("a.dict") == {"k": 1}
-
-    with pytest.raises(ConfigTypeError):
-        conf("a.bad", [1], type=list[str])
-
-
-def test_hand_edited_type_mismatch_is_refused_on_read(conf: Config, root: Path):
-    """人手把值改成别的类型:下一个进程一声明它就当场报错,不静默当另一个类型用."""
-    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
-    conf.settings_path().write_text(
-        json.dumps({"$schema": "schema/settings.json", "a.b": "文字"}) + "\n", encoding="utf-8"
-    )
-    fresh = Config(root=root)
-
-    with pytest.raises(ConfigTypeError):
-        fresh("a.b", 1, type=int)
-
-
-def test_non_json_default_is_refused(conf: Config):
-    """默认值本身落不成 JSON(如 `Path`)同样在声明期拒."""
-    with pytest.raises(ConfigTypeError):
-        conf("a.b", Path("x"))
-
-
-# ---- 坏文件 ---- #
-
-
-def test_broken_json_is_an_error(conf: Config):
-    """值文件读不成 JSON:报错,不猜也不重写."""
-    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
-    conf.settings_path().write_text("{ not json", encoding="utf-8")
-
-    with pytest.raises(ConfigFileError):
-        conf("a.b")
-
-
-def test_root_must_be_an_object(conf: Config):
-    """值文件的根不是对象:报错."""
-    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
-    conf.settings_path().write_text("[1, 2]\n", encoding="utf-8")
-
-    with pytest.raises(ConfigFileError):
-        conf("a.b")
-
-
-# ---- 文件引用 ---- #
-
-
-def test_file_reference_resolves_next_to_the_value_file(conf: Config):
-    """`file="yaml"` 默认指向同层级的 `<字段名>.yaml`,值文件里那一行是引用名."""
-    conf.settings_path().parent.mkdir(parents=True, exist_ok=True)
-    (conf.settings_path().parent / "tables.yaml").write_text("- name: x\n", encoding="utf-8")
-
-    conf("storage.db.tables", "", type=str, file="yaml")
-    conf.sync()
-
-    assert values(conf)["storage.db.tables"] == "tables.yaml"
-
-
-def test_file_reference_must_exist(conf: Config):
-    """被引用的文件不在:声明期就报错,本体要放好."""
-    with pytest.raises(ConfigReferenceError):
-        conf("storage.db.tables", "", type=str, file="yaml")
-
-
-def test_file_reference_may_not_escape_the_root(conf: Config):
-    """引用名不许跑出仓根."""
-    with pytest.raises(ConfigReferenceError):
-        conf("storage.db.tables", "../../etc/passwd", type=str, file="yaml")
-
-
-# ---- 路径与装配 ---- #
-
-
-def test_value_file_points_at_the_schema(conf: Config):
-    """值文件顶部那句 `$schema` 指向词表(相对路径,搬仓不失效)."""
-    conf("a.b", 1)
-    conf.sync()
-
-    head = json.loads(conf.settings_path().read_text(encoding="utf-8"))["$schema"]
-    assert head == "schema/settings.json"
-    assert conf.schema_path().is_file()
-
-
-def test_schema_carries_type_default_and_owner(conf: Config):
-    """词表带类型,默认值,说明,出处:IDE 悬停与文档页都吃它."""
-    conf("a.b", 1, type=int, doc="说明")
-    conf.sync()
-
-    properties = json.loads(conf.schema_path().read_text(encoding="utf-8"))["properties"]
-    assert properties["a.b"]["type"] == "integer"
-    assert properties["a.b"]["default"] == 1
-    assert properties["a.b"]["description"] == "说明"
-    assert properties["a.b"]["x-cairn-owner"].startswith("tests.core.test_conf.")
-    assert "tests/core/test_conf.py:" in properties["a.b"]["x-cairn-site"]
-
-
-def test_config_root_follows_the_environment_knob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """`CAIRN_CONFIG` 是找到配置的办法(测试与部署用),不是配置项."""
-    monkeypatch.setenv("CAIRN_CONFIG", str(tmp_path / "elsewhere"))
-    conf = Config()
-
-    assert conf.config_root() == tmp_path / "elsewhere"
-
-    conf.use(tmp_path / "here")
-    assert conf.config_root() == tmp_path / "here"
-    assert os.environ["CAIRN_CONFIG"] == str(tmp_path / "elsewhere")
-
-
-def test_reduce_registers_declarations_without_running_them(conf: Config):
-    """扫描那条路:按清单登记,不执行模块;本处没声明的键读不到."""
-    assert conf.reduce({"a.b": "core.somewhere", "c.d": "core.elsewhere"}) == ("a.b", "c.d")
-    assert conf.used() == frozenset()
-
-    with pytest.raises(ConfigKeyError):
-        conf("a.b")
-
-
-def test_reduce_does_not_shadow_a_real_declaration(conf: Config):
-    """本处声明过的键,扫描登记不覆盖它."""
-    conf("a.b", 1)
-
-    assert conf.reduce({"a.b": "core.somewhere"}) == ()
-    assert conf("a.b") == 1
-
-
-# ---- 判据函数本身 ---- #
-
-
-@pytest.mark.parametrize(
-    ("type_arg", "value"),
-    [
-        (int, 1),
-        (float, 1.5),
-        (bool, False),
-        (str, "x"),
-        (list[int], [1]),
-        (dict[str, int], {"a": 1}),
-        (None, None),
-        (int | None, 3),
-    ],
-)
-def test_spec_and_check_round_trip(type_arg: object, value: JsonValue):
-    """`spec_of` 收下的写法,`check_type` 都判得过."""
-    assert check_type(value, spec_of(type_arg)) == value
+    assert result.returncode == 0, result.stderr
+    values = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert "ghost.key" not in values, "没声明过的键不该在提交点之后还留在值文件里"
+    assert values["core.log.level"] == "WARNING", "声明过的键与它的值原样留着"
