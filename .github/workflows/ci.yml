@@ -4,13 +4,23 @@
 name: ci
 
 on:
+  # push **只在主干**：功能分支由 pull_request 触发，否则同一份提交会跑两遍
+  # （2026-10-06 实测：640 次运行里 282 次是 push，其中大批与 PR 侧重复）。
+  # 代码与文档都长在分支上、经 PR 合入，故门禁不减：PR 侧那一遍照旧跑全量。
   push:
+    branches: [main]
   pull_request:
   # 手动重跑全量安全扫描（security-scan 只在这条与 push 上跑）。
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# 同一 PR / 分支连推时只留最新一次：旧提交的门禁结果对合并已无意义，
+# 取消它是省机器而非降标准（PR 上最终看到的那份永远是最新提交的）。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # 输出编码统一 UTF-8。Windows runner 的 stdout 默认不是 UTF-8（cp1252 / cp936），
 # 而 `lint-imports` 的**报告里含中文契约名**，打印即 `UnicodeEncodeError: 'charmap'`
