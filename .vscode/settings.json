@@ -39,7 +39,8 @@
         "**/.ruff_cache": true,
         "**/.pytest_cache": true,
         "**/.coverage": true,
-        "**/htmlcov": true
+        "**/htmlcov": true,
+        "**/.import_linter_cache":true
     },
     "search.exclude": {
         ".venv": true,
