@@ -60,8 +60,8 @@ uv run mkdocs build --strict   # 与 CI 同口径：坏链接 / 缺页面 / 未�
 
 - **中文**；术语按「[术语表](reference/glossary.md)」，不得自造同义词。
 - **未实现的功能不得写成已实现**：未做的部分写「预留 / 草案 / 待定」，并说明现状。
-- **代码是唯一事实**：`docs/architecture/*.md` 与实现冲突时，改实现后**回写文档**
-  （回写是任务的一部分）。
+- **权威顺序是 `路线图 > 设计 > 代码`**：路线图管「要什么」、代码管「现在是什么」；
+  `docs/architecture/*.md` 与实现冲突时，改实现后**回写文档**（回写是任务的一部分）。
 - 相对链接用文件相对路径（`../architecture/storage-design.md`），断链由 `--strict` 报出。
 - 图用 [Mermaid](https://mermaid.js.org/) 围栏代码块（` ```mermaid `），本站与 GitHub 均可渲染。
 
