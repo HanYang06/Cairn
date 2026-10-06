@@ -40,8 +40,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3",
-    "ruff>=0.8",
-    "mypy>=1.13",
+    "ruff>=0.16.10",
+    "mypy>=2.4.0",
     "pyinstaller>=6.11",
     "pytest-cov>=7.1.0",
     "pre-commit>=4.6.2",
