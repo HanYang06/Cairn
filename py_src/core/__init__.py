@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import logging
 
+from onconf import conf
+
+import core.conf  # 导入即装配引擎(配置根 + 日志出口),必须早于配置声明
 import core.params  # noqa: F401 — 导入即声明内核自己那组配置(声明是事实源)
-from core.conf import conf
 
 _FAMILY = "cairn"
-"""内核日志记录器的族根：`cairn.kernel` / `cairn.conf` / `cairn.events` / `cairn.sidecar`
+"""内核日志记录器的族根：`cairn.kernel` / `cairn.events` / `cairn.sidecar`
 都在它下面，故级别设在这一处，整族一起动。"""
 
 _DEFAULT_LEVEL = logging.WARNING

@@ -21,12 +21,8 @@ htmlcov/
 # 文档站构建产物（事实源是 docs/，站点不入库）
 site/
 
-# 配置引擎（OnConf）的运行期簿记：值文件与词表是入库的投影，其余不入库
-# （锁、专职写者的认证码与端点都是本机的东西；日志进 logs/）
-config/schema/settings.lock
-config/schema/settings.key
-config/schema/settings.sock
-config/logs/
+# 配置引擎（OnConf）的运行期簿记：值文件与词表是入库的投影，审计日志不入库
+config/audit.log
 
 # uv 缓存（默认在用户目录；沙箱内可能改到仓库本地）
 .uv-cache/

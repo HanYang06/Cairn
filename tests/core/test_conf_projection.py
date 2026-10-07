@@ -8,7 +8,7 @@
 - 读当前这份再跟声明比是自证——引擎在导入时就把缺的键补回去了,声明删掉一个键也看不出来;
 - 从空目录重建再比,才量得到"入库的产物是不是这一版声明的样子".
 
-比对口径:值文件按 `键 → 值` 比,词表按 `properties` 逐条等价(键 / 类型 / 说明 / 默认值).
+比对口径:值文件按 `键 → 值` 比,词表按 `properties` 逐条等价(键 / 说明 / 默认值).
 不比字节——值文件里用户可能手动调过格式与键序,而那正是引擎刻意不动的部分.
 """
 
@@ -20,9 +20,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from onconf import conf
+
 import core.params  # 导入即声明内核自己那组配置(声明是事实源)
 import core.storage.conf  # noqa: F401
-from core.conf import conf
 from core.storage.conf import gc_auto_bytes
 
 #: 入库的两份产物(相对仓根)
@@ -35,6 +36,10 @@ _SAMPLED_KEYS = ("core.log.level", "slot.max.byte.b", "pack.max.byte", "hub.defa
 #: 值文件顶部的指令键:指向词表,不算配置项本身(与引擎的对账口径一致)
 _DIRECTIVE = "$schema"
 
+#: 引擎记"属主进程"用的环境变量(见 `tests/core/test_conf.py` 的同名常量):
+#: 父进程导入过 `core` 就会留下它,子进程继承后会被判成"派生进程"(只读),
+#: 而这里的子进程是全新进程,自己就是属主,故要摘掉.
+_OWNER_ENV = "ONCONF_OWNER_PID"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -59,21 +64,21 @@ def _fresh_projection(tmp_path: Path) -> tuple[dict[str, object], dict[str, obje
     要拿"另一份根生成的样子"只能换一个进程.
     """
     code = (
-        "import core, core.storage.conf\n"
-        "from core.conf import conf\n"
-        "print(conf('core.log.level'))\n"
+        "import core, core.storage.conf\nfrom onconf import conf\nprint(conf('core.log.level'))\n"
     )
+    env = {
+        **os.environ,
+        "CAIRN_CONFIG": str(tmp_path),
+        "PYTHONPATH": str(_REPO_ROOT / "py_src"),
+    }
+    env.pop(_OWNER_ENV, None)
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
-        env={
-            **os.environ,
-            "CAIRN_CONFIG": str(tmp_path),
-            "PYTHONPATH": str(_REPO_ROOT / "py_src"),
-        },
+        env=env,
     )
     assert result.returncode == 0, result.stderr
     values: dict[str, object] = json.loads((tmp_path / "settings.json").read_text("utf-8"))

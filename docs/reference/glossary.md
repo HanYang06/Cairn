@@ -54,7 +54,7 @@
 | **存储引擎 Engine** | 块 ↔ 槽：分配 hub / pack / 槽、编码、落盘、读回、摘块（`core/storage/engine.py`） | 不认识数据库 |
 | **数据库引擎 Index** | 索引库那一侧：建身份表、写行、按身份查位置、登记 hub（`core/storage/db/engine.py`） | 不认识 slot / pack / hub |
 | **异常层** | `core/exc.py` 的层级：`CairnError` 兜底，存储 / 命令面各族细分；与日志的联动点在 `Bus` 的失败钩子 | 不声明没有抛出点的异常；**不含配置族**（那是上游 OnConf 的异常） |
-| **配置 conf** | `core/conf.py` 的外层：定配置根（`CAIRN_CONFIG`）并把 OnConf 的 `conf` 转出去；声明即事实，值落单份值文件 | 不是配置文件本身；**也不是引擎**（引擎是上游 `onconf`）；取用点不抄默认值 |
+| **配置 conf** | `core/conf.py` 只做装配：定配置根（`CAIRN_CONFIG`）＋关控制台日志出口；`conf` 是上游 OnConf 自己的函数，声明即事实，值落单份值文件 | 不是配置文件本身；**也不是引擎**（引擎是上游 `onconf`）；取用点不抄默认值 |
 | **命令面 Api** | `core/api.py` 的方法表，**七个方法**（`tables` / `hubs` / `rows` / `locate` / `record` / `stats` / `delete`）：读与诊断 | **没有 `store`**（写由领域块自己发起）；也不解领域载荷 |
 
 ## 领域（意图：`feature` 待重建；note 落点 `py_src/model/note/`）

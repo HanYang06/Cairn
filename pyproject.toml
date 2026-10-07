@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "cbor2>=6.1.4",
-    "onconf>=1.0.0",
+    "onconf>=2.0.0",
 ]
 
 [dependency-groups]
@@ -113,9 +113,6 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 # 表名来自类名、列名来自 `ID_FIELDS`，两者都经 `Index._quote` 加引号，值全部参数化（无注入面）。
 "py_src/core/storage/db/engine.py" = ["S608"]
-# `conf` 的调用形是**对的形状本身就是契约**：声明与取值共用一个签名，`path` 之后全是可选副参数
-# （类型 / 说明 / 文件引用 / 强写）。拆成小对象会把"一种调用形"这个卖点拆掉。
-"py_src/core/conf/registry.py" = ["PLR0913"]
 # `Attr(False)` 这类写法里那个布尔是**声明的默认值**，不是"给函数加开关的布尔位置参数"：
 # 该规则防的是 `f(True, False)` 那种读不懂的调用，而 `Attr(<默认值>)` 恰恰是最清楚的写法。
 "py_src/model/**" = ["FBT003"]
@@ -132,7 +129,7 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 
-# `onconf` 1.0.0 的 wheel 里**没有 `py.typed`**（源码注解齐全，包却没声明可类型化，
+# `onconf` 2.0.0 的 wheel 里**没有 `py.typed`**（源码注解齐全，包却没声明可类型化，
 # 实测 `.venv/Lib/site-packages/onconf/` 下没有该文件），故 strict 下 import 它必报
 # `import-untyped`。对策只能是这一处忽略：分发包里没有类型信息，任何"建模它"的写法
 # 都等于在一份随时会变的上游 API 上抄一份影子声明。上游补了 `py.typed` 就删掉这段。

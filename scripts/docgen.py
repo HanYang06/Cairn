@@ -5,7 +5,7 @@
 
 分工原则(见 `rules/references/docs.md`):
 
-- **能算的就不写**:配置参考页的"键 / 类型 / 默认值 / 说明"读**入库的词表**
+- **能算的就不写**:配置参考页的"键 / 默认值 / 说明"读**入库的词表**
   (`config/schema/settings.json`,由 OnConf 从声明现算并落盘);
   "声明处"一列由 AST 扫 `conf("…")` 调用点得出——词表里没有出处,而那一列要的是事实;
 - **能查的就不写**:docstring 覆盖率从 AST 直接量,进 CI 当门禁,防止以后悄悄烂掉.
@@ -44,13 +44,12 @@ if str(PY_ROOT) not in sys.path:
 # 导入即登记:**每加一个带配置的模块,在这里补一行**——入库的词表就是这些声明算出来的.
 import core.params  # noqa: E402
 import core.storage.conf  # noqa: E402,F401
-from core.conf import sync  # noqa: E402
 from tools._iosafe import _say  # noqa: E402 — 见上:先补路径再导入
 
 #: 生成出来的参考页
 CONFIG_PAGE = ROOT / "docs" / "reference" / "config.md"
 
-#: 入库的词表(参考页"键 / 类型 / 默认值 / 说明"那一半的事实来源)
+#: 入库的词表(参考页"键 / 默认值 / 说明"那一半的事实来源)
 VOCABULARY = ROOT / "config" / "schema" / "settings.json"
 
 #: 扫调用点的范围:声明写在哪个包里就扫哪个包(与上面的 import 清单对齐)
@@ -77,7 +76,7 @@ _PAGE_HEAD = """\
 
 !!! danger "本页由工具生成，请勿手改"
 
-    由 `uv run python scripts/docgen.py --write` 生成：键 / 类型 / 默认值 / 说明来自
+    由 `uv run python scripts/docgen.py --write` 生成：键 / 默认值 / 说明来自
     **入库的词表**（`config/schema/settings.json`，由 OnConf 从声明现算），「声明处」由
     **AST 扫 `conf(...)` 调用点**得出。改口径请改生成器，改配置请改声明的那个 `conf(...)`
     调用点；`--check` 已进 CI，漂移即失败。**手改这一页会在下一次生成时被抹掉。**
@@ -86,8 +85,9 @@ _PAGE_HEAD = """\
 
 - **键** = 点分路径，也是 `config/settings.json` 里的属性名（不展开成嵌套对象）。
 - **默认值** = 声明里给的默认；`—` 表示没有默认值（那种键的值必须由文件给，丢了即报错）。
-- **取值** = `conf("键")`；**声明** = `conf("键", 默认值, type=…, doc=…)`——同一个调用形，
-  差别只在给不给参数。写入方向是单向的：改值改 `config/settings.json`，除非显式 `force=True`。
+- **取值** = `conf("键")`；**声明** = `conf("键", 默认值, doc=…)`——同一个调用形，
+  差别只在给不给参数。写入方向是单向的：改值改 `config/settings.json`；
+  运行期没有覆盖出口，覆盖走命令行 `onconf build` / `sync`。
 - **声明处**为 `—` 的键写在一个循环或函数里（键不是字面量），AST 扫不出逐键的出处；
   那种写法的键与说明仍以词表为准。
 
@@ -110,13 +110,13 @@ Residue = tuple[str, int, int]
 
 
 def read_settings() -> dict[str, Any]:
-    """读入库的词表;先落一次盘,再读.
+    """读入库的词表.
 
-    **落盘那一步不是多余的**:词表是"声明现算 + 落盘"的产物,而这里要的是**事实**
-    (键有没有,类型对不对),不是判断此刻磁盘上的副本新不新.落了再读,参考页就不会
+    上面那两句 import 就是"落盘":每条 `conf(...)` 声明当场提交(引擎的 `flush_window`
+    缺省 `0`),词表随之写出,故这里不需要再要一个显式提交点.读的是**事实**
+    (键有没有,说明与默认值对不对),不是判断磁盘上的副本新不新——参考页因此不会
     因为"谁最后跑过,跑的是哪半套声明"而少几行.
     """
-    sync()
     if not VOCABULARY.is_file():
         raise RuntimeError(f"词表不在 {VOCABULARY}：跑一遍程序或检查上面的 import 清单")
     document: dict[str, Any] = json.loads(VOCABULARY.read_text(encoding="utf-8"))
@@ -128,11 +128,11 @@ def read_settings() -> dict[str, Any]:
 def declaration_sites() -> dict[str, str]:
     """扫 `conf("…")` 调用点,给出 `键 → 文件:行号`(只认**声明**,只认**字面量键**).
 
-    词表不带出处(OnConf 的词表只有键 / 类型 / 说明 / 默认值),而参考页要的正是"这条键
+    词表不带出处(OnConf 的词表只有键 / 说明 / 默认值),而参考页要的正是"这条键
     写在哪一行".两条判据:
 
     - **"这一行是不是声明"靠调用形认**:`conf("k")` 只有键,是**取值**,不算声明处;
-      声明至少还要给一个值(`conf("k", v)`)或一个副参数(`doc=` / `type=`);
+      声明至少还要给一个值(`conf("k", v)`)或说明(`doc=`);
     - **键必须是字面量**:写在循环里的键(`for path in …: conf(path, …)`)扫不出逐键的
       出处,故不产出条目——参考页那一格显示 `—`,而键与说明仍以词表为准.
 
@@ -156,7 +156,7 @@ def declaration_sites() -> dict[str, str]:
                 if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
                     continue
                 declared = len(node.args) > 1 or any(
-                    keyword.arg in {"doc", "type"} for keyword in node.keywords
+                    keyword.arg == "doc" for keyword in node.keywords
                 )
                 if not declared:
                     continue
@@ -181,15 +181,15 @@ def _text(value: Any) -> str:
 def config_table(
     settings: dict[str, Any] | None = None, sites: dict[str, str] | None = None
 ) -> str:
-    """由词表与调用点渲染配置表(键 / 类型 / 默认值 / 说明 / 声明处)."""
+    """由词表与调用点渲染配置表(键 / 默认值 / 说明 / 声明处)."""
     data = settings if settings is not None else read_settings()
     where = sites if sites is not None else declaration_sites()
     properties: dict[str, Any] = data.get("properties", {})
-    lines = ["| 键 | 类型 | 默认值 | 说明 | 声明处 |", "|---|---|---|---|---|"]
+    lines = ["| 键 | 默认值 | 说明 | 声明处 |", "|---|---|---|---|"]
     for key in sorted(properties):
         spec: dict[str, Any] = properties[key] or {}
         lines.append(
-            f"| `{key}` | `{spec.get('type', '—')}` | {_cell(spec.get('default'))} "
+            f"| `{key}` | {_cell(spec.get('default'))} "
             f"| {_text(spec.get('description', '—'))} | `{_text(where.get(key, '—'))}` |"
         )
     return "\n".join(lines)

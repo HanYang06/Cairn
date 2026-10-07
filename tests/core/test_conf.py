@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""配置契约:内核只做"把引擎指到哪儿"这一件事,配置语义全部由 OnConf 承担.
+"""配置契约:内核只做"把引擎装配到哪儿"这一件事,配置语义全部由 OnConf 承担.
 
-故这里**不重复测 OnConf 的引擎**(它的对账,锁,后端各有自己的用例),只盯内核侧那两件
+故这里**不重复测 OnConf 的引擎**(它的对账,后端,日志各有自己的用例),只盯内核侧那两件
 容易悄悄坏掉的事:
 
 1. **配置根的决定权**:`CAIRN_CONFIG` 指的目录说了算,不给才是仓根下的 `config/`;
-2. **引擎的日志不落终端**:OnConf 每次读都留一行,落到 stderr 会淹掉命令行与测试输出,
-   故内核把它指向 `<root>/logs/config.log`.
+2. **日志不落终端**:引擎的日志一个出口无开关(缺省 `<root>/audit.log`),一个出口有开关
+   (控制台).内核是被嵌入的一方,故用开关把控制台关掉,命令行与测试的 `stderr` 保持干净.
 
-两条都在子进程里验:引擎是**单例**且"起来之后不能改配置",同一个进程里换不了根,
+两条都在子进程里验:引擎是**单例**且引导层参数"起来之后不能改",同一个进程里换不了根,
 要验"换根之后落在哪儿"只能换一个进程.
 """
 
@@ -28,23 +28,31 @@ _PY_SRC = _REPO_ROOT / "py_src"
 
 #: 子进程里跑的一段:导入内核(声明那一组键)后读一条,给退出时的落盘留出时机.
 _RUN_KERNEL = (
-    "import core, core.storage.conf\nfrom core.conf import conf\nprint(conf('core.log.level'))\n"
+    "import core, core.storage.conf\nfrom onconf import conf\nprint(conf('core.log.level'))\n"
 )
+
+#: 引擎记"属主进程"用的环境变量:创建引擎的进程把它写进 `os.environ`,子进程会继承它.
+#: 继承之后引擎按 pid 核对把子进程判成"派生进程"(只读).这里的子进程是**全新进程**,
+#: 自己就是属主,故要在它的环境里摘掉这一项.
+_OWNER_ENV = "ONCONF_OWNER_PID"
+
+
+def _child_env(config_root_dir: Path) -> dict[str, str]:
+    """子进程的环境:另指配置根,并摘掉父进程留下的属主标记(导入路径与 pytest 一致)."""
+    env = {**os.environ, ROOT_ENV: str(config_root_dir), "PYTHONPATH": str(_PY_SRC)}
+    env.pop(_OWNER_ENV, None)
+    return env
 
 
 def _run(code: str, config_root_dir: Path) -> subprocess.CompletedProcess[str]:
-    """在另指配置根的干净进程里跑一段代码(导入路径与 pytest 的 `pythonpath` 一致)."""
+    """在另指配置根的干净进程里跑一段代码."""
     return subprocess.run(
         [sys.executable, "-c", code],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
-        env={
-            **os.environ,
-            ROOT_ENV: str(config_root_dir),
-            "PYTHONPATH": str(_PY_SRC),
-        },
+        env=_child_env(config_root_dir),
     )
 
 
@@ -80,26 +88,27 @@ def test_a_fresh_process_generates_both_projections_at_the_knob(tmp_path: Path):
 
 
 def test_the_engines_log_goes_to_a_file_not_the_terminal(tmp_path: Path):
-    """引擎每次读都留一行,故内核把它指向 `<root>/logs/config.log`,终端保持干净.
+    """引擎每次读都留一行,文件那个出口没有开关;内核把控制台出口关掉,终端保持干净.
 
-    这一条是回归:默认 `log="stderr"` 时,一次导入就会往 stderr 倒十几行记录,
+    这条是回归:控制台出口开着时,一次导入就往 `stderr` 倒十几行记录,
     命令行与 pytest 的输出都被它淹掉.
     """
     result = _run(_RUN_KERNEL, tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert result.stderr == "", "引擎的日志不该出现在 stderr"
-    log = tmp_path / "logs" / "config.log"
+    log = tmp_path / "audit.log"
     assert log.is_file()
     assert "[Read]" in log.read_text(encoding="utf-8")
 
 
-def test_a_key_nobody_declared_is_cleaned_at_exit(tmp_path: Path):
-    """值文件里**没被声明过**的键会在退出时被清掉:库的键空间由声明定,不由文件定.
+def test_a_key_nobody_declared_is_kept_at_runtime(tmp_path: Path):
+    """值文件里**没被声明过**的键在运行期原样留着:删除只走命令行的收敛路径.
 
-    OnConf 的规则 1(事实有,期望没有 ⇒ 清理)在**提交点**执行,而进程退出就是提交点.
-    这条与旧引擎相反(旧口径是"用户自加的键留着"),是换引擎时最该记住的一处语义变化:
-    `config/settings.json` 不是"用户想写什么就写什么"的地方,往那里加自己的键留不住.
+    OnConf 2.0 起,"事实有,期望没有 ⇒ 清理"那条判据只在**期望集完整**时成立,而运行期
+    一个进程的期望集只是它自己声明过的那部分,故 `conf()` 的任何一条出口都不删键——
+    删除归命令行(`onconf sync`).这条与 1.0 相反(1.0 在提交点清掉),是换 2.0 时
+    最该记住的一处语义变化.
     """
     (tmp_path / "settings.json").write_text(
         json.dumps(
@@ -117,5 +126,5 @@ def test_a_key_nobody_declared_is_cleaned_at_exit(tmp_path: Path):
 
     assert result.returncode == 0, result.stderr
     values = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert "ghost.key" not in values, "没声明过的键不该在提交点之后还留在值文件里"
+    assert values["ghost.key"] == 1, "没声明过的键不该在运行期被清掉"
     assert values["core.log.level"] == "WARNING", "声明过的键与它的值原样留着"

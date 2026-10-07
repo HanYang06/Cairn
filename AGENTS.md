@@ -97,8 +97,8 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   存储引擎 `engine.py`、回收 `gc.py`；身份与段算术、载荷与索引库在 `db/`
   （`id.py` / `payload.py` / `engine.py`）；两类索引块在 `index/`）、**异常层**（`core/exc.py`）；
   装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置**在 `core/conf.py`
-  （外层：定配置根 + 转发 `conf`；**引擎是上游 PyPI 包 `onconf`**，声明各归各家——
-  内核那条在 `core/params.py`、存储那组在 `core/storage/conf.py`，
+  （只做装配：定配置根 + 关控制台日志出口；**引擎是上游 PyPI 包 `onconf`**，`conf` 直接用它的，
+  声明各归各家——内核那条在 `core/params.py`、存储那组在 `core/storage/conf.py`，
   见 `docs/architecture/py_core/config.md`）。
 - `py_src/model/`（领域形状层）：`model/note/types/` 落五个载体（`NoteData` / `NoteTag` / `NoteGroup` /
   `NoteAsset` / `NoteCanvas`）与值对象（`NoteLine` / `Span` / `Figure` …）的形状，见 `decisions/笔记.md` §四；

@@ -132,7 +132,7 @@
 
 按文件豁免（`per-file-ignores`，以 `pyproject.toml` 为准）：
 `py_src/core/storage/db/engine.py` 的 `S608`（表名与列名由 `ID_FIELDS` 现算并经 `_quote` 加引号，
-值全部参数化）、`py_src/core/conf/registry.py` 的 `PLR0913`（声明与取值共用一个签名）、
+值全部参数化）、
 `py_src/model/**` 的 `FBT003`（`Attr(False)` 里那个布尔是**声明的默认值**，
 不是"给函数加开关的布尔位置参数"），以及测试 / 工具脚本的整组豁免。
 

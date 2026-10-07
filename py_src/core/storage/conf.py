@@ -30,7 +30,8 @@
 
 from __future__ import annotations
 
-from core.conf import conf
+from onconf import conf
+
 from core.exc import SlotSizeError
 
 from .hub import DEFAULT_SLOT_BYTES
@@ -52,7 +53,6 @@ for _path, _factor in _TIERS:
     conf(
         _path,
         DEFAULT_SLOT_BYTES if _path == SLOT_MAX_BYTE else 0,
-        type=int,
         doc=f"格长档位之一：每单位 {_factor} 字节；两档相加即为格长，全不写则不成立",
     )
 
@@ -74,20 +74,17 @@ GC_AUTO_BYTE = "gc.auto.byte"
 conf(
     PACK_MAX_BYTE,
     DEFAULT_MAX_BYTES,
-    type=int,
     doc="封口线（字节）：单个载体写满这个数就换新的一份；只管换文件，不是硬上限",
 )
-conf(HUB_DEFAULT, "main", type=str, doc="默认 hub 名：写入不点名时进这一个")
+conf(HUB_DEFAULT, "main", doc="默认 hub 名：写入不点名时进这一个")
 conf(
     INDEX_MAX_BYTE,
     64 * 1024**2,
-    type=int,
     doc="一个索引块的体积上限（字节）：写到这个数由引擎自动续下一块",
 )
 conf(
     GC_AUTO_BYTE,
     0,
-    type=int,
     doc="自动回收的阈值（字节）：死字节到这个数即自动回收；0 即不自动回收",
 )
 
