@@ -129,7 +129,7 @@
 - [ ] docstring 覆盖补到 ≥95% 后，把 `scripts/docgen.py` 的 `DOCSTRING_MIN` 接成
   `--coverage --strict` 门禁。
 - [ ] **中文搜索分词**（`jieba` 未引，本机构 sdist 失败）。
-- [ ] **给上游 OnConf 提一个 issue**（本机未装 `gh`，待提）：wheel 缺 `py.typed`
+- [ ] **给上游 OnConf 提一个 issue**（待提；`gh` 已装）：wheel 缺 `py.typed`
   （`pyproject.toml` 已声明 `Typing :: Typed`，实际包内没有，害得下游 strict 只能忽略它）。
   1.0 时代记的 `lock_timeout` 那条随 2.0 的参数面消失，不再提。
   口径与后果见 `references/decisions/配置.md`「上游待办」。
