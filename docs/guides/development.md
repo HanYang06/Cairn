@@ -30,7 +30,7 @@ uv run lint-imports                        # 架构校验（契约在 pyproject 
 uv lock --check                            # 锁文件是否与声明同步
 uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
                                            # 先装钩子；不装时配置文件在、门禁不跑
-uv run pre-commit run --all-files          # 提交前全量门禁（11 个钩子，清单见 quality.md §4）
+uv run pre-commit run --all-files          # 提交前全量门禁（13 个钩子，清单见 quality.md §4）
 pnpm --dir app check                       # 前端门禁（类型/lint/样式/架构/令牌/重复代码/单测）
 ```
 
@@ -71,6 +71,6 @@ vault/         开发库（gitignore）
 ## 提交
 
 - commit message 用 **Conventional Commits**（`feat(ui): …` / `fix(core): …`），中文描述。
-- pre-commit 会跑 11 个钩子（SPDX → 书面语 → 标点 → ruff → deptry → 架构 → mypy →
-  锁文件 → 测试 → 前端），另由 commit-msg 钩子校验 Conventional Commits；
-  缺 SPDX 头时钩子自动补，补完要重新 `git add`。**钩子需先装**（见上）。
+- pre-commit 会跑 13 个钩子（SPDX → 书面语 → 标点 → 魔法用量 → 配置声明（`onconf check`）→
+  ruff → deptry → 架构 → mypy → 锁文件 → 测试 → 前端），另由 commit-msg 钩子校验 Conventional
+  Commits；缺 SPDX 头时钩子自动补，补完要重新 `git add`。**钩子需先装**（见上）。

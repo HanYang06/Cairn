@@ -8,12 +8,15 @@
 - **用了 ID,库里就产生一张真正意义上的身份表**(表名取自 ID 的名字);
 - **不用 ID,那张表自然不产生**——那个类只是活在别处载荷里的结构,不登记,不建表.
 
-故库的结构没有第二条来路:一个类型一张身份表,列就是 ID 的字段加正文历史一列.
+故库的结构没有第二条来路:一个类型一张身份表,列就是 ID 的字段加正文摘要一列.
 
 **坐标系的分辨**(2026-10-02 修正裁定):**槽号只在 pack 内有意义**,故"越 pack(甚至越 hub)
 的关联只能用摘要,不能用槽号".槽这个层级从来没有"出 pack 再关联 ID"这件事:一个块的身份
-跨 pack,跨 hub 成立,而它占的槽号只在它那一份载体里成立.故正文关联走摘要(`body_history`),
+跨 pack,跨 hub 成立,而它占的槽号只在它那一份载体里成立.故正文关联走摘要(`body` 那一列),
 位置走库里的行.
+
+**正文只有当前一份**(2026-10-06 裁定):库里那一列是**一个摘要**,不是摘要链,也不留世代
+——存储只做"记录与修改",历史,回滚与安全由上层自行解决.
 
 **身份与位置分工不同,故可变性也不同**:
 
@@ -32,15 +35,14 @@
 `ID.bound` / `ID.same_content` 一并退役.
 
 **位置段是段列表**:元素为"单格一个整数"或"连续一段(起,止)".规范形四条——
-升序,不重叠,相邻合并,段数最少.段列表与摘要链**各有各的编码**:位置段是段列表文本,
-正文历史是 JSON 数组(见 `encode_body_history`).
+升序,不重叠,相邻合并,段数最少.位置段编成段列表文本;正文那一列就是摘要本身
+(小写十六进制 ASCII),不必再包一层.
 
 故本类**不用 dataclass**:它要的是"三项只读 + 三项可写",而 dataclass 只能全可变或全冻结.
 """
 
 from __future__ import annotations
 
-import json
 from hashlib import sha256
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -54,18 +56,20 @@ if TYPE_CHECKING:
 SlotSpan = int | tuple[int, int]
 """位置段的元素：单格记一个整数，连续的一段记一个（起，止）二元组。"""
 
-BODY_HISTORY_FIELD = "body_history"
-"""库里那一列**正文历史的列名**：位置段之外的第二样真源，`ID` 上没有它。
+BODY_FIELD = "body"
+"""库里那一列**正文摘要的列名**：位置段之外的第二样真源，`ID` 上没有它。
 
-它装的是**摘要链**：一个世代一条，最新那一代就是当前用的那份正文的摘要。
-抄它、解析它都走 :func:`encode_body_history` / :func:`parse_body_history`。
+它装的是**当前那一份正文的摘要**（一个，不是一串）；这个块没有正文即空串。
+读它走 :func:`parse_body`，写它就是摘要本身。
 """
+
+DIGEST_LENGTH = 64
+"""摘要的文本长度：sha256 的十六进制写法（本报只写小写）。"""
+
+_HEX_DIGITS = frozenset("0123456789abcdef")
 
 EMPTY_SEGMENTS: tuple[SlotSpan, ...] = ()
 """未落盘时的段列表：一个槽都不占。"""
-
-EMPTY_HISTORY: tuple[str, ...] = ()
-"""还没有正文世代时的摘要链。"""
 
 _RANGE_SEP = "-"
 _ITEM_SEP = ","
@@ -201,78 +205,30 @@ def _validated(item: SlotSpan) -> SlotSpan:
     return first if first == last else (first, last)
 
 
-def encode_body_history(digests: Iterable[str]) -> str:
-    """把正文历史编成文本:**一个世代一条摘要**,按新到旧排列.
-
-    **最新那一代就是当前用的那份正文的摘要**,故这一列与位置段合起来才答得全
-    "这个块的正文现在在哪,经过哪几代":自带正文的块,位置段里看得见 body 槽;
-    引用别处的块,位置段里没有 body 槽,正文的位置由这一列的摘要去 `BodyIndex` 里查.
-
-    **按摘要记,不按槽段记**:槽号只在 pack 内有意义,而一个块引用的正文可能在**别的
-    pack,甚至别的 hub**;拿槽号表达跨 pack 的关联,读侧只能猜.摘要跨 pack,跨 hub 都成立.
-
-    编码用 JSON 数组:摘要本身就是十六进制 ASCII,故这一列是纯文本,可抄可读;
-    空数组即空文本("还没有正文"与"没有历史"在这一列上是一件事).
-    世代号不落盘——次序即世代,数组的下标就是它.
-
-    Args:
-        digests: 世代摘要,按新到旧排列.
-
-    Returns:
-        JSON 数组文本;没有世代即空串.
-
-    Raises:
-        InvalidIdError: 某一条不是非空文本.
-    """
-    chain = list(digests)
-    if not chain:
-        return ""
-    for item in chain:
-        if not isinstance(item, str) or not item:
-            raise InvalidIdError(f"正文摘要必须是非空文本: {item!r}")
-    return json.dumps(chain, ensure_ascii=True, separators=(",", ":"))
-
-
-def parse_body_history(text: str) -> tuple[str, ...]:
-    """把正文历史解析成摘要链(**按新到旧**);空串即没有正文世代.
+def parse_body(text: str) -> str:
+    """把库里那一列读成**当前正文的摘要**;空串即这个块没有正文.
 
     这一层是**位置段之外的第二样真源**:位置段说"这个块自己占哪些槽",
-    这一列说"它用过哪几份正文".
+    这一列说"它用的是哪一份正文".
+
+    **只认两种形态**:空串,或一段小写十六进制摘要.其余一律抛——这一列只由
+    :func:`digest` 写出,读到别的就是坏值,不静默当成"没有正文".
+
+    Args:
+        text: 库里那一列的原样文本.
+
+    Returns:
+        摘要;没有正文即空串.
 
     Raises:
-        InvalidIdError: 文本不是 JSON 数组,或某一项不是非空文本.
+        InvalidIdError: 文本既不是空串,也不是一段摘要.
     """
     raw = text.strip()
     if not raw:
-        return EMPTY_HISTORY
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise InvalidIdError(f"正文历史读不出来: {raw!r}") from error
-    if not isinstance(decoded, list):
-        raise InvalidIdError(f"正文历史不是数组: {raw!r}")
-    chain: list[str] = []
-    for item in decoded:
-        if not isinstance(item, str) or not item:
-            raise InvalidIdError(f"正文历史的条目形态不对: {item!r}")
-        chain.append(item)
-    return tuple(chain)
-
-
-def keep_generations(digests: Iterable[str], *, depth: int) -> tuple[str, ...]:
-    """按保留世代数截取摘要链:**按新到旧**留下最近的 `depth` 代.
-
-    `depth` 数的是**总共保留几代**,而最新那一代就是当前用的那份正文(自带或引用),
-    故它一定在链里.世代数由配置 `body.history.depth` 给,不得写成常数.
-
-    Args:
-        digests: 世代摘要,按新到旧排列.
-        depth: 总共保留几代.
-
-    Returns:
-        截好的摘要链,按新到旧.
-    """
-    return tuple(list(digests)[: max(0, depth)])
+        return ""
+    if len(raw) != DIGEST_LENGTH or not _HEX_DIGITS.issuperset(raw):
+        raise InvalidIdError(f"正文摘要读不出来: {raw!r}")
+    return raw
 
 
 def _text_of_segments(spans: Iterable[SlotSpan]) -> str:
@@ -368,7 +324,7 @@ class ID:
         in_hub: 所在 hub(目录名).**可写**:写入后由库记下.
         in_hub_pack: hub 内的载体.**可写**.
         in_pack_slot: 载体内的段列表(单格与区间两种形态).**可写**.
-        body_history: **正文摘要链**,按新到旧,最新那一代就是当前用的那份正文的摘要.
+        body: **当前正文的摘要**(一个,不是一串);空串即这个块没有正文.
             **可写**;它是位置段之外的第二样库的事实.
     """
 
@@ -376,7 +332,7 @@ class ID:
         "_birth_time",
         "_name",
         "_value_uuid",
-        "body_history",
+        "body",
         "in_hub",
         "in_hub_pack",
         "in_pack_slot",
@@ -407,7 +363,7 @@ class ID:
         self.in_hub = ""
         self.in_hub_pack = ""
         self.in_pack_slot: list[SlotSpan] = []
-        self.body_history: list[str] = []
+        self.body: str = ""
 
     # ---- 锁死的三项 ---- #
 
@@ -432,14 +388,6 @@ class ID:
     def located(self) -> bool:
         """是否已写上物理坐标(hub,载体与段列表三样都有)."""
         return bool(self.in_hub) and bool(self.in_hub_pack) and bool(self.in_pack_slot)
-
-    @property
-    def current_generation(self) -> str:
-        """当前用的那份正文的摘要(**摘要链的第一条**);还没有正文时空串.
-
-        **它是关联凭证**:位置段里没有 body 槽时,拿它去 `BodyIndex` 里查那份正文在哪.
-        """
-        return self.body_history[0] if self.body_history else ""
 
     # ---- 位置段 ---- #
 
@@ -482,11 +430,11 @@ class ID:
         self.in_pack_slot.append(slot)
 
     def clear_place(self) -> None:
-        """摘掉位置段与正文历史(删除之后它们不该再指着已失效的坐标)."""
+        """摘掉位置段与正文摘要(删除之后它们不该再指着已失效的坐标)."""
         self.in_hub = ""
         self.in_hub_pack = ""
         self.in_pack_slot = []
-        self.body_history = []
+        self.body = ""
 
     @property
     def slots(self) -> tuple[int, ...]:
@@ -504,10 +452,10 @@ class ID:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> ID:
-        """由索引库那一行还原身份:**身份字段,位置段与正文历史一起读回**.
+        """由索引库那一行还原身份:**身份字段,位置段与正文摘要一起读回**.
 
         **写只写必需,读尽量读回**:分配形态必须有(它是这份身份的唯一性所在);
-        名字与签发时刻允许缺失(那是"这一行没记");位置段与正文历史各自解析,
+        名字与签发时刻允许缺失(那是"这一行没记");位置段与正文摘要各自解析,
         坏文本即抛,不静默吞掉脏值.
 
         Raises:
@@ -527,13 +475,13 @@ class ID:
         identity.in_hub = str(row.get("in_hub") or "")
         identity.in_hub_pack = str(row.get("in_hub_pack") or "")
         identity.in_pack_slot = list(parse_segments(str(row.get("in_pack_slot") or "")))
-        identity.body_history = list(parse_body_history(str(row.get(BODY_HISTORY_FIELD) or "")))
+        identity.body = parse_body(str(row.get(BODY_FIELD) or ""))
         return identity
 
     def to_row(self) -> dict[str, object]:
-        """折成库里那一行:**七列,一个不多**——`ID_FIELDS` 加正文历史.
+        """折成库里那一行:**七列,一个不多**——`ID_FIELDS` 加正文摘要.
 
-        位置段与摘要链都是库的事实,而 `ID` 的字段里没有正文历史——故那一列由身份
+        位置段与正文摘要都是库的事实,而 `ID` 的字段里没有正文摘要——故那一列由身份
         自己带上,落点(hub,载体,段列表)与它同路.
         位置段按原次序写(不归位),故用的是 :func:`pack_segments_ordered`.
         """
@@ -544,7 +492,7 @@ class ID:
             "in_hub": self.in_hub,
             "in_hub_pack": self.in_hub_pack,
             "in_pack_slot": pack_segments_ordered(_slots_of_spans(self.in_pack_slot)),
-            BODY_HISTORY_FIELD: encode_body_history(self.body_history),
+            BODY_FIELD: self.body,
         }
 
     def __repr__(self) -> str:
@@ -565,7 +513,7 @@ ID_FIELDS: tuple[str, ...] = (
 )
 """`ID` 的**身份与位置**字段名，顺序即声明顺序。
 
-索引库里的列照这份清单逐列搬，**再加正文历史那一列**（:data:`BODY_HISTORY_FIELD`），
+索引库里的列照这份清单逐列搬，**再加正文摘要那一列**（:data:`BODY_FIELD`），
 故一张身份表恰好七列。清单是从 `ID` 上数出来的，不是另抄一份子集，故"某个字段进不去库"
 在代码上不成立。**"哪几格是属性槽"不在这份清单里**：那是槽头的事，载体上写着。
 """
@@ -597,20 +545,17 @@ def _int_or_zero(value: object) -> int:
 
 
 __all__ = [
-    "BODY_HISTORY_FIELD",
-    "EMPTY_HISTORY",
+    "BODY_FIELD",
     "EMPTY_SEGMENTS",
     "ID",
     "ID_FIELDS",
     "SlotSpan",
     "canonical_segments",
     "digest",
-    "encode_body_history",
-    "keep_generations",
     "new_uuid",
     "pack_segments",
     "pack_segments_ordered",
-    "parse_body_history",
+    "parse_body",
     "parse_segments",
     "segments_of",
 ]

@@ -1,11 +1,10 @@
 {
   "$schema": "schema/settings.json",
   "core.log.level": "WARNING",
-  "slot.max.byte.b": 512,
-  "slot.max.byte.kb": 0,
-  "pack.max.byte": 2147483648,
-  "hub.default": "main",
-  "index.max.byte": 67108864,
-  "body.history.depth": 1,
-  "gc.auto.byte": 0
+  "core.storage.slot.max.byte.b": 512,
+  "core.storage.slot.max.byte.kb": 0,
+  "core.storage.pack.max.byte": 2147483648,
+  "core.storage.hub.default": "main",
+  "core.storage.index.max.byte": 67108864,
+  "core.storage.gc.auto.byte": 0
 }

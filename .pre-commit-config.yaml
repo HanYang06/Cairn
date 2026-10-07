@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
 
-# 提交门禁：SPDX 头 -> 书面语 -> 标点 -> 魔法用量 -> ruff -> deptry -> 架构 -> mypy -> 锁文件 -> 测试 -> 前端。
+# 提交门禁：SPDX 头 -> 书面语 -> 标点 -> 魔法用量 -> 配置声明 -> ruff -> deptry -> 架构 -> mypy -> 锁文件 -> 测试 -> 前端。
 # 提交信息另由 commit-msg 钩子校验（Conventional Commits）。
 # 覆盖率门禁与文档站构建留在 CI（见 `.github/workflows/ci.yml`）。
 #
@@ -42,6 +42,17 @@ repos:
         entry: uv run python scripts/magic.py --check
         language: system
         files: ^py_src/.*\.py$
+        pass_filenames: false
+        require_serial: true
+
+      # 配置声明：OnConf 的静态面（键与默认值必须是字面量，否则它的 build / sync / check
+      # 看不见那条声明），外加两份入库产物与声明是否一致。`--strict` 把扫描 warning 计入失败。
+      # 口径与后果见 `docs/architecture/py_core/config.md` §2、§10。
+      - id: onconf-check
+        name: onconf check (配置声明)
+        entry: uv run onconf check --home config --strict
+        language: system
+        files: ^(py_src/|config/(settings|schema/settings)\.json$|tests/core/test_conf)
         pass_filenames: false
         require_serial: true
 

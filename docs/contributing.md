@@ -19,7 +19,7 @@ Cairn 尚在早期。提交前先读「[约定与红线](guides/conventions.md)�
 ## 提交约定
 
 - commit message 用**中文 + Conventional Commits**：`feat(core): …` / `fix(ui): …` / `docs: …`。
-- 提交前执行 `uv run pre-commit run --all-files`（11 个钩子，清单见
+- 提交前执行 `uv run pre-commit run --all-files`（13 个钩子，清单见
   `.agents/skills/rules/references/quality.md` §4）。钩子需先安装一次：
   `uv run pre-commit install --hook-type pre-commit --hook-type commit-msg`。
 - CI（`.github/workflows/ci.yml`）执行同一套门禁，含覆盖率 ≥ 80%。

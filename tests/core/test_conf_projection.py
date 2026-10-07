@@ -8,7 +8,7 @@
 - 读当前这份再跟声明比是自证——引擎在导入时就把缺的键补回去了,声明删掉一个键也看不出来;
 - 从空目录重建再比,才量得到"入库的产物是不是这一版声明的样子".
 
-比对口径:值文件按 `键 → 值` 比,词表按 `properties` 逐条等价(键 / 类型 / 说明 / 默认值).
+比对口径:值文件按 `键 → 值` 比,词表按 `properties` 逐条等价(键 / 说明 / 默认值).
 不比字节——值文件里用户可能手动调过格式与键序,而那正是引擎刻意不动的部分.
 """
 
@@ -20,20 +20,33 @@ import subprocess
 import sys
 from pathlib import Path
 
+from onconf import conf
+
 import core.params  # 导入即声明内核自己那组配置(声明是事实源)
 import core.storage.conf  # noqa: F401
-from core.conf import conf
-from core.storage.conf import body_history_depth, gc_auto_bytes
+from core.storage.conf import gc_auto_bytes
+from core.storage.hub import DEFAULT_SLOT_BYTES
+from core.storage.pack import DEFAULT_MAX_BYTES
 
 #: 入库的两份产物(相对仓根)
 VALUE_FILE = Path("config/settings.json")
 SCHEMA_FILE = Path("config/schema/settings.json")
 
 #: 每一层各取一条做代表:只验一条,是因为"这条读得出来"这件事由引擎统一保证.
-_SAMPLED_KEYS = ("core.log.level", "slot.max.byte.b", "pack.max.byte", "hub.default")
+_SAMPLED_KEYS = (
+    "core.log.level",
+    "core.storage.slot.max.byte.b",
+    "core.storage.pack.max.byte",
+    "core.storage.hub.default",
+)
 
 #: 值文件顶部的指令键:指向词表,不算配置项本身(与引擎的对账口径一致)
 _DIRECTIVE = "$schema"
+
+#: 引擎记"属主进程"用的环境变量(见 `tests/core/test_conf.py` 的同名常量):
+#: 父进程导入过 `core` 就会留下它,子进程继承后会被判成"派生进程"(只读),
+#: 而这里的子进程是全新进程,自己就是属主,故要摘掉.
+_OWNER_ENV = "ONCONF_OWNER_PID"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,6 +64,14 @@ def _properties(schema: dict[str, object]) -> dict[str, object]:
     return properties
 
 
+def _default_of(vocabulary: dict[str, object], key: str) -> object:
+    """词表里某条键的默认值(那条形状不对即断言失败,不静默当成没有)."""
+    spec = _properties(vocabulary)[key]
+    assert isinstance(spec, dict), f"词表里 {key!r} 不是一条配置"
+    entry: dict[str, object] = spec
+    return entry.get("default")
+
+
 def _fresh_projection(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
     """在一个**空目录**里跑一遍内核,交出它生成的值文件与词表.
 
@@ -58,21 +79,21 @@ def _fresh_projection(tmp_path: Path) -> tuple[dict[str, object], dict[str, obje
     要拿"另一份根生成的样子"只能换一个进程.
     """
     code = (
-        "import core, core.storage.conf\n"
-        "from core.conf import conf\n"
-        "print(conf('core.log.level'))\n"
+        "import core, core.storage.conf\nfrom onconf import conf\nprint(conf('core.log.level'))\n"
     )
+    env = {
+        **os.environ,
+        "CAIRN_CONFIG": str(tmp_path),
+        "PYTHONPATH": str(_REPO_ROOT / "py_src"),
+    }
+    env.pop(_OWNER_ENV, None)
     result = subprocess.run(
         [sys.executable, "-c", code],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
-        env={
-            **os.environ,
-            "CAIRN_CONFIG": str(tmp_path),
-            "PYTHONPATH": str(_REPO_ROOT / "py_src"),
-        },
+        env=env,
     )
     assert result.returncode == 0, result.stderr
     values: dict[str, object] = json.loads((tmp_path / "settings.json").read_text("utf-8"))
@@ -113,7 +134,25 @@ def test_shipped_values_are_readable():
         assert type(value) in {int, float, bool, str, list, dict}
 
 
-def test_the_ruling_added_two_policy_keys_to_the_storage_layer():
-    """2026-10-02 裁定新增的两条策略键:正文保留世代数与自动回收阈值,各自读得出开箱值."""
-    assert body_history_depth() == 1
+def test_the_gc_threshold_key_reads_its_shipped_value():
+    """自动回收阈值这一条策略键读得出开箱值(2026-10-02 裁定新增)."""
     assert gc_auto_bytes() == 0
+
+
+def test_the_declared_defaults_match_the_implementation_fallbacks(tmp_path: Path):
+    """声明处写死的默认值与实现层的构造退路同值.
+
+    声明处必须是字面量(OnConf 的静态面认不出常量名),故格长与封口线这两个数在声明处与
+    实现层各写一份."各写一份"要成立就得有人看着:这条用例比对**空目录里新生成的那份词表**
+    与 `hub` / `pack` 的常量,改了一边而另一边留在原地即失败.
+    """
+    _values, generated = _fresh_projection(tmp_path)
+
+    assert _default_of(generated, "core.storage.slot.max.byte.b") == DEFAULT_SLOT_BYTES
+    assert _default_of(generated, "core.storage.pack.max.byte") == DEFAULT_MAX_BYTES
+
+
+def test_the_body_history_key_is_gone():
+    """**"存储不保世代"**(2026-10-06 裁定):正文世代数那一键与它的声明都不在了."""
+    assert "body.history.depth" not in _load(VALUE_FILE)
+    assert "body.history.depth" not in _properties(_load(SCHEMA_FILE))

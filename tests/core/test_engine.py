@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""引擎的契约:一个块占属性槽与正文槽,只写动过的域,按摘要关联正文,正文摘要链,删除.
+"""引擎的契约:一个块占属性槽与正文槽,只写动过的域,按摘要关联正文,正文摘要,删除.
 
 本文件钉七件事(每一条都是 2026-10-02 裁定定下的口径):
 
 - **一个块占两类槽**:属性槽装全部属性,**可原地覆盖**;正文槽装正文分片,**只追加**;
   而**哪一格是属性,哪一格是正文靠槽头种类分辨**(库里没有那一列);
-- **坐标系的分辨**:槽号只在 pack 内有意义,故正文关联走摘要(`body_history`);
+- **坐标系的分辨**:槽号只在 pack 内有意义,故正文关联走摘要(`body` 那一列);
 - **两个运行时状态**:`_body_hash` 与 `_inline_body`(载入时由库行与槽头推出来);
 - **只写它动过的域**:属性变了原地覆盖同一格,正文变了才追加新槽;
 - **正文两条路**:未命中即写 body 槽加一条位置行,命中即本块只占属性槽(引用型);
@@ -239,7 +239,7 @@ def test_an_inline_body_is_stamped_on_save(engine: Engine):  # noqa: ARG001 — 
 
     assert note.body_is_ref is False
     assert note.body_hash == content_digest(note)
-    assert note.id.body_history == [note.body_hash], "摘要链最新那一代就是当前这份"
+    assert note.id.body == note.body_hash, "库里那一列就是当前这份的摘要"
 
 
 def test_loading_stamps_the_same_states(engine: Engine):
@@ -251,13 +251,13 @@ def test_loading_stamps_the_same_states(engine: Engine):
     restored = NoteData.fetch(identity)
 
     assert restored.body_is_ref is False
-    assert restored.body_hash == identity.body_history[0]
+    assert restored.body_hash == identity.body
 
 
 def test_loading_a_referring_block_stamps_the_reference_credential(engine: Engine):
     """引用型载入之后:`_inline_body` 为真,`_body_hash` 是**关联凭证**.
 
-    凭证就是库里那一行摘要链的最新一代,故它一定等于 `id.body_history[0]`.
+    凭证就是库里那一行那一列的摘要,故它一定等于 `id.body`.
     """
     owner = _note()
     owner.save()
@@ -272,7 +272,7 @@ def test_loading_a_referring_block_stamps_the_reference_credential(engine: Engin
     restored = NoteData.fetch(identity)
 
     assert restored.body_is_ref is True
-    assert restored.body_hash == identity.body_history[0]
+    assert restored.body_hash == identity.body
     assert restored.lines == ["第一行", "第二行"], "引用型照样读得回正文"
 
 
@@ -360,41 +360,25 @@ def test_saving_an_unchanged_block_writes_nothing_new(engine: Engine):
     assert NoteData.fetch(identity).lines == ["第一行", "第二行"], "读回走第二跳，值不变"
 
 
-def test_the_history_keeps_the_current_generation_by_default(engine: Engine):
-    """保留世代数取配置(开箱 1):只留当前那一代,故摘要链只有一条."""
+def test_the_row_keeps_only_the_current_body(engine: Engine):
+    """**改正文即换掉那一列**:库里只留当前一份的摘要,没有世代可留.
+
+    故"上一份正文去哪了"这一问在存储里没有答案——要留历史由上层自己留引用.
+    """
     note = _note()
     note.save()
     identity = note.id
+    first = identity.body
 
     bind(None)
     bind(engine)
     note.lines = ["一"]
     note.save()
 
-    assert len(identity.body_history) == 1, "深度为 1 时只有当前那一代"
+    assert identity.body != first, "那一列换成了新那份的摘要"
+    assert identity.body == note.body_hash
+    assert "body_history" not in identity.to_row(), "库里没有留世代的列"
     assert NoteData.fetch(identity).lines == ["一"]
-
-
-def test_the_history_keeps_the_last_self_held_generation(
-    engine: Engine, monkeypatch: pytest.MonkeyPatch
-):
-    """**自带型换正文时,换代那一刻自己那一代的摘要进链**(保留两代时才留得住).
-
-    引用型那一代不进链:它本来就在链里(关联凭证就是它).
-    """
-    monkeypatch.setattr("core.storage.conf.body_history_depth", lambda: 2)
-    note = _note()
-    note.save()
-    identity = note.id
-    first = identity.body_history[0]
-
-    bind(None)
-    bind(engine)
-    note.lines = ["改过的第二行"]
-    note.save()
-
-    assert identity.body_history[0] != first, "当代换成了新那份的摘要"
-    assert identity.body_history == [identity.body_history[0], first], "旧那一代在链尾"
 
 
 # ---- 正文关联走摘要:自带与引用两条路 ----
@@ -420,7 +404,7 @@ def test_the_same_body_is_written_once(engine: Engine):
 
     assert len(bodies) == 1, "同内容只写一份正文"
     assert second.body_is_ref is True, "第二个块是引用型：它自己没有正文槽"
-    assert second.id.body_history == [first.id.body_history[0]], "关联凭证就是那一份的摘要"
+    assert second.id.body == first.id.body, "关联凭证就是那一份的摘要"
     assert _body_slots(engine, second.id) == [], "本块没多写一格正文"
     assert _kind_counts(engine)[BODY_SLOT] == 1, "全库仍只有第一份那一格"
     assert len(second.id.in_pack_slot) == 1, "位置段只覆盖本块自己的属性槽"
@@ -447,7 +431,7 @@ def test_a_referring_block_reads_the_body_from_the_other_pack(engine: Engine):
     bind(engine)
     restored = NoteData.fetch(second.id)
     assert restored.lines == ["第一行", "第二行"]
-    assert restored.body_hash == second.id.body_history[0]
+    assert restored.body_hash == second.id.body
     assert first_pack, "第一份正文仍在自己那一份载体上（没有复制到别的 hub）"
 
 
@@ -492,18 +476,20 @@ def test_two_blocks_sharing_content_differ_in_identity(engine: Engine):
     assert content_digest(first) == content_digest(second)
 
 
-def test_the_history_carries_digests_not_slots(engine: Engine):  # noqa: ARG001 — 夹具的副作用是接上引擎
-    """摘要链里**只有摘要**:一条一个十六进制串,没有槽段.
+def test_the_body_column_carries_a_digest_not_slots(
+    engine: Engine,  # noqa: ARG001 — 夹具的副作用是接上引擎
+):
+    """那一列里**只有摘要**:一个十六进制串,没有槽段.
 
     槽号只在 pack 内有意义,而关联的那份正文可能在别的 pack,别的 hub.
     """
     note = _note()
     note.save()
 
-    chain = note.id.body_history
-    assert len(chain) == 1
-    assert "0-1" not in chain[0], "它不是段列表"
-    assert all(part in "0123456789abcdef" for part in chain[0]), "是十六进制摘要"
+    written = note.id.body
+    assert written
+    assert "0-1" not in written, "它不是段列表"
+    assert all(part in "0123456789abcdef" for part in written), "是十六进制摘要"
 
 
 def test_a_bare_assignment_is_not_deduplicated(engine: Engine):
@@ -663,7 +649,7 @@ def test_deleting_a_block_leaves_the_body_position_row(engine: Engine):
 
     assert engine.index.get("bodyindex", str(rows[0]["value_uuid"])) is not None
     assert engine._row_of(identity) is None, "块的行已摘"
-    assert engine.index_engine.search(BodyIndex, CONTENT_FIELD, identity.body_history[0]), (
+    assert engine.index_engine.search(BodyIndex, CONTENT_FIELD, identity.body), (
         "位置行仍在，故「这份正文在哪」这一问还答得出"
     )
 

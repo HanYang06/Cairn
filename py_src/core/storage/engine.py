@@ -18,7 +18,7 @@
 **一个块占属性槽与正文槽**:
 
 - **属性槽**:一个块的全部属性,装不下即占多格;**可原地覆盖**,不进历史;
-- **正文槽**:正文分片,按正文自身的**逻辑顺序**切分;**只追加**,有历史;
+- **正文槽**:正文分片,按正文自身的**逻辑顺序**切分;**只追加**,写过一格就不再原地改;
 - **位置段**:覆盖该块自身占用的全部槽,写进索引库那一行,改一次写一次.
   属性槽排在低位,正文槽排在高位(写入时的次序),而**哪一格是属性,哪一格是正文
   靠槽头种类分辨**(`pack.ATTR_SLOT` / `pack.BODY_SLOT`)——载体上每一格本来就写着.
@@ -26,10 +26,13 @@
 **坐标系的分辨**(2026-10-02 修正裁定):**槽号只在 pack 内有意义**,故越 pack(甚至越 hub)
 的关联只能用摘要,不能用槽号.由此得到两条口径:
 
-- **正文关联走摘要**:`body_history` 是**摘要链**,一个世代一条,最新那一代就是当前用的
-  那份正文的摘要;跨 pack,跨 hub 都成立;
+- **正文关联走摘要**:库里那一列是**当前正文的摘要**(一个,不是一串);跨 pack,跨 hub
+  都成立;
 - **正文的位置不挂在块身上**:一份正文的位置(hub 名 + 载体名 + 段列表)记在 `BodyIndex`
   的**位置行**里——那一块被删了,还在引用这份正文的块不该跟着断.
+
+**存储不做版本,不做历史,不做安全**(2026-10-06 裁定):它只做"记录与修改"——
+写进来就落,让改就改,让删就删;世代,回滚,崩溃恢复与影子格由上层自行解决.
 
 **块的正文有两种形态**,由两个运行时状态分辨(:attr:`Block._body_hash` /
 :attr:`Block._inline_body`,`_` 前缀,不落成列,也不落成额外的槽):
@@ -44,16 +47,16 @@
 不是调用方声明的.
 
 **去重只针对 `Body` 的内容**:写入前按正文摘要查 `BodyIndex` 的位置行,命中即**本块不写
-body 槽**(只占属性槽),正文关联记进摘要链;`Attr`,裸赋值与资产类二进制(如视频)不去重.
+body 槽**(只占属性槽),正文关联记进库里那一列;`Attr`,裸赋值与资产类二进制(如视频)不去重.
 
 **删除 = 摘掉索引库那一行**:载体上不留任何标记(槽上不记归属),字节由回收收敛.
-**正文索引的位置行与正文槽留着**——"还有没有 `body_history` 引用它"由回收判活.
+**正文索引的位置行与正文槽留着**——"还有没有行里的 `body` 指着它"由回收判活.
 
 **读路径没有顺扫回退**:库里没有那一行即显式报错——索引库是权威视角,载体上一个字节的
 身份都没有,扫也扫不回来.
 
-**策略参数向配置面要值**(`storage/conf.py`):默认 hub,格长,封口线,索引块上限,
-正文历史深度,自动回收阈值都在那里声明;构造时不给就用当前配置值.
+**策略参数向配置面要值**(`storage/conf.py`):默认 hub,格长,封口线,索引块上限
+与自动回收阈值都在那里声明;构造时不给就用当前配置值.
 """
 
 from __future__ import annotations
@@ -81,9 +84,8 @@ from .db.id import (
     SlotSpan,
     canonical_segments,
     digest,
-    keep_generations,
     pack_segments,
-    parse_body_history,
+    parse_body,
     parse_segments,
 )
 from .db.payload import (
@@ -153,10 +155,10 @@ class Engine:
 
     Args:
         root: 库根(vault 目录).
-        default_hub: 不点名时写进哪个 hub;不给即取配置面的 `hub.default`.
+        default_hub: 不点名时写进哪个 hub;不给即取配置面的 `core.storage.hub.default`.
         slot_bytes: **新建**载体时的格长;不给即取配置面两档之和.
             读已有载体一律看它自己的文件头,与这个数无关.
-        max_bytes: 封口线;不给即取配置面的 `pack.max.byte`.它只管"什么时候换文件".
+        max_bytes: 封口线;不给即取配置面的 `core.storage.pack.max.byte`.它只管"什么时候换文件".
         bus: 事件总线;不给即不发事件(写路径不依赖有没有人在听).
     """
 
@@ -277,12 +279,12 @@ class Engine:
         **正文两条路**(2026-10-02 修正裁定):
 
         - **未命中**(盘上还没有同摘要的位置):写 body 槽 + 写一条"摘要 → 位置"的索引行
-          + 在摘要链前插该摘要;
-        - **命中**(已有同摘要的位置):**不写 body 槽**,本块只占属性槽,摘要链前插该摘要
+          + 把库里那一列改成该摘要;
+        - **命中**(已有同摘要的位置):**不写 body 槽**,本块只占属性槽,那一列改成该摘要
           ——即引用型,正文的位置由那一行索引给出.
 
-        写序是定死的:**新槽先落定,位置段与摘要链后写**.故新槽落稳之前,旧世代仍然
-        被库里那一行指着.
+        写序是定死的:**新槽先落定,位置段与那一列摘要后写**.故新槽落稳之前,库里那一行
+        仍然指着上一份正文——**上一份要不要留由上层自己留引用**,存储不替它保世代.
 
         Raises:
             SlotTooLargeError: 属性编出来超过一格能装的字节数.
@@ -295,13 +297,10 @@ class Engine:
         attrs = _attrs_of(block, fields)
         chunks = _split(encode_attrs(attrs), self.content_room)
         # **槽序以这一趟的落点为准**:属性槽在前,正文槽在后.旧行那一份位置段只用来
-        # 取"上一代的槽",而它是哪一类要**读槽头**才分得清(库里没有那一列).
+        # 取"旧那一行记的槽",而它是哪一类要**读槽头**才分得清(库里没有那一列).
         old_attr = _attr_slots_of(self, row)
-        old_body = _body_slots_of(self, row)
         body = _body_of(block, fields)
         body_hash = content_digest_of_body(body) if body else ""
-        # **上一代是自带的才有得记**:引用型那一代的正文不在本块,它的摘要本来就在链里.
-        history = _prepend_digest(identity.body_history, block.body_hash if old_body else "")
         attr_slots = self._write_attrs(hub_name, chunks, row, old_attr)
         entries: dict[str, SlotPlacement] = self._index_entries(block, hub_name, attrs, attr_slots)
         body_slots: tuple[int, ...] = ()
@@ -328,9 +327,8 @@ class Engine:
                 pack=body_pack,
                 slots=_slots_of(segments),
             )
-            history = _prepend_digest(history, body_hash)
+            identity.body = body_hash
         self._place(identity, hub_name, attr_slots, body_slots)
-        identity.body_history = _trim(history, depth=_history_depth())
         block.stamp_body(body_hash, inline=not body_slots)
         self._index_block(block, identity, entries)
         self._register(block, identity)
@@ -493,7 +491,7 @@ class Engine:
     def _active_index(self, owner: type[Any], hub_name: str) -> ID | None:
         """挑一个**还有地方**的索引块:最后写的那一块没到上限就用它,否则 ``None``(续一块).
 
-        上限取配置 `index.max.byte`(块自己用 `max_bytes` 覆盖它).
+        上限取配置 `core.storage.index.max.byte`(块自己用 `max_bytes` 覆盖它).
 
         **挑的是"最新那一块"**:索引块按写入次序一个接一个续,故最近登记的那个就是活跃的.
         续块的场合由调用方另签一个身份(`owner()`),它随即成为新的一行.
@@ -525,7 +523,7 @@ class Engine:
     def _register(self, block: Block, identity: ID) -> None:
         """把这个身份写进它那张表:**用了 ID 就有表,有了表就有一行**.
 
-        库里那一行的列由 `columns_of()` 现算:身份字段,位置段,再加正文历史那一列.
+        库里那一行的列由 `columns_of()` 现算:身份字段,位置段,再加正文摘要那一列.
         """
         table = block.type_name
         index = self.index
@@ -544,7 +542,7 @@ class Engine:
 
         位置段只收**这个块自己的槽**:属性槽在前,正文槽在后.
         **引用别处的正文时,那几格不进这里**——它们属于别的 pack,而位置段的槽号
-        只对这一份载体成立(2026-10-02 修正裁定).故正文关联记在摘要链里.
+        只对这一份载体成立(2026-10-02 修正裁定).故正文关联记在那一列摘要里.
 
         **索引块里那条正表行占的槽不进这里**——它属于索引块,而"索引块自己搁哪儿"
         写在它自己那张索引表里(`_register_index`).混进来会把位置段搅乱,而且不报错.
@@ -610,7 +608,7 @@ class Engine:
         这一层过滤不靠顺扫,靠库里那几行在不在.
 
         **正文索引的行不带块的凭证**(它答的是"这份正文在哪",不是"哪个块提过它"),
-        故它不参与这一层过滤——那份正文还在不在,由摘要链与 `gc` 判活.
+        故它不参与这一层过滤——那份正文还在不在,由库里那一列的摘要与 `gc` 判活.
         """
         alive = self._alive_uuids()
         seen: set[tuple[str, str, str]] = set()
@@ -649,7 +647,7 @@ class Engine:
     def identity_rows(self) -> Iterator[tuple[str, dict[str, object]]]:
         """逐张身份表逐行交出来:**库自用的那两张不在其中**.
 
-        它是"库里那些行"的公开读口(索引引擎要按摘要链现算"谁在用它");
+        它是"库里那些行"的公开读口(索引引擎要按那一列的正文摘要现算"谁在用它");
         **读侧的一切定位仍走那一行给出的段列表**,这一问只服务反表与判活.
         """
         yield from self._identity_rows()
@@ -693,7 +691,7 @@ class Engine:
         return self._read_slots(self._locate(identity))
 
     def index_row(self, identity: ID) -> dict[str, object]:
-        """按身份取库里那一行(身份,位置段,正文历史都在里面).
+        """按身份取库里那一行(身份,位置段,正文摘要都在里面).
 
         Raises:
             ObjectNotFoundError: 库里没有这一行.
@@ -739,8 +737,8 @@ class Engine:
     def load(self, identity: ID, owner: type[Block] | None = None) -> Block:
         """按身份读回一个块:**读属性槽与正文槽,解码,组织成对象交还**.
 
-        **正文那两跳**(2026-10-02 修正裁定):先由库里那一行取摘要链,最新那一代
-        即当前用的那份正文的摘要;再看**本块位置段里有没有 body 槽**(槽头判种类)——
+        **正文那两跳**(2026-10-02 修正裁定):先由库里那一行取**当前正文的摘要**;
+        再看**本块位置段里有没有 body 槽**(槽头判种类)——
 
         - **有**(自带):读本块的 body 槽;
         - **没有**(引用型):拿摘要查正文索引的位置行,按它给出的 hub / 载体 / 段列表
@@ -782,7 +780,7 @@ class Engine:
         """读出正文:返回(正文值,正文摘要,是否引用型).
 
         **自带那一路**:位置段里那几格 body 槽就是这份正文,摘要当场算.
-        **引用那一路**:位置段里没有 body 槽,故拿库里那一行摘要链的最新一代去
+        **引用那一路**:位置段里没有 body 槽,故拿库里那一行那一列的摘要去
         `BodyIndex` 的位置行上查——位置行给出 hub 名,载体名与段列表.
 
         Raises:
@@ -791,7 +789,7 @@ class Engine:
         slots = [slot for slot in held if slot.kind == BODY_SLOT]
         if slots:
             return _decode_body([slot.content for slot in slots]), _digest_of_slots(slots), False
-        digest_value = _current_digest(row)
+        digest_value = _body_of_row(row)
         if not digest_value:
             return [], "", True
         placement = self._lookup_body(digest_value)
@@ -915,37 +913,6 @@ def _attr_slots_of(engine: Engine, row: Mapping[str, object] | None) -> tuple[in
     return tuple(found)
 
 
-def _body_slots_of(engine: Engine, row: Mapping[str, object] | None) -> tuple[int, ...]:
-    """**本块自己那几格正文槽**;引用型(正文本在别处)即空序列.
-
-    两条路都要看:位置段里有没有 body 槽(自带),以及摘要链的最新一代在正文索引里
-    指向哪儿(引用型).故它读一次载体,查一次索引——写路径要靠它判"上一代那份正文
-    我要不要带着它".
-    """
-    if row is None:
-        return ()
-    hub_name = _hub_of(row)
-    pack_name = _pack_of(row)
-    if not hub_name or not pack_name:
-        return ()
-    try:
-        pack = engine._open_pack(hub_name, pack_name)  # noqa: SLF001 — 同一层的私有读口
-    except HubNotFoundError:
-        return ()
-    found: list[int] = []
-    for slot in _slots_of_place(dict(row)):
-        with suppress(SlotError, HubShapeError):
-            if pack.read(slot).kind == BODY_SLOT:
-                found.append(slot)
-    if found:
-        return tuple(found)
-    digest_value = _current_digest(row)
-    if not digest_value:
-        return ()
-    placement = engine._lookup_body(digest_value)  # noqa: SLF001 — 同一层的私有读口
-    return () if placement is None else placement.slots
-
-
 def _hub_of(row: Mapping[str, object] | None) -> str:
     """库里那一行的 hub 名."""
     return "" if row is None else str(row.get("in_hub") or "")
@@ -956,12 +923,9 @@ def _pack_of(row: Mapping[str, object] | None) -> str:
     return "" if row is None else str(row.get("in_hub_pack") or "")
 
 
-def _current_digest(row: Mapping[str, object] | None) -> str:
-    """库里那一行的**当前正文摘要**:摘要链的最新一代;没有正文时空串."""
-    if row is None:
-        return ""
-    chain = parse_body_history(str(row.get("body_history") or ""))
-    return chain[0] if chain else ""
+def _body_of_row(row: Mapping[str, object] | None) -> str:
+    """库里那一行的**当前正文摘要**;没有正文时空串."""
+    return "" if row is None else parse_body(str(row.get("body") or ""))
 
 
 def _segments_of_place(row: Mapping[str, object] | None) -> tuple[SlotSpan, ...]:
@@ -1003,39 +967,8 @@ def _first_pack(hub_name: str, root: Path) -> str:
     return names[0] if names else ""
 
 
-def _prepend_digest(history: list[str], digest_value: str) -> list[str]:
-    """把这一代摘要**前插**进摘要链(最新那一代在前).
-
-    两个"不动它"的场合:这一代散文与最新那一代相同(同一份正文再存一次,
-    不产生新世代);以及还没有正文(空串不是世代).
-    """
-    chain = list(history)
-    if not digest_value or (chain and chain[0] == digest_value):
-        return chain
-    return [digest_value, *chain]
-
-
-def _trim(history: list[str], *, depth: int) -> list[str]:
-    """按保留世代数截取摘要链:**留下最近的那几代**.
-
-    世代数由配置 `body.history.depth` 给,不得写成常数.保留范围之内的世代都算活口,
-    超出的最老世代可被回收(回收按摘要查位置行判它还在不在).
-    """
-    kept = keep_generations(history, depth=depth)
-    unique: list[str] = []
-    for digest_value in kept:
-        if digest_value and digest_value not in unique:
-            unique.append(digest_value)
-    return unique
-
-
-def _history_depth() -> int:
-    """当前正文保留的世代数(配置面给)."""
-    return storage_conf.body_history_depth()
-
-
 def _identity_from_row(identity: ID, row: Mapping[str, object]) -> ID:
-    """由库里那一行还原块身份:**位置段与摘要链也一并回填**."""
+    """由库里那一行还原块身份:**位置段与正文摘要也一并回填**."""
     restored = ID(
         identity.name,
         value_uuid=identity.value_uuid,
@@ -1044,7 +977,7 @@ def _identity_from_row(identity: ID, row: Mapping[str, object]) -> ID:
     restored.in_hub = _hub_of(row)
     restored.in_hub_pack = _pack_of(row)
     restored.in_pack_slot = list(_segments_of_place(row))
-    restored.body_history = list(parse_body_history(str(row.get("body_history") or "")))
+    restored.body = parse_body(str(row.get("body") or ""))
     return restored
 
 
@@ -1221,7 +1154,7 @@ class Block:
     """
 
     max_bytes: ClassVar[int] = 0
-    """这个块的**体积上限**（字节）；`0` 即用配置面的默认（`index.max.byte`）。
+    """这个块的**体积上限**（字节）；`0` 即用配置面的默认（`core.storage.index.max.byte`）。
 
     它只管"什么时候该续下一个块"——引擎按它决定续块（索引块就靠这一条自动一块接一块）。
     **它是配置性的参数，不是写死的格式常量**：故声明在这里的是"这个类型要比默认更宽

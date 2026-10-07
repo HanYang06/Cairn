@@ -93,7 +93,7 @@ def test_tables_lists_the_identity_tables(api: Api):
 
 
 def test_rows_gives_the_place_of_each_identity(api: Api):
-    """一行身份就是"这个身份在哪儿,它的正文是哪一份,经过哪几代":位置段按**段列表**交出来."""
+    """一行身份就是"这个身份在哪儿,它的正文是哪一份":位置段按**段列表**交出来."""
     memo = _stored()
 
     listed = api.call("rows", {"table": "memo"})
@@ -108,7 +108,8 @@ def test_rows_gives_the_place_of_each_identity(api: Api):
     assert row["pack"], "载体名是随机串，但不该为空"
     assert row["segments"], "位置段是段列表的文本写法"
     assert row["slots"], "另给一份展开之后的槽号"
-    assert json.loads(str(row["history"])) == memo.id.body_history, "摘要链原样交出来"
+    assert row["body"] == memo.id.body, "正文摘要原样交出来"
+    assert "history" not in row, "旧的那一栏已换成 body"
     assert "attr_slots" not in row, "哪几格是属性槽由槽头回答，库里不再有那一列"
     assert "hash" not in row, "摘要形态已移出身份"
 

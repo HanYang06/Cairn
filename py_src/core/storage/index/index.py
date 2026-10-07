@@ -30,7 +30,7 @@
 
 - :meth:`IndexEngine.search`:按(列,值)翻出块的**行**;
 - :meth:`IndexEngine.count`:数一数某个值被几行指着(属性那一路靠它);
-- :meth:`IndexEngine.holders`:**谁在要这份正文**——扫各块的摘要链现算;
+- :meth:`IndexEngine.holders`:**谁在要这份正文**——扫各块那一列的摘要现算;
 - :meth:`IndexEngine.field_names`:这类索引里有哪些列可查.
 """
 
@@ -39,7 +39,6 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
-from ..db.id import parse_body_history
 from ..db.payload import COLUMN_KEY
 from ..db.payload import index_text as _text_of
 
@@ -102,11 +101,11 @@ class IndexEngine:
         return len(self.search(owner, field, value))
 
     def holders(self, value: object) -> tuple[dict[str, object], ...]:
-        """**谁在要这份正文**:摘要被哪些块的摘要链指着,交出那些块的行.
+        """**谁在要这份正文**:摘要被哪些块那一列指着,交出那些块的行.
 
         **现算,不落盘**:位置行只答"这份正文在哪"(位置不挂在某个块身上——那一块
-        被删了,还在引用它的块就断了),故"还有几个人在用它"只能扫各块的 `body_history`
-        现算.每条行里都有 `value_uuid`,顺着它就能把那个块取回来.
+        被删了,还在引用它的块就断了),故"还有几个人在用它"只能扫各块那一列现算.
+        每条行里都有 `value_uuid`,顺着它就能把那个块取回来.
 
         Args:
             value: 正文摘要(原样;文本化由本方法做,与写侧同一口径).
@@ -114,8 +113,8 @@ class IndexEngine:
         wanted = _text_of(value)
         found: list[dict[str, object]] = []
         for _table, row in self._engine.identity_rows():
-            chain = tuple(parse_body_history(str(row.get("body_history") or "")))
-            if not chain or _text_of(chain[0]) != wanted:
+            digest_value = str(row.get("body") or "")
+            if not digest_value or _text_of(digest_value) != wanted:
                 continue
             found.append(row)
         return tuple(found)

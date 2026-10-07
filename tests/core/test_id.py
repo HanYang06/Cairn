@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 HanYang06
 # SPDX-License-Identifier: Apache-2.0
-"""ID 契约:名字与凭证,局部可变,**段列表**,正文摘要链,库里那一行.
+"""ID 契约:名字与凭证,局部可变,**段列表**,正文摘要,库里那一行.
 
 本文件钉六件事:
 
@@ -8,9 +8,8 @@
 - **可变是局部的**:`value_uuid` / `birth_time` / `name` 创建即锁死,位置段可改;
 - **名字由持有者推出**:`ID(self)` 是最省事的写法,且**只记名字,不持有对象**;
 - **段列表的规范形四条**:升序,不重叠,相邻合并,段数最少;
-- **编码与解析各只有一套**:位置段的 `pack_segments` / `parse_segments`,
-  正文摘要链的 `encode_body_history` / `parse_body_history`;
-- **库里的行恰好七列**:身份字段加正文摘要链一列,**没有"哪几格是属性槽"那一列**.
+- **正文只有当前一份**:库里那一列是一个摘要,**不是链**,也没有世代;
+- **库里的行恰好七列**:身份字段加正文摘要一列,**没有"哪几格是属性槽"那一列**.
 """
 
 from __future__ import annotations
@@ -24,17 +23,15 @@ import pytest
 from core.exc import InvalidIdError
 from core.storage.db.engine import columns_of
 from core.storage.db.id import (
-    BODY_HISTORY_FIELD,
+    BODY_FIELD,
     ID,
     ID_FIELDS,
     SlotSpan,
     canonical_segments,
     digest,
-    encode_body_history,
-    keep_generations,
     new_uuid,
     pack_segments,
-    parse_body_history,
+    parse_body,
     parse_segments,
     segments_of,
 )
@@ -182,17 +179,17 @@ def test_placing_in_groups_keeps_the_groups_apart():
     assert identity.slots == (5, 6, 9)
 
 
-def test_clearing_the_place_also_drops_the_history():
-    """删除之后位置段与摘要链都不该再指着已失效的坐标."""
+def test_clearing_the_place_also_drops_the_body():
+    """删除之后位置段与正文摘要都不该再指着已失效的坐标."""
     identity = ID()
     identity.place([1], hub="main", pack="abc")
-    identity.body_history = ["aaaa"]
+    identity.body = digest(b"cairn")
 
     identity.clear_place()
 
     assert not identity.located
     assert identity.in_pack_slot == []
-    assert identity.body_history == []
+    assert identity.body == ""
 
 
 # ---- 段列表:规范形四条 ----
@@ -264,68 +261,42 @@ def test_parsing_rejects_a_broken_text():
         parse_segments("9-2")
 
 
-# ---- 正文摘要链 ---- #
+# ---- 正文摘要:一个,不是一串 ---- #
 
 
-def test_the_history_round_trips_newest_first():
-    """摘要链编出来再解回去,世代次序是**新到旧**,条数一条不多."""
-    chain = ["aa", "bb", "cc"]
+def test_the_body_column_round_trips():
+    """那一列就是一个摘要:写下去再读回来,一字不差."""
+    written = digest(b"cairn")
 
-    assert parse_body_history(encode_body_history(chain)) == ("aa", "bb", "cc")
-
-
-def test_an_empty_history_is_an_empty_text():
-    """还没有正文即空串;空串读回空链."""
-    assert encode_body_history([]) == ""
-    assert parse_body_history("") == ()
+    assert parse_body(written) == written
+    assert parse_body(f"  {written}  ") == written, "两端空白不算内容"
 
 
-def test_the_history_carries_digests_not_slots():
-    """**摘要链里没有槽号**:一条摘要是一个十六进制串,而槽号只在 pack 内有意义.
+def test_no_body_is_an_empty_text():
+    """还没有正文即空串;空串读回空串,而新签发的 ID 就是这一头."""
+    assert ID().body == ""
+    assert parse_body("") == ""
 
-    越 pack(甚至越 hub)的关联只能用摘要——这正是这一列改口径的理由.
+
+def test_the_body_column_carries_a_digest_not_slots():
+    """**那一列里没有槽号**:摘要是一个十六进制串,而槽号只在 pack 内有意义.
+
+    越 pack(甚至越 hub)的关联只能用摘要——这正是这一列是摘要而不是槽段的原因.
     """
-    written = encode_body_history([digest(b"cairn")])
+    identity = ID(Notedata, value_uuid="u")
+    identity.body = digest(b"cairn")
 
-    assert digest(b"cairn") in written
+    written = str(identity.to_row()[BODY_FIELD])
+
+    assert written == digest(b"cairn")
     assert "0-1" not in written, "它不是段列表"
 
 
-def test_history_parsing_rejects_broken_text():
-    """解不成数组即报错,不静默当成"没有正文";条目形态不对同样报错."""
-    with pytest.raises(InvalidIdError):
-        parse_body_history("not json at all")
-    with pytest.raises(InvalidIdError):
-        parse_body_history('{"a": 1}')
-    with pytest.raises(InvalidIdError):
-        parse_body_history('[""]')
-    with pytest.raises(InvalidIdError):
-        parse_body_history("[7]")
-
-
-def test_encoding_refuses_an_empty_digest():
-    """空串不是一条世代:写进去就会让"当前正文是哪一份"这一问答不出东西来."""
-    with pytest.raises(InvalidIdError, match="非空文本"):
-        encode_body_history([""])
-
-
-def test_keep_generations_trims_to_the_depth():
-    """保留世代数数的是**总共几代**(最新那一代就是当前用的),故深度 1 只留一条."""
-    chain = ["一", "二", "三", "四"]
-
-    assert keep_generations(chain, depth=2) == ("一", "二")
-    assert keep_generations(chain, depth=1) == ("一",), "只留当前那一代"
-    assert keep_generations(chain, depth=0) == ()
-    assert keep_generations(chain, depth=99) == ("一", "二", "三", "四")
-
-
-def test_the_current_generation_is_the_newest_digest():
-    """**最新那一代就是当前用的那份正文的摘要**;没有正文时空串."""
-    identity = ID()
-    identity.body_history = ["新", "旧"]
-
-    assert identity.current_generation == "新"
-    assert ID().current_generation == ""
+def test_body_parsing_rejects_broken_text():
+    """形态不对即报错,不静默当成"没有正文":这一列只由 `digest` 写出."""
+    for broken in ("not a digest", "[7]", "0", "z" * 64, digest(b"cairn").upper()):
+        with pytest.raises(InvalidIdError):
+            parse_body(broken)
 
 
 # ---- 库里那一行 ---- #
@@ -345,7 +316,7 @@ def test_the_identity_field_list_is_the_id_itself():
 
 
 def test_the_table_has_exactly_seven_columns():
-    """**身份表恰好七列**:身份字段加正文摘要链一列,一个不多.
+    """**身份表恰好七列**:身份字段加正文摘要一列,一个不多.
 
     没有 `attr_in_pack_slot`:那一列错在"用 pack 内坐标表达跨 pack 的事"——
     属性槽与正文槽靠槽头种类分辨,载体上每一格本来就写着.
@@ -357,26 +328,26 @@ def test_the_table_has_exactly_seven_columns():
         "in_hub",
         "in_hub_pack",
         "in_pack_slot",
-        BODY_HISTORY_FIELD,
+        BODY_FIELD,
     )
     assert len(columns_of()) == 7
     assert "attr_in_pack_slot" not in columns_of()
 
 
 def test_the_field_list_matches_the_slots():
-    """清单与 `__slots__` 一一对应,只多出库里那一列摘要链(它不是身份字段)."""
+    """清单与 `__slots__` 一一对应,只多出库里那一列正文摘要(它不是身份字段)."""
     slots = {name.lstrip("_") for name in ID.__slots__}
-    extra = {BODY_HISTORY_FIELD}
+    extra = {BODY_FIELD}
 
     assert slots - extra == set(ID_FIELDS)
     assert extra - slots == set()
 
 
 def test_a_row_round_trips():
-    """写下去,读回来:身份,位置段与摘要链一字不差."""
+    """写下去,读回来:身份,位置段与正文摘要一字不差."""
     identity = ID(Notedata, value_uuid="u", birth_time=7)
     identity.place([1, 4, (5, 6), 20], hub="main", pack="p")
-    identity.body_history = ["aa", "bb"]
+    identity.body = digest(b"cairn")
 
     restored = ID.from_row(identity.to_row())
 
@@ -386,8 +357,7 @@ def test_a_row_round_trips():
     assert restored.in_hub == "main"
     assert restored.in_hub_pack == "p"
     assert restored.in_pack_slot == [1, (4, 6), 20], "4、5、6 相邻，按次序归成一段"
-    assert restored.body_history == ["aa", "bb"]
-    assert restored.current_generation == "aa"
+    assert restored.body == digest(b"cairn")
 
 
 def test_a_row_missing_a_credential_is_refused():
@@ -399,7 +369,7 @@ def test_a_row_missing_a_credential_is_refused():
 
 
 def test_a_row_without_a_place_reads_as_unplaced():
-    """只有凭证的行读成"还没落点",位置段与摘要链都是空的."""
+    """只有凭证的行读成"还没落点",位置段与正文摘要都是空的."""
     restored = ID.from_row({"value_uuid": "u"})
 
     assert restored.value_uuid == "u"
@@ -407,13 +377,19 @@ def test_a_row_without_a_place_reads_as_unplaced():
     assert restored.birth_time == 0
     assert not restored.located
     assert restored.in_pack_slot == []
-    assert restored.body_history == []
+    assert restored.body == ""
 
 
 def test_a_corrupt_integer_field_is_refused():
     """整数字段形态非法即抛:不静默吞掉脏值."""
     with pytest.raises(InvalidIdError, match="整数字段非法"):
         ID.from_row({"value_uuid": "u", "birth_time": "昨天"})
+
+
+def test_a_corrupt_body_column_is_refused():
+    """正文那一列形态非法即抛:不静默把脏值当成"这个块有正文"."""
+    with pytest.raises(InvalidIdError, match="正文摘要读不出来"):
+        ID.from_row({"value_uuid": "u", "body": "不是摘要"})
 
 
 def test_an_id_repr_shows_its_place():

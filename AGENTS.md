@@ -32,13 +32,15 @@ uv lock --check                           # 锁文件是否与声明同步
 
 uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
                                           # **先装钩子**，否则下面这条与提交时的门禁都不跑
-uv run pre-commit run --all-files         # 提交前全量门禁（12 个钩子；清单见 quality.md §4）
+uv run pre-commit run --all-files         # 提交前全量门禁（13 个钩子；清单见 quality.md §4）
 
 uv run mkdocs serve                       # 文档站本地预览 -> http://127.0.0.1:8000
 uv run mkdocs build --strict              # 文档站构建门禁（坏链接/缺页面/未知配置即失败）
 uv run python scripts/docgen.py --check   # 生成页防漂移（配置参考 vs 入库词表 + AST 扫的声明处）
 uv run python scripts/docgen.py --write   # 重新生成配置参考页（改了配置声明后跑）
 uv run python scripts/docgen.py --coverage # docstring 覆盖报告（没写的公共成员会从 API 页消失）
+uv run onconf check --home config --strict # 配置声明门禁（**--home 必给**：CLI 缺省是 ./conf）
+uv run onconf build --home config          # 按声明完整重建 config/ 下那两份入库产物
 
 pnpm --dir app check                      # 前端门禁（类型/lint/样式/架构/令牌/重复代码/单测，七道合一）
 pnpm --dir app gen:tokens                 # 由 config/theme/tokens.json 重新生成令牌 CSS
@@ -97,8 +99,8 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   存储引擎 `engine.py`、回收 `gc.py`；身份与段算术、载荷与索引库在 `db/`
   （`id.py` / `payload.py` / `engine.py`）；两类索引块在 `index/`）、**异常层**（`core/exc.py`）；
   装配在 `core/init.py` 的 `Kernel`，时间口径在 `core/clock.py`，**配置**在 `core/conf.py`
-  （外层：定配置根 + 转发 `conf`；**引擎是上游 PyPI 包 `onconf`**，声明各归各家——
-  内核那条在 `core/params.py`、存储那组在 `core/storage/conf.py`，
+  （只做装配：定配置根 + 关控制台日志出口；**引擎是上游 PyPI 包 `onconf`**，`conf` 直接用它的，
+  声明各归各家——内核那条在 `core/params.py`、存储那组在 `core/storage/conf.py`，
   见 `docs/architecture/py_core/config.md`）。
 - `py_src/model/`（领域形状层）：`model/note/types/` 落五个载体（`NoteData` / `NoteTag` / `NoteGroup` /
   `NoteAsset` / `NoteCanvas`）与值对象（`NoteLine` / `Span` / `Figure` …）的形状，见 `decisions/笔记.md` §四；
@@ -120,8 +122,9 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
 - 内部时间统一 unix 毫秒（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
   对象身份是 `core/storage/db/id.py` 的 `ID`：字段为 `name` / `value_uuid` / `birth_time`
-  与位置段，另有**一项**库的事实 `body_history`（正文摘要链：一个世代一条摘要，
-  最新那一代就是当前用的那份正文的摘要）；
+  与位置段，另有**一项**库的事实 `body`（**当前那一份正文的摘要**，只有一个）。
+  **2026-10-06 的裁定**：存储只做"记录与修改"——**不做版本、不做历史、不做安全**，
+  世代、回滚、崩溃恢复由上层自行解决；
   **2026-10-02 的存储裁定把 `value_hash` 移出身份**（同日落码，见
   `docs/architecture/py_core/storage/block-parts.md`）。
   **同日的修正裁定**：**槽号只在 pack 内有意义**，ID 是跨 pack、跨 hub 的坐标，
