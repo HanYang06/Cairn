@@ -54,7 +54,12 @@ EMPTY_SLOT = 0
 """没写过的格：槽种类为 0。它既不是属性槽也不是正文槽。"""
 
 DEFAULT_MAX_BYTES = 2 * 1024**3
-"""封口线：单个载体写满这个字节数就换新载体。只管"换不换文件"，不是硬上限。"""
+"""封口线：单个载体写满这个字节数就换新载体。只管"换不换文件"，不是硬上限。
+
+它是**构造退路**（没给 `max_bytes` 时用它）；配置面那条默认值
+（`core.storage.pack.max.byte`，声明处写的是同值的字面量）由
+`tests/core/test_conf_projection.py` 盯着，两处分叉即失败。
+"""
 
 _HEADER = struct.Struct(">8sQQ")
 _SLOT = struct.Struct(">BII7s")

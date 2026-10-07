@@ -18,9 +18,12 @@
 ```python
 from onconf import conf
 
-conf("pack.max.byte", 2 * 1024**3, doc="封口线")  # 声明
-ceiling = int(conf("pack.max.byte"))  # 取值
+conf("core.storage.pack.max.byte", 2_147_483_648, doc="封口线")  # 声明
+ceiling = int(conf("core.storage.pack.max.byte"))  # 取值
 ```
+
+**键与默认值都必须是字面量**：写在调用点上的字面量就是 OnConf 的静态面（`build` / `sync` /
+`check`）唯一读得懂的形态，理由与后果见 §2。
 
 **装配必须早于第一次 `conf()`**：OnConf 的引擎是单例，引导层参数（`home` / `file_name` /
 `log_console` 一类）起来之后不可改，而内核的声明发生在**导入期**。故 `core/__init__.py`
@@ -39,9 +42,16 @@ ceiling = int(conf("pack.max.byte"))  # 取值
 参数面只有 `key` / `value` / `doc` 三样（2.0 起封闭）：`value` 给没给就是"写还是读"的判据
 （`None` / `0` / `""` 都算给），`doc` 写进词表，供 IDE 悬停与参考页使用。
 
-- **声明是唯一事实来源**：默认值只写在声明处，实现里不抄第二份（存储那组直接引用
-  `pack.DEFAULT_MAX_BYTES` 与 `hub.DEFAULT_SLOT_BYTES`，一份事实、两处引用）；
-- **键逐字保留点分形式**，值文件里 `"pack.max.byte"` 就是一个属性名，不展开成嵌套对象。
+- **声明处只写字面量**：OnConf 的静态面靠 AST 认"调用点上的字面量"——键与默认值都要能
+  `ast.literal_eval` 求出来，写成常量名、算式（`2 * 1024**3`）或循环里拼出来的键就进不了它的
+  **期望集**：`check` 把已入库的键报成"没声明"，`sync` 拒绝执行（期望集不完整即不删键），
+  `build` 又照不完整的期望集重写值文件。故声明处写死键与默认值，取值那一侧照旧写同一个字面量；
+- **默认值一处、构造退路一处**：格长与封口线在实现层各有一个构造退路
+  （`hub.DEFAULT_SLOT_BYTES` / `pack.DEFAULT_MAX_BYTES`，"没给参数时"用它），声明处那条是配置的
+  默认；两处由 `tests/core/test_conf_projection.py` 的一条用例盯着，改了一边即失败；
+- **键名按 `<层>.<域>.<对象>.<属性>`**：层前缀与声明所在的包一致（存储那五组以 `core.storage.`
+  开头，声明就在 `core/storage/conf.py`）；
+- **键逐字保留点分形式**，值文件里 `"core.storage.pack.max.byte"` 就是一个属性名，不展开成嵌套对象。
 
 ## 3. 落盘：每次声明即提交，运行期不删键
 
@@ -90,6 +100,10 @@ config/
 - **配置根有一个旋钮 `CAIRN_CONFIG`**：只给测试与部署重定向，**不是配置项**（它是"找到配置的
   办法"），值文件里不会出现它。引擎自己的根旋钮是 `ONCONF_HOME`、缺省 `./conf`；本仓显式给
   `home`，因为缺省落点与仓里 `config/` 的位置不同；
+- **命令行要显式 `--home config`**：CLI 不知道内核把根装配到了哪儿，它的缺省是 `ONCONF_HOME`
+  或 `./conf`。故不带 `--home config` 时 `onconf build` / `sync` / `check` 会另起一个仓根
+  `conf/`——那边只有它自己扫出来的那几条声明，与 `config/` 下的入库产物无关（门禁里那两条命令
+  都带着它）；
 - **审计日志不落终端**：引擎的日志是一个记录、两个出口——文件那个没有开关（缺省
   `<root>/audit.log`），控制台那个由 `log_console` 开关。内核是被命令行与测试嵌入的一方，
   一次导入要读十几条键，故内核把控制台**关掉**，`audit.log` 留全量记录；
@@ -142,6 +156,8 @@ config/
 
 - **OnConf 没法静态类型化**：2.0 的 wheel 里仍没有 `py.typed`，故 `pyproject.toml` 给
   `onconf` 那一组开了 `ignore_missing_imports`。上游补上之后删掉那段；
+- **"声明处必须字面量"有门禁**：`onconf check --home config --strict`（pre-commit 与 CI 各一道）
+  把扫描 warning 计入失败——声明处出现常量名或算式、或两份入库产物与声明不一致，当场红；
 - **"重复声明即炸"这条看门能力没有**：要它得另找地方做（例如一道扫描 `conf(...)` 调用点的
   AST 门禁）；
 - **不做"值来自声明还是被改过"的来源标记**；值文件仍是单份。

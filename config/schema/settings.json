@@ -6,30 +6,30 @@
       "description": "内核日志级别：导入内核时设到 cairn 这族记录器",
       "default": "WARNING"
     },
-    "gc.auto.byte": {
+    "core.storage.gc.auto.byte": {
       "description": "自动回收的阈值（字节）：死字节到这个数即自动回收；0 即不自动回收",
       "default": 0
     },
-    "hub.default": {
+    "core.storage.hub.default": {
       "description": "默认 hub 名：写入不点名时进这一个",
       "default": "main"
     },
-    "index.max.byte": {
+    "core.storage.index.max.byte": {
       "description": "一个索引块的体积上限（字节）：写到这个数由引擎自动续下一块",
       "default": 67108864
     },
-    "pack.max.byte": {
+    "core.storage.pack.max.byte": {
       "description": "封口线（字节）：单个载体写满这个数就换新的一份；只管换文件，不是硬上限",
       "default": 2147483648
     },
-    "slot.max.byte.b": {
+    "core.storage.slot.max.byte.b": {
       "description": "格长档位之一：每单位 1 字节；两档相加即为格长，全不写则不成立",
       "default": 512
     },
-    "slot.max.byte.kb": {
+    "core.storage.slot.max.byte.kb": {
       "description": "格长档位之一：每单位 1024 字节；两档相加即为格长，全不写则不成立",
       "default": 0
     }
   },
-  "x-onconf-hash": "af14abc57eec8c4d"
+  "x-onconf-hash": "375afe705732fcce"
 }

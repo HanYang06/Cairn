@@ -155,10 +155,10 @@ class Engine:
 
     Args:
         root: 库根(vault 目录).
-        default_hub: 不点名时写进哪个 hub;不给即取配置面的 `hub.default`.
+        default_hub: 不点名时写进哪个 hub;不给即取配置面的 `core.storage.hub.default`.
         slot_bytes: **新建**载体时的格长;不给即取配置面两档之和.
             读已有载体一律看它自己的文件头,与这个数无关.
-        max_bytes: 封口线;不给即取配置面的 `pack.max.byte`.它只管"什么时候换文件".
+        max_bytes: 封口线;不给即取配置面的 `core.storage.pack.max.byte`.它只管"什么时候换文件".
         bus: 事件总线;不给即不发事件(写路径不依赖有没有人在听).
     """
 
@@ -491,7 +491,7 @@ class Engine:
     def _active_index(self, owner: type[Any], hub_name: str) -> ID | None:
         """挑一个**还有地方**的索引块:最后写的那一块没到上限就用它,否则 ``None``(续一块).
 
-        上限取配置 `index.max.byte`(块自己用 `max_bytes` 覆盖它).
+        上限取配置 `core.storage.index.max.byte`(块自己用 `max_bytes` 覆盖它).
 
         **挑的是"最新那一块"**:索引块按写入次序一个接一个续,故最近登记的那个就是活跃的.
         续块的场合由调用方另签一个身份(`owner()`),它随即成为新的一行.
@@ -1154,7 +1154,7 @@ class Block:
     """
 
     max_bytes: ClassVar[int] = 0
-    """这个块的**体积上限**（字节）；`0` 即用配置面的默认（`index.max.byte`）。
+    """这个块的**体积上限**（字节）；`0` 即用配置面的默认（`core.storage.index.max.byte`）。
 
     它只管"什么时候该续下一个块"——引擎按它决定续块（索引块就靠这一条自动一块接一块）。
     **它是配置性的参数，不是写死的格式常量**：故声明在这里的是"这个类型要比默认更宽

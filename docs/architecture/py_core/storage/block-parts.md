@@ -155,7 +155,7 @@ ASCII），读它走 `parse_body`，与段的编解码无关。
   **跨 hub 也照这样引用**：不再复制一份到目标 hub（2026-10-02 修正裁定）。
 - **入口合法**：索引块自身也是块，其 `ID` 进索引库、正表在载体。
   这一条不属于「把索引写进库」。
-- 索引块写满的判据取配置面 `index.max.byte`，块自己可以在类体上用 `max_bytes` 覆盖它。
+- 索引块写满的判据取配置面 `core.storage.index.max.byte`，块自己可以在类体上用 `max_bytes` 覆盖它。
 
 ## 7. 规矩
 
@@ -177,16 +177,17 @@ ASCII），读它走 `parse_body`，与段的编解码无关。
 
 | 键 | 含义 | 开箱值 |
 |---|---|---|
-| `slot.max.byte.b` | 格长档位：每单位 1 字节 | 512 |
-| `slot.max.byte.kb` | 格长档位：每单位 1024 字节 | 0 |
-| `pack.max.byte` | 封口线（字节） | 2 GiB |
-| `hub.default` | 默认 hub 名 | `main` |
-| `index.max.byte` | 一个索引块的体积上限（字节） | 64 MiB |
-| `gc.auto.byte` | 自动回收的阈值（字节）；`0` 即不自动回收 | 0 |
+| `core.storage.slot.max.byte.b` | 格长档位：每单位 1 字节 | 512 |
+| `core.storage.slot.max.byte.kb` | 格长档位：每单位 1024 字节 | 0 |
+| `core.storage.pack.max.byte` | 封口线（字节） | 2 GiB |
+| `core.storage.hub.default` | 默认 hub 名 | `main` |
+| `core.storage.index.max.byte` | 一个索引块的体积上限（字节） | 64 MiB |
+| `core.storage.gc.auto.byte` | 自动回收的阈值（字节）；`0` 即不自动回收 | 0 |
 
+- 键名按 `<层>.<域>.<对象>.<属性>`，层前缀与声明所在的包一致（声明在 `core/storage/conf.py`）。
 - 格长按两档**相加**得出；**兆 / 吉 / 太三档清掉**。
 - 格长写在载体文件头，读侧一律以文件头为准，不看配置。
-- 回收有两个触发点：**手动回收**与**自动回收**（达到 `gc.auto.byte` 即触发）；
+- 回收有两个触发点：**手动回收**与**自动回收**（达到 `core.storage.gc.auto.byte` 即触发）；
   手动那一头是模块级 `sweep(engine)`，自动那一头的判据函数 `reclaimable_bytes(engine)` 已落码，
   但**没有接线到后台**。
 
@@ -205,7 +206,7 @@ ASCII），读它走 `parse_body`，与段的编解码无关。
 | 库另有属性槽段列表（`attr_in_pack_slot`）与正文历史两列 | 库另有**正文摘要**一列（`body`），**恰好七列**；「哪几格是属性槽」由槽头回答 |
 | 正文位置记在引用它的那个块的位置段里、跨 hub 时复制一份 | **正文位置记在正文索引的位置行里**（跨 pack/hub 的坐标）；跨 hub 直接引用，不复制 |
 | 旧库：重建入口 | 旧库：拒开；迁移随版本更新提供 |
-| `slot.max.byte` 五档 | 只留 `b` / `kb` 两档 |
+| `core.storage.slot.max.byte` 五档 | 只留 `b` / `kb` 两档 |
 | 内核不为正文分片内置机制 | **正文槽即分片机制** |
 
 原「格与二进制格式」页已删除：其中仍然成立的部分（定长格与算术定位、格号到地址为常数时间）
@@ -215,6 +216,6 @@ ASCII），读它走 `parse_body`，与段的编解码无关。
 
 | 项 | 状态 |
 |---|---|
-| 格长配置键该补的词 | 待定（现有键为 `slot.max.byte.{b,kb}`） |
-| `gc.auto.byte` 的开箱值 | 待定 |
+| 格长配置键该补的词 | 待定（现有键为 `core.storage.slot.max.byte.{b,kb}`） |
+| `core.storage.gc.auto.byte` 的开箱值 | 待定 |
 | `birth_time` 是否落整数列 | 待定（现为文本列，列表页排序与分页需要整数序） |

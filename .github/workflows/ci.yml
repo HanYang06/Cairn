@@ -65,6 +65,11 @@ jobs:
       # 跑一遍程序就顺带生成，入库的产物与声明是否分叉由 pytest 的投影契约用例拦住
       # （`tests/core/test_conf_projection.py`）。详情见 docs/architecture/config.md。
 
+      # 配置声明：键与默认值必须是字面量（OnConf 的静态面靠 AST 认调用点——写成常量名或算式
+      # 就进不了它的期望集），且两份入库产物与声明一致。`--strict` 把扫描 warning 计入失败。
+      - name: Config declarations (onconf check)
+        run: uv run onconf check --home config --strict
+
       - name: Generated config reference (no drift)
         run: uv run python scripts/docgen.py --check
 

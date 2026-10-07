@@ -78,7 +78,7 @@ Python 侧（py_src/）：
 - `mypy strict`（覆盖 `py_src` + `tools` + `scripts` + `tests`）、`ruff select=ALL`
   ＋逐条有理由的 ignore、`ruff format` 强制。
 - **warning 零容忍**（pytest `filterwarnings = ["error"]`）；覆盖率行 + 分支 **≥ 80%**。
-- **提交前一条命令跑完**：`uv run pre-commit run --all-files`（11 个钩子，清单与判据见
+- **提交前一条命令跑完**：`uv run pre-commit run --all-files`（13 个钩子，清单与判据见
   `.agents/skills/rules/references/quality.md` §4）。钩子需先安装一次：
   `uv run pre-commit install --hook-type pre-commit --hook-type commit-msg`；
   未安装时配置文件存在但门禁不执行。

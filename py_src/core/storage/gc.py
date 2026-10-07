@@ -37,7 +37,7 @@
 **崩在半路不坏库**:新字节全部落盘之后才删旧载体,故最坏的情形是"新旧两份并存,
 白占一份空间";库里的行先改成指着新的那一份,而旧的那一份还没删,读哪一份都是同一个答案.
 
-**两个触发点**:手动调用本模块的 :func:`sweep`,以及死字节达到配置 `gc.auto.byte`
+**两个触发点**:手动调用本模块的 :func:`sweep`,以及死字节达到配置 `core.storage.gc.auto.byte`
 时自动——自动那一路的判据是 :func:`reclaimable_bytes`,**接线到后台线程尚未落码**.
 """
 
@@ -116,7 +116,7 @@ def reclaimable_bytes(engine: Engine) -> int:
     """当前**可回收的字节数**:死槽那几格的字节数,即自动回收的判据.
 
     判据与 :func:`sweep` 同一套(按库里的行收活槽),故"够不够触发"与实际会收掉多少一致.
-    配置 `gc.auto.byte` 为零即不自动回收,调用方按它决定要不要问这一问.
+    配置 `core.storage.gc.auto.byte` 为零即不自动回收,调用方按它决定要不要问这一问.
     """
     live = _live_slots(engine)
     room = _slot_bytes(engine)

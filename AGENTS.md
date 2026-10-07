@@ -32,13 +32,15 @@ uv lock --check                           # 锁文件是否与声明同步
 
 uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
                                           # **先装钩子**，否则下面这条与提交时的门禁都不跑
-uv run pre-commit run --all-files         # 提交前全量门禁（12 个钩子；清单见 quality.md §4）
+uv run pre-commit run --all-files         # 提交前全量门禁（13 个钩子；清单见 quality.md §4）
 
 uv run mkdocs serve                       # 文档站本地预览 -> http://127.0.0.1:8000
 uv run mkdocs build --strict              # 文档站构建门禁（坏链接/缺页面/未知配置即失败）
 uv run python scripts/docgen.py --check   # 生成页防漂移（配置参考 vs 入库词表 + AST 扫的声明处）
 uv run python scripts/docgen.py --write   # 重新生成配置参考页（改了配置声明后跑）
 uv run python scripts/docgen.py --coverage # docstring 覆盖报告（没写的公共成员会从 API 页消失）
+uv run onconf check --home config --strict # 配置声明门禁（**--home 必给**：CLI 缺省是 ./conf）
+uv run onconf build --home config          # 按声明完整重建 config/ 下那两份入库产物
 
 pnpm --dir app check                      # 前端门禁（类型/lint/样式/架构/令牌/重复代码/单测，七道合一）
 pnpm --dir app gen:tokens                 # 由 config/theme/tokens.json 重新生成令牌 CSS

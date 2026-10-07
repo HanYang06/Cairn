@@ -80,8 +80,8 @@ def test_a_fresh_process_generates_both_projections_at_the_knob(tmp_path: Path):
     values = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
     assert values["$schema"] == "schema/settings.json"
     assert values["core.log.level"] == "WARNING"
-    assert values["slot.max.byte.b"] == 512
-    assert values["hub.default"] == "main"
+    assert values["core.storage.slot.max.byte.b"] == 512
+    assert values["core.storage.hub.default"] == "main"
 
     vocabulary = json.loads((tmp_path / "schema" / "settings.json").read_text(encoding="utf-8"))
     assert "core.log.level" in vocabulary["properties"]

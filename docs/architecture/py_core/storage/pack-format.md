@@ -94,8 +94,8 @@ packet-beta
 
 | 键 | 单位 | 含义 |
 |---|---|---|
-| `slot.max.byte.b` | 1 字节/单位 | 格长的一档 |
-| `slot.max.byte.kb` | 1024 字节/单位 | 格长的一档 |
+| `core.storage.slot.max.byte.b` | 1 字节/单位 | 格长的一档 |
+| `core.storage.slot.max.byte.kb` | 1024 字节/单位 | 格长的一档 |
 
 两档相加即为格长；兆、吉、太三档清掉。
 **格长写在文件头，读侧一律以文件头为准，不看配置。**

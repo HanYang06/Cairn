@@ -25,13 +25,20 @@ from onconf import conf
 import core.params  # 导入即声明内核自己那组配置(声明是事实源)
 import core.storage.conf  # noqa: F401
 from core.storage.conf import gc_auto_bytes
+from core.storage.hub import DEFAULT_SLOT_BYTES
+from core.storage.pack import DEFAULT_MAX_BYTES
 
 #: 入库的两份产物(相对仓根)
 VALUE_FILE = Path("config/settings.json")
 SCHEMA_FILE = Path("config/schema/settings.json")
 
 #: 每一层各取一条做代表:只验一条,是因为"这条读得出来"这件事由引擎统一保证.
-_SAMPLED_KEYS = ("core.log.level", "slot.max.byte.b", "pack.max.byte", "hub.default")
+_SAMPLED_KEYS = (
+    "core.log.level",
+    "core.storage.slot.max.byte.b",
+    "core.storage.pack.max.byte",
+    "core.storage.hub.default",
+)
 
 #: 值文件顶部的指令键:指向词表,不算配置项本身(与引擎的对账口径一致)
 _DIRECTIVE = "$schema"
@@ -55,6 +62,14 @@ def _properties(schema: dict[str, object]) -> dict[str, object]:
     properties = schema.get("properties")
     assert isinstance(properties, dict), "词表里没有 properties"
     return properties
+
+
+def _default_of(vocabulary: dict[str, object], key: str) -> object:
+    """词表里某条键的默认值(那条形状不对即断言失败,不静默当成没有)."""
+    spec = _properties(vocabulary)[key]
+    assert isinstance(spec, dict), f"词表里 {key!r} 不是一条配置"
+    entry: dict[str, object] = spec
+    return entry.get("default")
 
 
 def _fresh_projection(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
@@ -122,6 +137,19 @@ def test_shipped_values_are_readable():
 def test_the_gc_threshold_key_reads_its_shipped_value():
     """自动回收阈值这一条策略键读得出开箱值(2026-10-02 裁定新增)."""
     assert gc_auto_bytes() == 0
+
+
+def test_the_declared_defaults_match_the_implementation_fallbacks(tmp_path: Path):
+    """声明处写死的默认值与实现层的构造退路同值.
+
+    声明处必须是字面量(OnConf 的静态面认不出常量名),故格长与封口线这两个数在声明处与
+    实现层各写一份."各写一份"要成立就得有人看着:这条用例比对**空目录里新生成的那份词表**
+    与 `hub` / `pack` 的常量,改了一边而另一边留在原地即失败.
+    """
+    _values, generated = _fresh_projection(tmp_path)
+
+    assert _default_of(generated, "core.storage.slot.max.byte.b") == DEFAULT_SLOT_BYTES
+    assert _default_of(generated, "core.storage.pack.max.byte") == DEFAULT_MAX_BYTES
 
 
 def test_the_body_history_key_is_gone():

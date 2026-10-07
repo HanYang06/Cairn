@@ -94,13 +94,14 @@
 
 - **测试**：`pytest --strict-markers --strict-config`；`filterwarnings = ["error"]`（warning 零容忍）。
 - **覆盖率**：行 + 分支 ≥ 80%（CI 门禁 `--cov-fail-under=80`）。
-- **提交前**（`.pre-commit-config.yaml`，共 11 个钩子；**须先 `uv run pre-commit install
+- **提交前**（`.pre-commit-config.yaml`，共 13 个钩子；**须先 `uv run pre-commit install
   --hook-type pre-commit --hook-type commit-msg`**，否则一个都不跑）：
-  SPDX → 书面语 → 标点（报告模式）→ 魔法用量 → `ruff check --fix` → `ruff format` → `deptry` →
+  SPDX → 书面语 → 标点（报告模式）→ 魔法用量 → `onconf check --strict`（配置声明）→
+  `ruff check --fix` → `ruff format` → `deptry` →
   `lint-imports` → `mypy` → `uv lock --check` → `pytest` → 前端 `pnpm check`；
   提交信息另由 commit-msg 钩子校验 Conventional Commits。
-- **CI**（`.github/workflows/ci.yml`，Python 侧十一 + 前端一组 `pnpm check`）：
-  SPDX → 书面语 → 标点 → 魔法用量 → 文档防漂移 → docstring 覆盖（报告）→ ruff → deptry →
+- **CI**（`.github/workflows/ci.yml`，Python 侧十四步 + 前端一组 `pnpm check`）：
+  SPDX → 书面语 → 标点 → 魔法用量 → 配置声明 → 文档防漂移 → docstring 覆盖（报告）→ ruff → deptry →
   import-linter → `uv lock --check` → mypy → pytest + 覆盖率门禁。
   **输出编码统一 UTF-8**（workflow 级 `PYTHONIOENCODING: utf-8`）：Windows runner 的 stdout
   默认不是 UTF-8，而 `lint-imports` 的报告里含中文契约名，打印即 `UnicodeEncodeError`。
