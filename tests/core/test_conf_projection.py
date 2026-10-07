@@ -23,7 +23,7 @@ from pathlib import Path
 import core.params  # 导入即声明内核自己那组配置(声明是事实源)
 import core.storage.conf  # noqa: F401
 from core.conf import conf
-from core.storage.conf import body_history_depth, gc_auto_bytes
+from core.storage.conf import gc_auto_bytes
 
 #: 入库的两份产物(相对仓根)
 VALUE_FILE = Path("config/settings.json")
@@ -34,6 +34,7 @@ _SAMPLED_KEYS = ("core.log.level", "slot.max.byte.b", "pack.max.byte", "hub.defa
 
 #: 值文件顶部的指令键:指向词表,不算配置项本身(与引擎的对账口径一致)
 _DIRECTIVE = "$schema"
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -113,7 +114,12 @@ def test_shipped_values_are_readable():
         assert type(value) in {int, float, bool, str, list, dict}
 
 
-def test_the_ruling_added_two_policy_keys_to_the_storage_layer():
-    """2026-10-02 裁定新增的两条策略键:正文保留世代数与自动回收阈值,各自读得出开箱值."""
-    assert body_history_depth() == 1
+def test_the_gc_threshold_key_reads_its_shipped_value():
+    """自动回收阈值这一条策略键读得出开箱值(2026-10-02 裁定新增)."""
     assert gc_auto_bytes() == 0
+
+
+def test_the_body_history_key_is_gone():
+    """**"存储不保世代"**(2026-10-06 裁定):正文世代数那一键与它的声明都不在了."""
+    assert "body.history.depth" not in _load(VALUE_FILE)
+    assert "body.history.depth" not in _properties(_load(SCHEMA_FILE))

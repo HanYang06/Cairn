@@ -19,7 +19,7 @@ import base64
 from typing import TYPE_CHECKING
 
 from core.exc import InvalidParamsError, ObjectNotFoundError, UnknownMethodError
-from core.storage.db.id import BODY_HISTORY_FIELD, ID
+from core.storage.db.id import BODY_FIELD, ID
 from core.storage.pack import ATTR_SLOT, Slot
 
 if TYPE_CHECKING:
@@ -80,7 +80,7 @@ def _hubs(api: Api, _params: Mapping[str, object]) -> dict[str, object]:
 
 
 def _rows(api: Api, params: Mapping[str, object]) -> dict[str, object]:
-    """某个类型的身份行:一行是"这个身份在哪儿,它的正文是哪一份,经过哪几代".
+    """某个类型的身份行:一行是"这个身份在哪儿,它的正文是哪一份".
 
     **表名由参数给**,不由命令面去猜:库是一个类型一张表,故"查哪张"这一问只能由
     调用方回答——它知道自己要什么类型.
@@ -121,7 +121,7 @@ def _record(api: Api, params: Mapping[str, object]) -> dict[str, object]:
         "hub": str(row.get("in_hub") or ""),
         "pack": str(row.get("in_hub_pack") or ""),
         "segments": str(row.get("in_pack_slot") or ""),
-        "history": str(row.get(BODY_HISTORY_FIELD) or ""),
+        "body": str(row.get(BODY_FIELD) or ""),
         "slots": [
             _slot(index, slot, str(row.get("in_hub_pack") or "")) for index, slot in enumerate(held)
         ],
@@ -199,7 +199,7 @@ def _catalog_row(api: Api, value_uuid: str) -> tuple[str, dict[str, object]] | N
 
 
 def _identity(api: Api, value_uuid: str) -> ID:
-    """由库里的那一行还原身份:**身份,位置段与正文历史一起读回**.
+    """由库里的那一行还原身份:**身份,位置段与正文摘要一起读回**.
 
     **库里没有这一行即报错**:索引库是权威视角,缺一行就是"这个块不存在",
     没有顺扫这条退路.
@@ -212,7 +212,7 @@ def _identity(api: Api, value_uuid: str) -> ID:
 
 
 def _row(row: Mapping[str, object]) -> dict[str, object]:
-    """把一行身份折成 JSON:**位置段按段列表交出去**,正文摘要链另给一份.
+    """把一行身份折成 JSON:**位置段按段列表交出去**,正文摘要另给一份.
 
     **没有 `attr_slots` 那一栏**(2026-10-02 修正裁定):哪几格是属性槽由载体的槽头回答,
     库里不再有那一列.要分拣就读槽头——`:meth:`record` 交出的每一格都带着槽种类.
@@ -225,7 +225,7 @@ def _row(row: Mapping[str, object]) -> dict[str, object]:
         "pack": str(row.get("in_hub_pack") or ""),
         "segments": str(row.get("in_pack_slot") or ""),
         "slots": list(_slot_numbers(str(row.get("in_pack_slot") or ""))),
-        "history": str(row.get(BODY_HISTORY_FIELD) or ""),
+        "body": str(row.get(BODY_FIELD) or ""),
     }
 
 

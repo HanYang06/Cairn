@@ -7,9 +7,9 @@
 - **删除之后收得掉**:库里没有那一行,那些槽就是死字节,一趟扫完即消失;
 - **活的东西一动不动地读得回来**:搬过位置的块仍能 `fetch`,值一字不差——
   这一条同时钉住"索引库被扶正"(位置是真源,搬完不扶正,读就指向旧字节);
-- **一份正文被两个块共享时,删掉一个不减另一份**:引用按"还有没有块的摘要链指着它"判;
-- **摘要链是活口的第二来源**:引用型块自己没有正文槽,正文的位置在正文索引的位置行里,
-  回收要照摘要链把那一份正文算活,并把位置行扶正;
+- **一份正文被两个块共享时,删掉一个不减另一份**:引用按"还有没有行里那一列指着它"判;
+- **那一列摘要是活口的第二来源**:引用型块自己没有正文槽,正文的位置在正文索引的位置行里,
+  回收要照那一列把那一份正文算活,并把位置行扶正;
 - **零散段收敛成整段**:回收把分散的槽搬成连续的一段,位置段随之归成规范形;
 - **已经干净的书再扫一遍什么都不动**:没有死槽就不重写载体;
 - **可叫停**:`should_stop` 返回真之后,剩下的 hub 保持原样.
@@ -119,7 +119,7 @@ def test_shared_content_survives_one_of_its_holders(engine: Engine):
     """同一份正文挂在两个块上:删掉一个,另一个照样读得到那份正文.
 
     第二个块是**引用型**:它自己没有正文槽,正文的位置在正文索引的位置行里;
-    "还有人要它"由第一个块的摘要链现算——**位置不挂在块身上**,故删谁都不断别人.
+    "还有人要它"由第一个块那一列的摘要现算——**位置不挂在块身上**,故删谁都不断别人.
     """
     left = _memo("左", ["同一段"])
     left.save()
@@ -150,7 +150,7 @@ def test_sweep_drops_the_index_rows_of_deleted_blocks(engine: Engine):
 def test_a_body_nobody_references_is_collected(engine: Engine):
     """**没有块再要的正文**:回收摘掉它那一行位置行,正文槽也随之收走.
 
-    位置行是推导出来的坐标,不是内容本身,故"还有没有摘要链指着它"是它该不该在的
+    位置行是推导出来的坐标,不是内容本身,故"还有没有行里那一列指着它"是它该不该在的
     唯一判据.
     """
     memo = _memo("要走", ["一段正文"])
@@ -165,7 +165,7 @@ def test_a_body_nobody_references_is_collected(engine: Engine):
 
 
 def test_a_referenced_body_survives_its_owner(engine: Engine):
-    """**引用型块的正文不会因为原主被删而消失**:回收按摘要链判活."""
+    """**引用型块的正文不会因为原主被删而消失**:回收按行里那一列判活."""
     owner = _memo("原主", ["共享的一段"])
     owner.save()
     other = _memo("引用者", ["共享的一段"])
@@ -216,26 +216,31 @@ def test_repeated_saves_leave_only_the_live_slots(engine: Engine):
 
     sweep(engine)
 
-    assert _slots(engine) < before, "旧世代与旧属性槽都是死字节"
+    assert _slots(engine) < before, "上一份正文与旧属性槽都是死字节"
     assert GcMemo.fetch(identity).title == "定稿"
     assert GcMemo.fetch(identity).lines == ["最后一行"]
 
 
-def test_the_old_generation_within_the_depth_is_kept(engine: Engine):
-    """**保护旧世代**:保留范围之内(`body.history.depth`)的世代算活口,不得被收走."""
+def test_the_replaced_body_is_not_kept(engine: Engine):
+    """**存储不保世代**:那一列一改,上一份正文当即成为死字节,下一趟即可收走.
+
+    要留历史由上层自己留引用——底层只做"记录与修改".
+    """
     memo = _memo("甲", ["第一世代"])
     memo.save()
-    first_body = memo.id.body_history[0]
+    first_body = memo.id.body
 
     bind(None)
     bind(engine)
     memo.lines = ["第二世代"]
     memo.save()
-    second_body = memo.id.body_history[0]
+    second_body = memo.id.body
     assert first_body != second_body
+    before = _body_slots(engine)
 
     sweep(engine)
 
+    assert _body_slots(engine) < before, "上一份正文那一格被收走"
     bind(None)
     bind(engine)
     assert GcMemo.fetch(memo.id).lines == ["第二世代"], "现役那一份必须还在"
@@ -322,7 +327,9 @@ def test_sweep_collects_a_scattered_position_into_one_run(engine: Engine):
     sweep(engine)
 
     assert len(first.id.in_pack_slot) <= 2, "至多两段：正文槽一段、属性槽一段"
-    assert first.id.body_history, "摘要链还在"
+    row = engine.index.get("gcmemo", first.id.value_uuid)
+    assert row is not None
+    assert str(row.get("body") or ""), "正文摘要还在那一列上"
     bind(None)
     bind(engine)
     assert GcMemo.fetch(first.id).lines == ["一"]

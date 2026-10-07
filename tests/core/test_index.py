@@ -109,7 +109,7 @@ def test_a_body_declaration_lands_in_the_content_index(engine: Engine):
 
 
 def test_the_content_index_answers_the_holders(engine: Engine):
-    """**谁在用它由摘要链现算**:正文索引只答位置,故"几个块在引用"要扫各块的摘要链."""
+    """**谁在用它现算**:正文索引只答位置,故"几个块在引用"要扫各块那一列的摘要."""
     first_note = _note("甲", ["同一份"])
     second_note = _note("乙", ["同一份"])
     first_note.save()

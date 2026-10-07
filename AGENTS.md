@@ -120,8 +120,9 @@ pnpm --dir app tauri dev                  # 起桌面外壳（开发）
   哪一页描述现状、哪一页只是意图，见 `docs/architecture/index.md`。
 - 内部时间统一 unix 毫秒（`core/clock.py` 的 `now_ms`）；ID 的 `birth_time` 用纳秒。
   对象身份是 `core/storage/db/id.py` 的 `ID`：字段为 `name` / `value_uuid` / `birth_time`
-  与位置段，另有**一项**库的事实 `body_history`（正文摘要链：一个世代一条摘要，
-  最新那一代就是当前用的那份正文的摘要）；
+  与位置段，另有**一项**库的事实 `body`（**当前那一份正文的摘要**，只有一个）。
+  **2026-10-06 的裁定**：存储只做"记录与修改"——**不做版本、不做历史、不做安全**，
+  世代、回滚、崩溃恢复由上层自行解决；
   **2026-10-02 的存储裁定把 `value_hash` 移出身份**（同日落码，见
   `docs/architecture/py_core/storage/block-parts.md`）。
   **同日的修正裁定**：**槽号只在 pack 内有意义**，ID 是跨 pack、跨 hub 的坐标，

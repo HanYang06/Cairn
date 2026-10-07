@@ -2,11 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "body.history.depth": {
-      "type": "integer",
-      "description": "正文保留的世代数：改一段正文即新建一个槽，超出这个数的最老世代可被回收",
-      "default": 1
-    },
     "core.log.level": {
       "type": "string",
       "description": "内核日志级别：导入内核时设到 cairn 这族记录器",
@@ -43,5 +38,5 @@
       "default": 0
     }
   },
-  "x-onconf-hash": "2f49b8778826bd96"
+  "x-onconf-hash": "f153f79e9094773a"
 }

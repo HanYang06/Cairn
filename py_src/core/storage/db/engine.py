@@ -22,18 +22,18 @@
 **锚定是"用没用 ID",不是"是不是 Block"**:`Block` 只是契约,故 `NoteData` 继承了它,
 又用了 ID,库里就有一张 `notedata` 表;`attrindex` 与它完全同路,没有第二套机制.
 
-**列不再等于 `ID` 的字段**:身份的字段有几个就有几列,**另加正文历史那一列**——
-布点(hub,载体,段列表)与正文历史都是库里的事实,载体上没有一个字节承载它们.
+**列不再等于 `ID` 的字段**:身份的字段有几个就有几列,**另加正文摘要那一列**——
+布点(hub,载体,段列表)与正文摘要都是库里的事实,载体上没有一个字节承载它们.
 **故一张身份表恰好七列**:`name` / `value_uuid` / `birth_time` / `in_hub` / `in_hub_pack` /
-`in_pack_slot` / `body_history`.列清单由 :func:`columns_of` 现算,没有第二份列清单.
+`in_pack_slot` / `body`.列清单由 :func:`columns_of` 现算,没有第二份列清单.
 
 **"哪几格是属性槽"不进库**:属性槽与正文槽靠槽头种类分辨,载体上每一格本来就写着
 (2026-10-02 修正裁定).
 
 **载荷不进库**:属性值与正文分片都在载体的槽里.库只回答三件事——
-"这个身份在哪儿","它的正文有哪几代",以及由索引块提供的"按这个值能查到谁".
+"这个身份在哪儿","它的正文是哪一份",以及由索引块提供的"按这个值能查到谁".
 
-**库是权威视角**:它装身份,位置与正文历史,是这三样的唯一来源.故**没有从载体重算
+**库是权威视角**:它装身份,位置与正文摘要,是这三样的唯一来源.故**没有从载体重算
 这条路径**:库丢失即数据缺失,报"对象不在",不回退顺扫,也不静默补一行.
 
 **不再有表结构声明文件**:表由"类型用了 ID"这件事诞生,不由文件声明.
@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING
 
 from core.exc import IndexNotFoundError, IndexSchemaError
 
-from .id import BODY_HISTORY_FIELD, ID_FIELDS
+from .id import BODY_FIELD, ID_FIELDS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
@@ -63,24 +63,24 @@ META_MARK = "cairn.catalog"
 
 #: 列类型:**库里的列一律按文本落**.
 #:
-#: 凭证,名字,hub 名,载体名本来就是字符串;`birth_time`,段列表与正文历史是整数或映射,
-#: 但落成文本不影响"按值相等"的查询,而段列表与正文历史**共用同一种文本编码**,
+#: 凭证,名字,hub 名,载体名本来就是字符串;`birth_time` 是整数,段列表与正文摘要是文本,
+#: 但落成文本不影响"按值相等"的查询,列以身份为事实结构,
 #: 读侧因此只有一个解析函数.这个取舍是刻意的:**列以身份为事实结构**,
 #: 不另立一套类型体系.
 _COLUMN = "TEXT"
 
 
 def columns_of() -> tuple[str, ...]:
-    """一张身份表的列:**`ID_FIELDS` 加正文历史一列**,恰好七列,一个不多.
+    """一张身份表的列:**`ID_FIELDS` 加正文摘要一列**,恰好七列,一个不多.
 
-    清单从 `ID` 的字段上现算,故"某个字段进不去库"在代码上不成立;正文历史是库的事实,
-    而 `ID` 的字段里没有它——位置之外,库里还装着"这个块的正文是哪一份,经过哪几代".
+    清单从 `ID` 的字段上现算,故"某个字段进不去库"在代码上不成立;正文摘要是库的事实,
+    而 `ID` 的字段里没有它——位置之外,库里还装着"这个块的正文是哪一份".
 
     **"哪几格是属性槽"不在这里**:属性槽与正文槽靠**槽头种类**分辨(`pack.ATTR_SLOT` /
     `pack.BODY_SLOT`),载体上每一格本来就写着;再落一列就是用 pack 内的坐标去表达
     跨 pack 才能表达的事(2026-10-02 修正裁定).
     """
-    return (*ID_FIELDS, BODY_HISTORY_FIELD)
+    return (*ID_FIELDS, BODY_FIELD)
 
 
 class Index:
@@ -168,7 +168,7 @@ class Index:
     def put(self, table: str, row: Mapping[str, object]) -> None:
         """把一份身份写成一行(**整行照 :func:`columns_of` 搬**).
 
-        同一身份写两次即覆盖:库里那一行是身份,位置与正文历史的真源,谁最后写谁说了算.
+        同一身份写两次即覆盖:库里那一行是身份,位置与正文摘要的真源,谁最后写谁说了算.
 
         Args:
             table: 身份表名.
@@ -254,10 +254,10 @@ def _quote(name: str) -> str:
 
 
 def _plain(value: object) -> object:
-    """把值收进 sqlite 认的那几种:一段列表与一条摘要链一律按文本落.
+    """把值收进 sqlite 认的那几种:一段列表与一段摘要一律按文本落.
 
-    `ID` 上需要文本化的字段是位置段(`in_pack_slot`)与正文摘要链(`body_history`);
-    两者都由 `db/id.py` 的编码函数交出字符串,故这里只兜住 `None`.
+    `ID` 上需要文本化的字段是位置段(`in_pack_slot`)与正文摘要(`body`);
+    两者本来就是字符串,故这里只兜住 `None`.
     """
     if value is None:
         return ""
