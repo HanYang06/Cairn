@@ -43,4 +43,9 @@ def config_root() -> Path:
 
 
 # 导入即装配:内核的声明模块在导入期就调 `conf()`,故这一步必须发生在它们之前.
-AutoConf(home=config_root(), log_console=False)
+# `home=` 这里**内联**而不调 `config_root()`:OnConf 2.1 的引导层求值只认白名单节点,
+# 被调函数的 docstring 会解析成 `ast.Expr` 而遭拒;内联后无需摘取任何函数.
+AutoConf(
+    home=str(os.environ.get(ROOT_ENV) or (Path(__file__).resolve().parents[2] / CONFIG_DIRNAME)),
+    log_console=False,
+)

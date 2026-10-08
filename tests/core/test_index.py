@@ -24,6 +24,7 @@ from core.storage.engine import Block, Engine, bind, content_digest
 from core.storage.index.attrindex import AttrIndex
 from core.storage.index.bodyindex import BodyIndex
 from core.storage.index.index import CONTENT_FIELD, owners, table_of
+from core.storage.pack import HEADER_SIZE
 from core.storage.types import Attr, Body
 
 if TYPE_CHECKING:
@@ -300,3 +301,27 @@ def test_the_index_block_continues_when_it_is_full(engine: Engine, monkeypatch: 
     assert len(rows) >= 2, "两份索引块各占一行"
     assert _ids(engine.index_engine.search(AttrIndex, "title", "甲")) == {first.value_uuid}
     assert _ids(engine.index_engine.search(AttrIndex, "title", "乙")) == {second.value_uuid}
+
+
+def test_the_index_rows_all_stay_in_the_blocks_own_pack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """续块之后每一份索引块的位置段都指得出:**索引块也不跨载体**."""
+    monkeypatch.setattr("core.storage.conf.index_max_bytes", lambda: 1)
+    instance = Engine(tmp_path / "vault", slot_bytes=_SLOT, max_bytes=HEADER_SIZE + 2 * _SLOT)
+    bind(instance)
+    try:
+        first = _note("甲", ["一"]).save()
+        second = _note("乙", ["二"]).save()
+
+        for table in ("attrindex", "bodyindex"):
+            rows = list(instance.index.rows(table))
+            assert rows
+            for row in rows:
+                identity = ID.from_row(row)
+                assert instance.scan_slots(identity), "索引块的每一格都读得出"
+        assert _ids(instance.index_engine.search(AttrIndex, "title", "甲")) == {first.value_uuid}
+        assert _ids(instance.index_engine.search(AttrIndex, "title", "乙")) == {second.value_uuid}
+    finally:
+        bind(None)
+        instance.close()

@@ -19,7 +19,7 @@ import base64
 from typing import TYPE_CHECKING
 
 from core.exc import InvalidParamsError, ObjectNotFoundError, UnknownMethodError
-from core.storage.db.id import BODY_FIELD, ID
+from core.storage.db.id import BODY_FIELD, ID, parse_segments
 from core.storage.pack import ATTR_SLOT, Slot
 
 if TYPE_CHECKING:
@@ -107,6 +107,7 @@ def _record(api: Api, params: Mapping[str, object]) -> dict[str, object]:
 
     这条是刻意留的"最低限度可读":领域载荷解不成 JSON,而诊断与调试恰恰需要看到原始字节.
     槽的种类与内容长度一并交出,故调用方据此分清哪几格是属性,哪几格是正文.
+    **每一格交出的 `slot` 是它自己在载体里的真实格号**(次序照位置段,不是列表下标).
 
     Raises:
         ObjectNotFoundError: 库里没有这个身份,或它指着的那一格读不出来.
@@ -115,16 +116,16 @@ def _record(api: Api, params: Mapping[str, object]) -> dict[str, object]:
     identity = _identity(api, value_uuid)
     row = api.kernel.engine.index_row(identity)
     held = api.kernel.engine.scan_slots(identity)
+    pack = str(row.get("in_hub_pack") or "")
+    numbers = _slot_numbers(str(row.get("in_pack_slot") or ""))
     return {
         "uuid": identity.value_uuid,
         "name": identity.name,
         "hub": str(row.get("in_hub") or ""),
-        "pack": str(row.get("in_hub_pack") or ""),
+        "pack": pack,
         "segments": str(row.get("in_pack_slot") or ""),
         "body": str(row.get(BODY_FIELD) or ""),
-        "slots": [
-            _slot(index, slot, str(row.get("in_hub_pack") or "")) for index, slot in enumerate(held)
-        ],
+        "slots": [_slot(number, slot, pack) for number, slot in zip(numbers, held, strict=True)],
     }
 
 
@@ -230,24 +231,23 @@ def _row(row: Mapping[str, object]) -> dict[str, object]:
 
 
 def _slot_numbers(text: str) -> tuple[int, ...]:
-    """把段列表文本展开成升序的一串槽号(命令面按格号交出去)."""
+    """把段列表文本展开成一串槽号,**次序照段列表**(命令面按真实格号交出去).
+
+    走 :func:`parse_segments` 同一处解析:与引擎读槽的次序一致,也认得旧的区间写法.
+    """
     found: list[int] = []
-    for part in text.split(","):
-        item = part.strip()
-        if not item:
+    for span in parse_segments(text):
+        if isinstance(span, int):
+            found.append(span)
             continue
-        head, sep, tail = item.partition("-")
-        if not sep:
-            found.append(int(head))
-            continue
-        found.extend(range(int(head), int(tail) + 1))
+        found.extend(range(span[0], span[1] + 1))
     return tuple(found)
 
 
-def _slot(index: int, slot: Slot, pack: str) -> dict[str, object]:
+def _slot(number: int, slot: Slot, pack: str) -> dict[str, object]:
     """把一格折成 JSON:**槽号,槽种类与内容原文**."""
     return {
-        "slot": index,
+        "slot": number,
         "kind": slot.kind_name,
         "pack": pack,
         "length": len(slot.content),

@@ -149,6 +149,47 @@ def test_a_full_pack_is_sealed_and_the_next_write_opens_a_new_one(tmp_path: Path
     assert pack_name in hub.pack_names()
 
 
+def test_carrier_prefers_the_blocks_own_pack_even_when_it_is_sealed(tmp_path: Path):
+    """块自己那一份优先,封口了也照用:块继续写自己那一份,不叫跨载体."""
+    hub = _hub(tmp_path, slots=1)
+    pack_name, _slot = hub.append(ATTR_SLOT, b"x" * 400)
+    assert hub.pack(hub.pack_names()[0]).sealed
+
+    chosen = hub.carrier(prefer=pack_name)
+
+    assert chosen.name == pack_name
+    assert len(hub.pack_names()) == 1, "不另开一份"
+
+
+def test_carrier_takes_the_active_pack_when_the_block_has_none(tmp_path: Path):
+    """块没有自己那一份时挑活跃载体——它是有空间的最满者."""
+    hub = _hub(tmp_path, slots=3)
+    hub.append(ATTR_SLOT, b"a")
+
+    chosen = hub.carrier()
+
+    assert chosen.name == hub.pack_names()[0]
+
+
+def test_carrier_opens_one_pack_when_there_is_none(tmp_path: Path):
+    """一份载体都没有时新开一份:这是"第一次写"那条路."""
+    hub = _hub(tmp_path)
+    assert hub.pack_names() == ()
+
+    chosen = hub.carrier()
+
+    assert hub.pack_names() == (chosen.name,)
+
+
+def test_carrier_ignores_a_preferred_pack_that_is_gone(tmp_path: Path):
+    """块记的那一份被人删了就另挑一份:**旧槽由回收收走**,写不因此失败."""
+    hub = _hub(tmp_path)
+
+    chosen = hub.carrier(prefer="nobody")
+
+    assert chosen.name in hub.pack_names()
+
+
 def test_the_active_pack_is_the_fullest_one_with_room(tmp_path: Path):
     """活跃载体 = **有空间的最满者**:判据不依赖时间戳,也不依赖载体名的顺序."""
     hub = _hub(tmp_path, slots=2)

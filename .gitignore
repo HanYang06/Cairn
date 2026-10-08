@@ -55,6 +55,4 @@ config/audit.log
 .env
 *.local
 
-# 本地开发库（加密对象池，不入库）
-vault/
-.cairn-dev/
+.onconf.json

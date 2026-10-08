@@ -16,16 +16,19 @@
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import pytest
 
-from core.exc import ObjectNotFoundError
+from core.exc import IndexSchemaError, ObjectNotFoundError
 from core.storage.db.id import ID
 from core.storage.engine import Block, Engine, bind, content_digest
+from core.storage.hub import Hub
 from core.storage.index.bodyindex import BodyIndex
 from core.storage.index.index import CONTENT_FIELD
-from core.storage.pack import ATTR_SLOT, BODY_SLOT
+from core.storage.pack import ATTR_SLOT, BODY_SLOT, HEADER_SIZE, Pack
 from core.storage.types import Attr, Body
 
 if TYPE_CHECKING:
@@ -715,3 +718,188 @@ def _expand(*groups: Iterable[int | tuple[int, int]]) -> list[int]:
             else:
                 found.extend(range(item[0], item[1] + 1))
     return found
+
+
+# ---- 位置记的是真实落点:一个块只占一份载体(2026-10-07 裁定) ----
+
+
+def _seal(slots: int) -> int:
+    """封口线:头加 `slots` 格——写满第 `slots` 格之后再加一格即超额."""
+    return HEADER_SIZE + slots * _SLOT
+
+
+@contextmanager
+def _small_vault(tmp_path: Path, *, slots: int = 2) -> Iterator[Engine]:
+    """接上一个**载体很小**的引擎:几格就封口,故换份这条边界在用例里看得见.
+
+    封口线取"头 + slots 格".默认的 2 GiB 永远只有一份载体,而"跨不跨"这个问题
+    只在两份以上载体时才显形,故这里必须把它缩小.
+    """
+    instance = Engine(tmp_path / "vault", slot_bytes=_SLOT, max_bytes=_seal(slots))
+    bind(instance)
+    try:
+        yield instance
+    finally:
+        bind(None)
+        instance.close()
+
+
+def test_a_block_is_recorded_in_the_pack_it_actually_landed_in(tmp_path: Path):
+    """**载体名取自写入结果**:块写进哪一份,库里就记哪一份.
+
+    预置两份载体:一份已封口(名字排序在前),一份更满且未封口(活跃的那一份).
+    写入落在后者,故库里那一行必须记后者,而不是"按名字排序的第一份".
+    """
+    with _small_vault(tmp_path) as engine:
+        hub = Hub.create(engine.root / "main", slot_bytes=_SLOT, max_bytes=_seal(2))
+        sealed = Pack(hub.packs_dir / "aaa", slot_bytes=_SLOT, max_bytes=_seal(2))
+        for _ in range(3):
+            sealed.append(ATTR_SLOT, b"filler")
+        active = Pack(hub.packs_dir / "zzz", slot_bytes=_SLOT, max_bytes=_seal(2))
+        active.append(ATTR_SLOT, b"filler")
+        assert sealed.sealed is True
+        chosen = hub.active()
+        assert chosen is not None, "有一份没封口的载体"
+        assert chosen.name == "zzz"
+
+        identity = _note().save()
+
+        assert identity.in_hub_pack == "zzz", "记的是写入落点,不是排序第一份"
+        assert str(engine.index_row(identity)["in_hub_pack"]) == "zzz"
+        bind(None)
+        bind(engine)
+        restored = NoteData.fetch(identity)
+        assert restored.title == "第一篇"
+        assert restored.lines == ["第一行", "第二行"]
+
+
+def test_blocks_stay_whole_when_packs_roll_over(tmp_path: Path):
+    """换份之后每个块仍只占一份载体:属性与正文不落在两处."""
+    with _small_vault(tmp_path) as engine:
+        notes = []
+        for index in range(3):
+            note = NoteData(ID(NoteData))
+            note.title = f"第{index}篇"
+            note.lines = [f"正文{index}"]
+            note.save()
+            notes.append(note)
+        for note in notes:
+            held = engine.scan_slots(note.id)
+            assert {slot.kind for slot in held} == {ATTR_SLOT, BODY_SLOT}
+            assert note.id.in_hub_pack == str(engine.index_row(note.id)["in_hub_pack"])
+        bind(None)
+        bind(engine)
+        for index, note in enumerate(notes):
+            restored = NoteData.fetch(note.id)
+            assert restored.title == f"第{index}篇"
+            assert restored.lines == [f"正文{index}"]
+
+
+def test_a_multi_slot_body_stays_in_one_pack(tmp_path: Path):
+    """正文大于一格时,分片也全落在同一份载体上(超了封口线也照写,不拆)."""
+    with _small_vault(tmp_path) as engine:
+        note = NoteData(ID(NoteData))
+        note.title = "长正文"
+        note.lines = ["x" * 700]
+        identity = note.save()
+
+        held = engine.scan_slots(identity)
+        bodies = [slot for slot in held if slot.kind == BODY_SLOT]
+        assert len(bodies) >= 2, "正文确实分了两格"
+        assert len(held) >= 3, "属性槽一格加正文槽两格以上"
+        bind(None)
+        bind(engine)
+        assert NoteData.fetch(identity).lines == ["x" * 700]
+
+
+def test_a_referring_block_reads_the_body_from_the_recorded_place(tmp_path: Path):
+    """引用型的第二跳按位置行给的坐标读:多载体时也不能读错那一份."""
+    with _small_vault(tmp_path) as engine:
+        owner = NoteData(ID(NoteData))
+        owner.title = "原主"
+        owner.lines = ["共享的一行"]
+        owner.save()
+        for index in range(2):
+            filler = NoteData(ID(NoteData))
+            filler.title = f"填充{index}"
+            filler.lines = [f"填充正文{index}"]
+            filler.save()
+        other = NoteData(ID(NoteData))
+        other.title = "引用者"
+        other.lines = ["共享的一行"]
+        other.save()
+
+        assert other.body_is_ref is True
+        bind(None)
+        bind(engine)
+        assert NoteData.fetch(other.id).lines == ["共享的一行"]
+
+
+def test_growing_attributes_stay_in_the_blocks_own_pack(tmp_path: Path):
+    """属性格数变了也追加进**块自己那一份**:另开一份就把这个块拆成两处了."""
+    with _small_vault(tmp_path, slots=3) as engine:
+        note = NoteData(ID(NoteData))
+        note.title = "短"
+        note.lines = []
+        identity = note.save()
+        first_pack = identity.in_hub_pack
+
+        # 裸赋值只落盘,不进索引,故属性编大了也不会撞上"一条索引行装不下".
+        for index in range(12):
+            setattr(note, f"extra{index}", "x" * 40)
+        note.save()
+
+        assert identity.in_hub_pack == first_pack, "块没换载体"
+        held = engine.scan_slots(identity)
+        attrs = [slot for slot in held if slot.kind == ATTR_SLOT]
+        assert len(attrs) >= 2, "属性分了两格以上,且都读得出"
+        bind(None)
+        bind(engine)
+        restored = NoteData.fetch(identity)
+        assert getattr(restored, "extra0") == "x" * 40  # noqa: B009 — 裸赋值字段不在类上
+
+
+def test_the_whole_vault_keeps_one_carrier_per_block(tmp_path: Path):
+    """不变量:库里每一行指向的那一份载体,确实装得下它位置段里的每一格."""
+    with _small_vault(tmp_path) as engine:
+        for index in range(3):
+            note = NoteData(ID(NoteData))
+            note.title = f"第{index}篇"
+            note.lines = [f"正文{index}"]
+            note.save()
+        for table in ("notedata", "attrindex", "bodyindex"):
+            for row in list(engine.index.rows(table)):
+                identity = ID.from_row(row)
+                assert engine.scan_slots(identity), f"{table} 的位置段读得出"
+
+
+def test_a_foreign_catalog_is_refused_not_adopted(tmp_path: Path):
+    """`catalog.db` 若是别人的 sqlite:**拒开**,不静默加表收编(2026-10-07)."""
+    root = tmp_path / "vault"
+    root.mkdir()
+    connection = sqlite3.connect(root / "catalog.db")
+    connection.execute("CREATE TABLE foo (x TEXT)")
+    connection.commit()
+    connection.close()
+    instance = Engine(root, slot_bytes=_SLOT)
+
+    with pytest.raises(IndexSchemaError):
+        _ = instance.index
+    instance.close()
+
+
+def test_a_second_engine_opens_the_existing_catalog(tmp_path: Path):
+    """库文件在即按 `Index.open` 开:缺 `meta` 才拒,故正常库照常开."""
+    first = Engine(tmp_path / "vault", slot_bytes=_SLOT)
+    bind(first)
+    identity = _note().save()
+    bind(None)
+    first.close()
+    second = Engine(tmp_path / "vault", slot_bytes=_SLOT)
+    bind(second)
+    try:
+        assert "notedata" in second.index.tables()
+        assert NoteData.fetch(identity).title == "第一篇"
+    finally:
+        bind(None)
+        second.close()

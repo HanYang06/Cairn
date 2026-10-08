@@ -119,10 +119,11 @@ def reclaimable_bytes(engine: Engine) -> int:
     配置 `core.storage.gc.auto.byte` 为零即不自动回收,调用方按它决定要不要问这一问.
     """
     live = _live_slots(engine)
-    room = _slot_bytes(engine)
     total = 0
     for hub_name, path, slots in _scan(engine):
         pack_name = path.name
+        # 格长以**这一份载体自己的文件头**为准:不同批次的载体可以不同格长.
+        room = Pack.open(path).slot_bytes
         for number, _slot in enumerate(slots):
             if (hub_name, pack_name, number) not in live:
                 total += room
@@ -332,11 +333,6 @@ def _pack_bytes(path: Path, slots: tuple[Slot, ...]) -> int:
     return size if slots else HEADER_SIZE
 
 
-def _slot_bytes(engine: Engine) -> int:
-    """这次装配的格长:报告与自动回收的判据按它计数."""
-    return engine.slot_bytes
-
-
 def _rewrite(
     engine: Engine,
     hub_name: str,
@@ -345,8 +341,10 @@ def _rewrite(
 ) -> dict[_Where, tuple[str, int]]:
     """重写一个 hub 里那些**有死槽**的载体:活的搬进新的一份,旧的删掉.
 
-    新的一份**按需开**(第一条要写的活槽才开);搬动之后位置段改写成规范形,
-    故零散段在这一趟收敛成整段.
+    **一份源载体搬进恰好一份目标载体**(2026-10-07 裁定):一个块的槽都来自同一份源载体,
+    故搬完仍在一起——目标载体在份与份之间轮换会把一个块拆到两处,而库里那一行只记一个
+    载体名,读侧只能猜.新的一份**按需开**(第一条要写的活槽才开);搬动之后位置段改写成
+    规范形,故零散段在这一趟收敛成整段.
 
     Returns:
         搬动过的那几格:旧坐标 → (新载体名,新槽号).**凡是指着旧坐标的行都要改**,
@@ -364,19 +362,18 @@ def _rewrite(
         engine.root / hub_name, slot_bytes=engine.slot_bytes, max_bytes=engine.max_bytes
     )
     moved: dict[_Where, tuple[str, int]] = {}
-    writer: Pack | None = None
-    target = 0
     for path, slots in dirty:
+        # **一份源载体一份目标载体**:块不会因此被拆到两处(不按封口线轮换).
+        writer: Pack | None = None
+        target = 0
         for number, slot in enumerate(slots):
             if (hub_name, path.name, number) not in live:
                 continue
-            if writer is None or writer.sealed:
+            if writer is None:
                 writer = hub.new_pack()
-                target = 0
             writer.write_at(target, slot.kind, slot.content)
             moved[(hub_name, path.name, number)] = (writer.name, target)
             target += 1
-    for path, _slots in dirty:
         path.unlink()
     return moved
 
@@ -416,6 +413,7 @@ def _rehome(
     attrs: list[int] = []
     bodies: list[int] = []
     new_pack = pack_name
+    landed: set[str] = set()
     changed = False
     for slot in _slots_of(identity.in_pack_slot):
         where = moved.get((hub_name, pack_name, slot))
@@ -423,9 +421,12 @@ def _rehome(
         if where is not None:
             changed = True
             new_pack = where[0]
+            landed.add(where[0])
         (bodies if slot in bodies_here else attrs).append(target)
     if not changed:
         return
+    if len(landed) > 1:
+        raise HubShapeError(f"一个块的槽跨了两份载体: {hub_name}/{pack_name}")
     row["in_hub_pack"] = new_pack
     row["in_pack_slot"] = _text_of_segments(_merge_groups([bodies, attrs]))
     engine.index.put(table, row)
@@ -499,6 +500,7 @@ def _rehome_one_body(placement: dict[str, object], moved: dict[_Where, tuple[str
         return False
     targets: list[int] = []
     new_pack = pack_name
+    landed: set[str] = set()
     changed = False
     for slot in _slots_of(segments):
         where = moved.get((hub_name, pack_name, slot))
@@ -507,9 +509,12 @@ def _rehome_one_body(placement: dict[str, object], moved: dict[_Where, tuple[str
             continue
         changed = True
         new_pack = where[0]
+        landed.add(where[0])
         targets.append(where[1])
     if not changed:
         return False
+    if len(landed) > 1:
+        raise HubShapeError(f"一份正文的槽跨了两份载体: {hub_name}/{pack_name}")
     placement[PACK_KEY] = new_pack
     placement[SEGMENTS_KEY] = encode_segments(canonical_segments(targets))
     return True
@@ -572,11 +577,6 @@ def _slots_of(spans: Iterable[int | tuple[int, int]]) -> tuple[int, ...]:
             continue
         found.extend(range(item[0], item[1] + 1))
     return tuple(found)
-
-
-def _int(value: object) -> int:
-    """把整数字段读回:缺失取 0."""
-    return 0 if value in {None, ""} else int(str(value))
 
 
 __all__ = ["SweepReport", "reclaimable_bytes", "sweep"]
