@@ -42,9 +42,11 @@
 | `False` | 正文内容在**本块**(本块位置段里有 body 槽) | 这份正文自己的摘要 |
 | `True` | 本块**没有**正文内容,正文关联在别处 | **关联凭证**:拿它查正文索引定位那份正文 |
 
-**一次保存只写它动过的域**(属性 / 正文 / 索引三选几),不重写整块.判据落在字节上:
-正文按摘要查 `BodyIndex`,属性编出来与库里记的那几格逐字节比——故"没动"是算出来的,
-不是调用方声明的.
+**一次保存只写它动过的域**(属性 / 正文 / 索引三选几),不重写整块:正文按摘要查
+`BodyIndex` 的位置行(命中即不写正文槽),属性格数够就地覆盖,不够才另占.
+
+**一个块只挑一份载体**(2026-10-07 裁定):这一次要写的全部槽都落进它自己那一份,
+库里的载体名取自**写入结果**——故一个块不跨载体,位置也不会记到别的载体上.
 
 **去重只针对 `Body` 的内容**:写入前按正文摘要查 `BodyIndex` 的位置行,命中即**本块不写
 body 槽**(只占属性槽),正文关联记进库里那一列;`Attr`,裸赋值与资产类二进制(如视频)不去重.
@@ -74,6 +76,7 @@ from core.exc import (
     IndexSchemaError,
     ObjectNotFoundError,
     SlotError,
+    SlotFormatError,
     SlotTooLargeError,
 )
 
@@ -201,9 +204,14 @@ class Engine:
 
     @property
     def index(self) -> Index:
-        """索引库:需要时开,并把已知类型的身份表补齐."""
+        """索引库:需要时开,并把已知类型的身份表补齐.
+
+        **文件在就用 :meth:`Index.open`**(缺 `meta` 即拒开——不把别人的 sqlite 当本库用);
+        不在才建.故"读路径不建库"与"第一次真正要用它时才建文件"两条同时成立.
+        """
         if self._index is None:
-            self._index = Index.create(self.catalog_path)
+            path = self.catalog_path
+            self._index = Index.open(path) if path.is_file() else Index.create(path)
             self._sync_tables(self._index)
         return self._index
 
@@ -273,8 +281,11 @@ class Engine:
     def save(self, block: Block, *, hub: str | None = None) -> ID:
         """把一个块落成属性槽与正文槽,返回块身份(就是调用方递进来那一个,已回填).
 
-        **只写它动过的域**:正文按摘要查 `BodyIndex` 的位置行,属性与库里记的那几格逐字节比.
-        库里没有这一行即首次落盘,两样都写.
+        **只写它动过的域**:正文按摘要查 `BodyIndex` 的位置行;属性格数够就原地覆盖,
+        不够才另占.库里没有这一行即首次落盘,两样都写.
+
+        **一个块只挑一份载体**(2026-10-07 裁定):这一次要写的全部槽(属性与正文)都
+        追加进它自己那一份,库里的载体名取自写入结果——故一个块不跨载体.
 
         **正文两条路**(2026-10-02 修正裁定):
 
@@ -293,32 +304,35 @@ class Engine:
         identity = block.id
         fields = _fields_of(block)
         hub_name = self._hub_name(hub)
+        _ = self.index  # 先确认索引库可开:库不对即当场报错,不留孤儿槽
         row = self._row_of(identity)
         attrs = _attrs_of(block, fields)
         chunks = _split(encode_attrs(attrs), self.content_room)
-        # **槽序以这一趟的落点为准**:属性槽在前,正文槽在后.旧行那一份位置段只用来
+        # **槽序以这一趟的落点为准**:正文槽在前,属性槽在后.旧行那一份位置段只用来
         # 取"旧那一行记的槽",而它是哪一类要**读槽头**才分得清(库里没有那一列).
         old_attr = _attr_slots_of(self, row)
         body = _body_of(block, fields)
         body_hash = content_digest_of_body(body) if body else ""
-        attr_slots = self._write_attrs(hub_name, chunks, row, old_attr)
-        entries: dict[str, SlotPlacement] = self._index_entries(block, hub_name, attrs, attr_slots)
+        target = self._target_pack(hub_name, row)
+        attr_slots = self._write_attrs(target, hub_name, chunks, row, old_attr)
+        entries: dict[str, SlotPlacement] = self._index_entries(
+            block, hub_name, target, attrs, attr_slots
+        )
         body_slots: tuple[int, ...] = ()
         if body:
             found = self._lookup_body(body_hash)
             if found is None:
-                body_slots = self._append_slots(
-                    hub_name, BODY_SLOT, _split(_encode_body(body), self.content_room)
+                body_slots = self._append_into(
+                    target, BODY_SLOT, _split(_encode_body(body), self.content_room)
                 )
                 body_hub = hub_name
-                body_pack = _first_pack(hub_name, self._root)
+                body_pack = target.name
             else:
                 body_hub = found.hub
                 body_pack = found.pack
                 # **命中即不写 body 槽**:本块只占属性槽,正文的位置由那一行索引给出
                 # (2026-10-02 修正裁定).位置段的槽号只对这一份载体成立,
                 # 故引用别处的正文不能把它的格号搬进本块的位置段.
-                # 待作者确认:位置就是本块那几格时仍算不算自带.
                 body_slots = ()
             segments = canonical_segments(body_slots)
             entries[BODY_KEY] = SlotPlacement(
@@ -328,7 +342,7 @@ class Engine:
                 slots=_slots_of(segments),
             )
             identity.body = body_hash
-        self._place(identity, hub_name, attr_slots, body_slots)
+        self._place(identity, hub_name, target.name, attr_slots, body_slots)
         block.stamp_body(body_hash, inline=not body_slots)
         self._index_block(block, identity, entries)
         self._register(block, identity)
@@ -339,8 +353,25 @@ class Engine:
         )
         return identity
 
+    def _target_pack(self, hub_name: str, row: Mapping[str, object] | None) -> Pack:
+        """这一次落盘写进哪一份载体:**块自己那一份优先**,否则活跃的,再否则新开一份.
+
+        **一个块只挑一次**:它这一次要写的全部槽都追加进这一份,故一个块不跨载体.
+        块自己那一份由库里那一行给出;它不在(被人删了)即另挑一份,旧槽由回收收走.
+        """
+        prefer = _pack_of(row) if row is not None and _hub_of(row) == hub_name else ""
+        return self._open_hub(hub_name).carrier(prefer)
+
+    def _append_into(self, pack: Pack, kind: int, chunks: list[bytes]) -> tuple[int, ...]:
+        """把一格一格的内容追加进**挑定那一份载体**,返回它占的槽号(升序).
+
+        **载体由调用方挑定**:一个块只挑一次,故这里不重挑,也就不跨载体.
+        """
+        return tuple(pack.append(kind, chunk) for chunk in chunks)
+
     def _write_attrs(
         self,
+        target: Pack,
         hub_name: str,
         chunks: list[bytes],
         row: dict[str, object] | None,
@@ -350,13 +381,18 @@ class Engine:
 
         原地覆盖是本裁定给属性槽的写法,故"属性变了"不产生新槽,也不进历史;
         非到格数都不够才另占.此时旧的那几格从此不再被这一行指着,由回收收走.
+        **另占的那几格仍在块自己那一份载体上**——不然这个块就跨载体了.
         """
-        if len(current) == len(chunks) and _hub_of(row) == hub_name and _pack_of(row):
-            pack = self._open_pack(hub_name, _pack_of(row))
+        same_place = (
+            len(current) == len(chunks)
+            and _hub_of(row) == hub_name
+            and _pack_of(row) == target.name
+        )
+        if same_place:
             for index, slot in enumerate(current):
-                pack.overwrite(slot, ATTR_SLOT, chunks[index])
+                target.overwrite(slot, ATTR_SLOT, chunks[index])
             return tuple(_slots_of(current))
-        return self._append_slots(hub_name, ATTR_SLOT, chunks)
+        return self._append_into(target, ATTR_SLOT, chunks)
 
     def _lookup_body(self, content: str) -> SlotPlacement | None:
         """按正文摘要查 `BodyIndex` 的**位置行**:**写入去重只走这一条**,不扫全库.
@@ -389,20 +425,21 @@ class Engine:
         self,
         block: Block,
         hub_name: str,
+        target: Pack,
         attrs: Mapping[str, object],
         attr_slots: tuple[int, ...],
     ) -> dict[str, SlotPlacement]:
         """这个块的属性各列在索引里那一行:列名 → 值 + 落点.
 
         **落点对全部属性是一样的**——它们同住那几格属性槽,故索引行的落点照抄即可;
-        值另取一遍(属性槽里存的是值,直接读出来文本化).
+        值另取一遍(属性槽里存的是值,直接读出来文本化).**载体名取自写入结果**.
         """
         kinds = kinds_of(type(block))
         return {
             name: SlotPlacement(
                 value=index_text(getattr(block, name, None)),
                 hub=hub_name,
-                pack=_first_pack(hub_name, self._root),
+                pack=target.name,
                 slots=attr_slots,
             )
             for name in attrs
@@ -444,7 +481,8 @@ class Engine:
         """把一个块的正表行写进 `owner` 这类索引块;**满了自动续下一块**.
 
         **一条行一个槽**,故写路径只有追加,没有改动.索引块也是块:它有身份,有表,
-        故"查索引时它搁哪儿"由库里那一行回答.
+        故"查索引时它搁哪儿"由库里那一行回答.**续写只在它自己那一份载体内进行**
+        (2026-10-07 裁定):索引块与任何块一样不跨载体.
 
         **两类行的形状不一样**(2026-10-02 修正裁定):
 
@@ -459,14 +497,20 @@ class Engine:
             value_uuid: 这一行属于哪个块(**只有属性那一路用得上**).
             row: 列名 → 落点.
         """
+        if not row:
+            return
         hub_name = self._default_hub
         table = owner.__name__.lower()
         is_body = owner.__dict__.get("manages") == BODY_KIND
         live = self._active_index(owner, hub_name)
-        if live is None:
+        pack = self._live_pack(hub_name, live)
+        if live is None or pack is None:
             # **索引块的身份按块的标准用法来**:`owner()` 自己签一个(那两行就在它的
             # `__init__` 里).它是块,故它自然进库,有表.
             live = ID(table, value_uuid=owner().id.value_uuid)
+            pack = self._open_hub(hub_name).carrier()
+            live.in_hub = hub_name
+            live.in_hub_pack = pack.name
         for column, placement in row.items():
             payload = encode_index_row(
                 {
@@ -474,7 +518,7 @@ class Engine:
                     **({} if is_body else {"value_uuid": value_uuid}),
                     "value": placement.value,
                     HUB_KEY: placement.hub,
-                    PACK_KEY: placement.pack or _first_pack(placement.hub, self._root),
+                    PACK_KEY: placement.pack,
                     SEGMENTS_KEY: encode_segments(canonical_segments(placement.slots)),
                 }
             )
@@ -482,11 +526,20 @@ class Engine:
                 raise SlotTooLargeError(
                     f"一条索引行装不下: {len(payload)} 字节（可用 {self.content_room}）"
                 )
-            written = self._append_slots(hub_name, ATTR_SLOT, [payload])
-            live.in_hub = hub_name
-            live.in_hub_pack = _first_pack(hub_name, self._root)
-            live.add_slot(written[0])
-            self._register_index(owner, live, hub_name)
+            live.add_slot(pack.append(ATTR_SLOT, payload))
+        self._register_index(owner, live, hub_name)
+
+    def _live_pack(self, hub_name: str, live: ID | None) -> Pack | None:
+        """活跃索引块**自己那一份载体**;它没有或那份载体不在了即 ``None``(另起一块).
+
+        **索引块也只写自己那一份**:续写它时不再另挑载体,故索引块同样不跨载体.
+        """
+        if live is None:
+            return None
+        try:
+            return self._open_pack(hub_name, live.in_hub_pack)
+        except HubNotFoundError, HubShapeError:
+            return None
 
     def _active_index(self, owner: type[Any], hub_name: str) -> ID | None:
         """挑一个**还有地方**的索引块:最后写的那一块没到上限就用它,否则 ``None``(续一块).
@@ -535,25 +588,26 @@ class Engine:
         self,
         identity: ID,
         hub_name: str,
+        pack_name: str,
         attr_slots: tuple[int, ...],
         body_slots: tuple[int, ...],
     ) -> None:
         """把这次的落点写进身份:**位置段是真源,改一次写一次**.
 
-        位置段只收**这个块自己的槽**:属性槽在前,正文槽在后.
+        位置段只收**这个块自己的槽**:正文槽在前,属性槽在后.
         **引用别处的正文时,那几格不进这里**——它们属于别的 pack,而位置段的槽号
         只对这一份载体成立(2026-10-02 修正裁定).故正文关联记在那一列摘要里.
 
         **索引块里那条正表行占的槽不进这里**——它属于索引块,而"索引块自己搁哪儿"
         写在它自己那张索引表里(`_register_index`).混进来会把位置段搅乱,而且不报错.
 
-        载体名由 hub 当场取一份——一份块**自己**的槽落在同一个 hub,故一个名字就够.
+        载体名是**写入结果**:一个块的全部槽落在同一份载体上,故一个名字就够.
         """
         found: list[list[int]] = []
         if body_slots:
             found.append(list(body_slots))
         found.append(list(attr_slots))
-        identity.place(*found, hub=hub_name, pack=_first_pack(hub_name, self._root))
+        identity.place(*found, hub=hub_name, pack=pack_name)
 
     def _hub_name(self, explicit: str | None) -> str:
         """这一次写进哪个 hub."""
@@ -567,15 +621,6 @@ class Engine:
         """打开一个已有的载体(原地覆盖与读取走这一条;**不新建**)."""
         return Hub.open(self._root / hub_name, max_bytes=self._max_bytes).pack(pack_name)
 
-    def _append_slots(self, hub_name: str, kind: int, chunks: list[bytes]) -> tuple[int, ...]:
-        """把一格一格的内容追加到 hub 里,返回它占的槽号(升序)."""
-        hub = self._open_hub(hub_name)
-        written: list[int] = []
-        for chunk in chunks:
-            _pack_name, slot = hub.append(kind, chunk)
-            written.append(slot)
-        return tuple(written)
-
     def _row_of(self, identity: ID) -> dict[str, object] | None:
         """按身份取库里那一行;没有那一行,或没有那张表即 ``None``(那是首次落盘)."""
         table = identity.name
@@ -583,7 +628,7 @@ class Engine:
             return None
         try:
             return self.index.get(table, identity.value_uuid)
-        except IndexNotFoundError, IndexSchemaError:
+        except IndexNotFoundError:
             return None
 
     # ---- 索引:**由正表现算反表**,索引块只声明参数 ---- #
@@ -653,7 +698,10 @@ class Engine:
         yield from self._identity_rows()
 
     def _index_block_rows(self, owner: type[Any]) -> Iterator[dict[str, object]]:
-        """逐个索引块读出它槽里的正表行:**它也是块,行落在载体的槽上**."""
+        """逐个索引块读出它槽里的正表行:**它也是块,行落在载体的槽上**.
+
+        读不出来即报"对象不在":与按身份读槽同一口径,不让底层异常从索引这一面漏出去.
+        """
         table = owner.__name__.lower()
         try:
             rows = tuple(self.index.rows(table))
@@ -664,9 +712,13 @@ class Engine:
             pack_name = _pack_of(row)
             if not hub_name or not pack_name:
                 continue
-            pack = self._open_pack(hub_name, pack_name)
-            for slot in _slots_of_place(row):
-                parsed = decode_index_row(pack.content_at(slot))
+            try:
+                pack = self._open_pack(hub_name, pack_name)
+                held = [pack.content_at(slot) for slot in _slots_of_place(row)]
+            except (HubNotFoundError, HubShapeError, SlotError, SlotFormatError) as error:
+                raise ObjectNotFoundError(f"索引不在: {pack_name}") from error
+            for content in held:
+                parsed = decode_index_row(content)
                 if parsed is not None:
                     yield parsed
 
@@ -683,7 +735,7 @@ class Engine:
                     yield hub.name, pack.name, number, slot
 
     def scan_slots(self, identity: ID) -> list[Slot]:
-        """按身份读回它**全部槽的原文**(按槽号升序),供命令面交出原文.
+        """按身份读回它**全部槽的原文**(次序照位置段),供命令面交出原文.
 
         Raises:
             ObjectNotFoundError: 库里没有这一行,或它指着的那一格读不出来.
@@ -955,18 +1007,6 @@ def _slots_of(spans: Iterable[SlotSpan | int]) -> tuple[int, ...]:
     return tuple(found)
 
 
-def _first_pack(hub_name: str, root: Path) -> str:
-    """一个 hub 里的载体名.
-
-    **一份块自己的槽落在同一个 hub**,故名字取哪一个都一样;取排序后的第一个,
-    使同一个 hub 里的位置段恒得同一个名字.**引用别处的正文不在其中**:它的坐标
-    记在正文索引的位置行里(hub 名与载体名各记一处).
-    """
-    hub = Hub.open(root / hub_name)
-    names = hub.pack_names()
-    return names[0] if names else ""
-
-
 def _identity_from_row(identity: ID, row: Mapping[str, object]) -> ID:
     """由库里那一行还原块身份:**位置段与正文摘要也一并回填**."""
     restored = ID(
@@ -1082,8 +1122,20 @@ def _new_block(table: str, identity: ID, owner: type[Block] | None = None) -> Bl
             return cls(identity)
         except TypeError:  # pragma: no cover — 签名对不上的类跳过,继续找
             continue
-    generic: type[Block] = type(table.capitalize(), (Block,), {})
-    return generic(identity)
+    return _generic_block(table)(identity)
+
+
+_GENERIC_BLOCKS: dict[str, type[Block]] = {}
+"""按表名现造的通用块类:**一个名字一个类**,免得每读一次未知类型就多一个子类."""
+
+
+def _generic_block(table: str) -> type[Block]:
+    """按表名取(或现造)一个通用块类:那是"不认识的类型降级读回"那条路."""
+    found = _GENERIC_BLOCKS.get(table)
+    if found is None:
+        found = type(table.capitalize(), (Block,), {})
+        _GENERIC_BLOCKS[table] = found
+    return found
 
 
 def known_tables() -> tuple[str, ...]:

@@ -57,13 +57,18 @@ class HubShapeError(StorageError):
 
 
 class IndexNotFoundError(StorageError):
-    """索引库文件不存在.**读路径不建库**:不在就报错,只有显式建立才创建文件."""
+    """索引库文件不存在:打开一个没有库的路径时报它.
+
+    引擎装配那条路是**需要时开**——文件在即 `Index.open`,不在才 `Index.create`——
+    故它只在直接开库的入口上出现.
+    """
 
 
 class IndexSchemaError(StorageError):
     """这个文件不是本程序的索引库(缺 `meta`):**不把它人的 sqlite 当本库用**.
 
-    索引库是可整份重建的投影,但"重建"要显式下令;认不出形状时先拒绝,不做推断.
+    引擎那条路先看文件在不在:在就按:`Index.open` 认形状,认不出即拒开,不做推断;
+    不在才建,故"别人的 sqlite"不会被静默收编.
     """
 
 

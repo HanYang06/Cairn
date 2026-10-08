@@ -3,16 +3,15 @@
 
 # Cairn · 巨石堆
 
+[![CI](https://github.com/HanYang06/Cairn/actions/workflows/ci.yml/badge.svg)](https://github.com/HanYang06/Cairn/actions/workflows/ci.yml)[![CodeQL](https://github.com/HanYang06/Cairn/actions/workflows/codeql.yml/badge.svg)](https://github.com/HanYang06/Cairn/actions/workflows/codeql.yml)[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/HanYang06/Cairn/badge)](https://securityscorecards.dev/viewer/?uri=github.com/HanYang06/Cairn)[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)[![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://www.python.org/downloads/)[![mypy: strict](https://img.shields.io/badge/mypy-strict-blue.svg)](pyproject.toml)[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](.pre-commit-config.yaml)[![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/hanyang06/cairn?utm_source=readme&utm_medium=badge)
+
 > **本地优先的内容寻址对象池** —— 笔记、资产、项目，一台工作台。
+> 一块块往上堆。
 
-一块块往上堆。
-
-```text
-文档站     https://hanyang06.github.io/cairn/
-仓库       https://github.com/HanYang06/cairn
-```
+## 架构
 
 [![Architecture diagram of hanyang06/cairn](https://gitdiagram.com/hanyang06/cairn/diagram.png)](https://gitdiagram.com/hanyang06/cairn?utm_source=readme&utm_medium=picture)
+
 
 ## 定位
 

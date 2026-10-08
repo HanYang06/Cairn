@@ -164,6 +164,21 @@ def test_record_returns_the_raw_slots(api: Api):
         assert raw, "原文不是空的"
 
 
+def test_record_reports_the_real_slot_numbers(api: Api):
+    """`record` 交出的槽号是载体里的**真实格号**,与行里的段列表同一次序(不是下标)."""
+    memo = _stored()
+
+    listed = api.call("rows", {"table": "memo"})
+    found = api.call("record", {"uuid": memo.id.value_uuid})
+
+    assert isinstance(listed, dict)
+    assert isinstance(found, dict)
+    row = listed["rows"][0]
+    assert [entry["slot"] for entry in found["slots"]] == row["slots"]
+    by_kind = {entry["kind"]: entry["slot"] for entry in found["slots"]}
+    assert by_kind["正文槽"] != by_kind["属性槽"]
+
+
 def test_record_separates_the_attributes_from_the_body(api: Api):
     """原文里分得清哪一格是属性,哪一格是正文——判据只在槽头上."""
     memo = _stored()

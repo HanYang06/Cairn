@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "cbor2>=6.1.4",
-    "onconf>=2.0.0",
+    "onconf>=2.1.0a1",
 ]
 
 [dependency-groups]

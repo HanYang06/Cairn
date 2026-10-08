@@ -26,7 +26,7 @@ from core.storage.engine import Block, Engine, bind
 from core.storage.gc import reclaimable_bytes, sweep
 from core.storage.index.bodyindex import BodyIndex
 from core.storage.index.index import CONTENT_FIELD
-from core.storage.pack import ATTR_SLOT, BODY_SLOT
+from core.storage.pack import ATTR_SLOT, BODY_SLOT, HEADER_SIZE
 from core.storage.types import Attr, Body
 
 if TYPE_CHECKING:
@@ -357,6 +357,46 @@ def test_sweep_on_an_empty_vault_does_nothing(tmp_path: Path):
     assert report.reclaimed == 0
     assert report.cancelled is False
     instance.close()
+
+
+def test_sweep_keeps_every_block_in_one_carrier(tmp_path: Path):
+    """回收搬动之后,每个块(含索引块)的槽仍只落在它记的那一份载体上.
+
+    **一份源载体搬进恰好一份目标载体**(2026-10-07 裁定):目标载体在份与份之间
+    轮换会把一个块拆到两处,而库里那一行只记一个载体名.
+    """
+    instance = Engine(tmp_path / "vault", slot_bytes=_SLOT, max_bytes=HEADER_SIZE + 2 * _SLOT)
+    bind(instance)
+    try:
+        keeps = []
+        for index in range(3):
+            memo = _memo(f"留{index}", [f"正文{index}"])
+            memo.save()
+            keeps.append(memo)
+        gone = _memo("要走", ["死正文"])
+        gone.save()
+        gone.delete()
+
+        report = sweep(instance)
+
+        assert report.reclaimed > 0
+        for table in instance.index.tables():
+            if table in {"hub", "meta"}:
+                continue
+            for row in list(instance.index.rows(table)):
+                identity = ID.from_row(row)
+                if not identity.slots:
+                    continue
+                assert instance.scan_slots(identity), f"{table} 的行读不出"
+        bind(None)
+        bind(instance)
+        for index, memo in enumerate(keeps):
+            restored = GcMemo.fetch(memo.id)
+            assert restored.title == f"留{index}"
+            assert restored.lines == [f"正文{index}"]
+    finally:
+        bind(None)
+        instance.close()
 
 
 def test_a_swept_block_reads_back_from_the_new_position(engine: Engine):

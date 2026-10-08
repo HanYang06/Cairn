@@ -238,11 +238,6 @@ class Pack:
         return (self._size - HEADER_SIZE) // self._slot
 
     @property
-    def content_bytes(self) -> int:
-        """一格能装的内容上限:格长减槽头."""
-        return self._slot - SLOT_HEAD_SIZE
-
-    @property
     def content_room(self) -> int:
         """一格能装的内容上限:**格长减槽头**."""
         return self._slot - SLOT_HEAD_SIZE
@@ -291,10 +286,10 @@ class Pack:
         if len(raw) < SLOT_HEAD_SIZE:
             raise SlotFormatError(f"槽头读不满: 第 {slot} 格只读到 {len(raw)} 字节")
         kind, checksum, length, _reserved = _SLOT.unpack(raw[:SLOT_HEAD_SIZE])
-        if length > self.content_bytes:
+        if length > self.content_room:
             raise SlotFormatError(
                 f"内容长度越出格长: 第 {slot} 格声明 {length} 字节，"
-                f"一格最多 {self.content_bytes} 字节"
+                f"一格最多 {self.content_room} 字节"
             )
         content = raw[SLOT_HEAD_SIZE : SLOT_HEAD_SIZE + length]
         if kind != EMPTY_SLOT and (crc32(content) & 0xFFFFFFFF) != checksum:

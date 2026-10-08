@@ -119,8 +119,11 @@ class Index:
         """
         if not path.is_file():
             raise IndexNotFoundError(f"索引库不在: {path}")
-        index = cls(path, sqlite3.connect(path))
+        connection = sqlite3.connect(path)
+        index = cls(path, connection)
         if not index._has_table(META_TABLE):
+            # **拒开之前先关连接**:认不出来就不占着它(GIL 终结器会为未关的连接报警).
+            connection.close()
             raise IndexSchemaError(f"这不是本程序的索引库（缺 {META_TABLE} 表）: {path}")
         index._ensure_base()
         return index
@@ -196,11 +199,14 @@ class Index:
         return None if row is None else dict(zip(names, row, strict=True))
 
     def rows(self, table: str) -> Iterator[dict[str, object]]:
-        """逐行取出——**身份表的取数口**."""
+        """逐行取出——**身份表的取数口**;**次序按 `rowid`(插入序)**.
+
+        引擎挑"最新的索引块"要靠这个次序(`Engine._active_index` 取最后一行),
+        故它明写出来,不听凭 sqlite 的隐含行序.
+        """
         names = columns_of()
-        cursor = self._db.execute(
-            f"SELECT {', '.join(_quote(field) for field in names)} FROM {_quote(table)}"
-        )
+        columns = ", ".join(_quote(field) for field in names)
+        cursor = self._db.execute(f"SELECT {columns} FROM {_quote(table)} ORDER BY rowid")
         for row in cursor:
             yield dict(zip(names, row, strict=True))
 

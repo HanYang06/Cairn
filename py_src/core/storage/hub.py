@@ -169,6 +169,29 @@ class Hub:
                 best = pack
         return best
 
+    def carrier(self, prefer: str | None = None) -> Pack:
+        """给一个块挑一份载体:**它自己那一份优先**,否则活跃载体,再否则新开一份.
+
+        **一个块只挑一次**(2026-10-07 裁定):调用方拿到这一份之后,把该块这一次要写的
+        全部槽都追加进去,中途不再重挑——故一个块不会跨载体.`prefer` 是块在库里记的那
+        一份;**即使它已经封口也照用**:块继续写自己那一份,不叫跨载体;若它不在了
+        (被人删掉)则忽略,另挑一份,旧槽由回收收走.
+
+        Args:
+            prefer: 块自己那一份载体的名字;不给或不在即另挑.
+
+        Returns:
+            这个块这一次要写进去的那一份载体.
+        """
+        if prefer:
+            path = self.packs_dir / prefer
+            if path.is_file():
+                return Pack.open(path, max_bytes=self._max_bytes)
+        pack = self.active()
+        if pack is None:
+            return self.new_pack()
+        return pack
+
     def new_pack(self) -> Pack:
         """新建一份载体:文件名取一个**无语义的随机串**,其真源是文件系统本身.
 
@@ -196,6 +219,8 @@ class Hub:
         """把一个槽追加进本 hub,返回(载体名,槽号).
 
         hub 只负责"选地方":选完就把请求转给 :meth:`Pack.append`,自己不碰字节.
+        **一格天然落在同一份载体上**,故这个方法不涉及"跨不跨"的问题;要一次写好几格
+        (一个块)——先用 :meth:`carrier` 挑定那一份,再逐格调 :meth:`Pack.append`.
 
         **先判再写**:活跃载体封口了就**当场另开一份**,不把这个槽塞进那份满载的.
         若不先判,封口线小到"写一格就满"时,活跃判据会反复挑中同一份,来回摆.

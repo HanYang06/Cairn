@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "generated_by": "onconf",
+  "home": "D:\\Project\\PyProject\\Cairn\\config",
+  "file_name": "settings",
+  "file_type": "json",
+  "no_one_file": false,
+  "log_path": "D:\\Project\\PyProject\\Cairn\\config\\audit.log",
+  "declared_at": "D:\\Project\\PyProject\\Cairn\\py_src\\core\\conf.py:48",
+  "recorded_at": "2026-10-08T18:33:42+00:00",
+  "pid": 1248
+}

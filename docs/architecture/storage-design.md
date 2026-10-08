@@ -327,7 +327,7 @@ vault/
 |---|---|---|---|
 | `core.storage.slot.max.byte.b` | 512 | **格长档位**：每单位 1 字节 | 已实现 |
 | `core.storage.slot.max.byte.kb` | 0 | **格长档位**：每单位 1024 字节 | 已实现 |
-| `core.storage.pack.max.byte` | 2 GiB | **封口线**：单个载体写满这个数即换新的一份 | 已实现 |
+| `core.storage.pack.max.byte` | 2 GiB | **封口线**：单个载体写满这个数即换新的一份；一个块不跨载体，故它也是单块尺寸的自然上限 | 已实现 |
 | `core.storage.hub.default` | `main` | **默认 hub 名**：写入不点名就进这一个 | 已实现 |
 | `core.storage.index.max.byte` | 64 MiB | **一个索引块的上限**：写到这个数由引擎自动续下一块 | 已实现 |
 | `core.storage.gc.auto.byte` | 0 | **自动回收的阈值**（字节）；`0` 即不自动回收 | 已实现（判据函数与阈值都在，自动那一头未接线，见 §8.6） |
@@ -353,10 +353,11 @@ vault/
 identity = block.id
 fields = _fields_of(block)  # 声明字段 + 实例上多出来的
 attrs = encode_attrs(_attrs_of(block, fields))  # 属性：一个块的全部属性
-attr_slot = target_hub.append(ATTR_SLOT, attrs)  # 属性槽，可原地覆盖
-body_slot = target_hub.append(BODY_SLOT, fragment)  # 正文槽，只追加
-in_pack_slot = segments_of(attr_slot, body_slot)  # 段列表：覆盖全部槽
-index.put(identity.name, identity_row(identity, in_pack_slot, body_digest))  # 库是真源
+target = target_hub.carrier(prefer)  # 一个块只挑一份载体：块自己那一份优先
+attr_slot = target.append(ATTR_SLOT, attrs)  # 属性槽，可原地覆盖
+body_slot = target.append(BODY_SLOT, fragment)  # 正文槽，只追加
+identity.place([body_slot], [attr_slot], hub=hub_name, pack=target.name)  # 正文组在前
+index.put(identity.name, identity.to_row())  # 库是真源
 ```
 
 - **属性槽**：一个块的全部属性默认装进**一格**；装不下即占**多格**（多属性槽），
@@ -366,6 +367,8 @@ index.put(identity.name, identity_row(identity, in_pack_slot, body_digest))  # �
   **写侧的次序是"正文槽一段在前、属性槽一段在后"**，而**哪一格是属性、哪一格是正文
   由槽头种类回答**（§8.1）。**引用别处的正文时，那几格不在本块的位置段里**——
   它们在别人的 pack 里，位置记在正文索引的位置行上。
+- **一个块的全部槽落在同一份载体**（2026-10-07 裁定）：写侧一次只挑一份载体（块自己那一份
+  优先），本次要写的全部槽都追加进它；**载体名取自写入结果**，不是猜的。故一个块不跨载体。
 
 **内容按逻辑顺序分片**：分片的顺序由库里那一行的段列表给出，槽上不记片号。
 故一份正文挂在两个不同名字的字段上，仍然只算一份内容——内容的判同取自值，字段名只是装载方式；
@@ -388,7 +391,7 @@ index.put(identity.name, identity_row(identity, in_pack_slot, body_digest))  # �
 |---|---|---|
 | 属性槽 | `encode_attrs` | 映射：字段名 → `{"v": 值}`，正文字段只留 `{"body": true}` 一个标记 |
 | 正文槽 | `encode_attrs` | 映射：`{"cairn.body": [正文那几个字段的值，按字段次序]}`，再按格长切片 |
-| 索引正表行 | `encode_index_row` | 映射：`field` / `issuer` / `value_uuid` / `value` / `hub` / `pack` / `slots`，外加模式标记 `cairn.index.row` |
+| 索引正表行 | `encode_index_row` | 映射：`field` / `value_uuid`（**只有属性那一路有**）/ `value` / `hub` / `pack` / `segments`，外加模式标记 `cairn.index.row` |
 
 **索引行与属性映射靠内容区分**：两者都是 CBOR 映射，故正表行的映射里带一个模式标记
 （`INDEX_ROW_SCHEMA = "cairn.index.row"`）；它带 `cairn.` 前缀与一个点，业务字段名不可能等于它。
@@ -697,6 +700,8 @@ class AttrIndex(Block):
    （新槽落定之后才改库里那一行，故最坏的情形是"两份并存"）；
 4. **挑载体由回收自己办**：它写的是**新的一份**（`Hub.new_pack`），不参与 `hub.active` 的挑选——
    若交给 hub 去挑，它会挑中那些还没清干净的旧载体，把新槽又写回待回收的文件里。
+   **一份源载体的活槽搬进恰好一份目标载体**（2026-10-07 裁定）：一个块的槽都来自同一份
+   源载体，故搬完仍在一起；
    **没有死槽的载体原地不动**，否则每一趟回收都要把整库抄一遍；
 5. **崩在半路不坏库**：新字节全部落盘并核验之后才删旧载体，故最坏的情形是"新旧两份并存、
    白占一份空间"，而两份内容逐字相同——库里的行指着新的那一份，读哪一份都是同一个答案。
@@ -806,6 +811,8 @@ class AttrIndex(Block):
   载体上没有一个字节承载它，座位属于谁由库里那一行的段列表给出；
 - **位置段覆盖该块自己占用的全部槽**，形状是段列表；改一次正文即改这一行；
   **"哪几格是属性"由槽头回答**（§8.1），不是库里的列；
+- **一个块的全部槽在同一份载体里**（2026-10-07 裁定）：载体名只有一处，跨载体就只剩
+  一个名字可用，而那个名字只能猜。回收照同一条走（一份源载体 → 一份目标载体）；
 - **载体的名字在库里只有一处**：那是**这个块自己的槽**所在的那一份；
   **引用别处的正文不在这条里**——它的坐标记在正文索引的位置行上（hub 名与载体名各一处），
   跨 hub 直接引用，不复制一份（§8.4）；
@@ -874,6 +881,7 @@ class AttrIndex(Block):
 | **记录头与记录自框定** | 记录概念作废；格的边界由文件头的格长定出 |
 | **身份段进载体** | 载体上不写一个字节的身份，身份的字段只进索引库 |
 | **位置是「头格与末格」一对** | 位置段是段列表，覆盖该块占用的全部槽；规范形四条（§3） |
+| **一个块跨载体** | 一个块只挑一份载体（块自己那一份优先），`in_hub_pack` 取自写入结果；载体名只有一处，跨载体就只剩一个名字可用，而那个名字只能猜（2026-10-07 裁定） |
 | **`ID.value_hash`** | 身份收敛为 `name` / `value_uuid` / `birth_time`；摘要形态不属于身份 |
 | **`ID.of` / `ID.bind` / `ID.bound` / `ID.same_content` / `EMPTY_HASH`** | 随 `value_hash` 一并退役：正文那一侧的同与不同由摘要与 `BodyIndex` 的位置行负责 |
 | **`attr_in_pack_slot` 那一列** | 属性槽与正文槽的区别落在**槽头**上（载体上每一格本来就写着）；用一列 pack 内坐标去表达"哪几格是属性"是把 pack 内的东西当成了跨 pack 的坐标（2026-10-02 修正裁定） |
