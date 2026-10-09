@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import threading
+import time
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
@@ -157,3 +159,27 @@ def test_markup_only_unit_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
     assert written.count("SPDX-") == 2, "只留头部那两行"
     assert "?" not in written
     assert written.endswith("# 标题\n")
+
+
+def test_translate_all_is_concurrent_and_ordered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """并发要真并发,顺序要真顺序.
+
+    顺序错了不是慢,是**错文**——译文按段落拼回页面,`map` 必须把结果放回原位.
+    并发与否用"有没有用到多个线程"来判,不算墙钟(计时用例在 CI 上飘).
+    """
+    threads: set[str] = set()
+
+    def fake(text: str, **_kwargs: object) -> str:
+        threads.add(threading.current_thread().name)
+        time.sleep(0.02)
+        return text.upper()
+
+    monkeypatch.setattr(TOOL, "_translate", fake)
+    payloads = [f"第{i}段" for i in range(32)]
+
+    assert TOOL._translate_all(payloads, jobs=1) == [p.upper() for p in payloads]
+    assert len(threads) == 1, "jobs=1 该是串行"
+    threads.clear()
+
+    assert TOOL._translate_all(payloads, jobs=8) == [p.upper() for p in payloads]
+    assert len(threads) > 1, "jobs=8 却只用了一个线程,说明没并起来"

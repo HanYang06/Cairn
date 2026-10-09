@@ -21,6 +21,7 @@
     uv run python scripts/translate.py --list            # 只报账:哪些页待译,多少字符
     uv run python scripts/translate.py --check           # 门禁:英文落后于中文即非零退出
     uv run python scripts/translate.py                   # 译"缺失或落后"的页
+    uv run python scripts/translate.py --jobs 4          # 并发送译的线程数(默认 8)
     uv run python scripts/translate.py --stamp           # 只给手写英文页补摘要行(不重译)
     uv run python scripts/translate.py --force           # 全部重译(连已一致的)
     uv run python scripts/translate.py --force 页面...   # 重译指定页
@@ -40,6 +41,7 @@ import os
 import re
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,6 +65,12 @@ ENDPOINT = "mt.cn-hangzhou.aliyuncs.com"
 
 #: 单次请求的字符上限(官方文档:5000);留余量,占位符与标点也要算进去
 _MAX_CHUNK = 4000
+
+#: 并发送译的线程数.
+#: 一次往返约 1.1 秒(实测),而文档给的 QPS 上限是 50——**串行时我们只用了 1/50**,
+#: 于是 14 页跑了 13 分钟(2026-10-10 实测 709 次请求 / 777 秒).8 路约 8 QPS,
+#: 离上限有余量,整批随之降到两分钟上下;要更快用 `--jobs`(仍须留意额度与限流).
+_WORKERS = 8
 
 #: 原文摘要行:插在 SPDX 头之后
 _HASH_LINE = "<!-- translation-source-hash: {digest} -->"
@@ -361,22 +369,53 @@ def _translatable(payload: str) -> bool:
     return re.search(r"\w", payload) is not None
 
 
-def _translate_page(text: str, *, sent: list[int]) -> str:
-    """把一页的正文译成英文,结构原样保留."""
-    out: list[str] = []
-    for unit in _units(text):
+def _translate_all(payloads: list[str], *, jobs: int) -> list[str]:
+    """并发送译一批,返回**与入参同序**的译文.
+
+    并发只在这里,也只对"互不相干的段落":`urllib` 是阻塞的,等 I/O 时 GIL 让得出去,
+    故线程池就够,不必上异步.顺序由 `map` 保证——译文是逐段落拼回页面的,错序即错文.
+    """
+
+    def one(payload: str) -> str:
+        return _translate(payload, source_lang="zh", target_lang="en")
+
+    if jobs <= 1 or len(payloads) <= 1:
+        return [one(payload) for payload in payloads]
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        return list(pool.map(one, payloads))
+
+
+def _translate_page(text: str, *, sent: list[int], jobs: int = _WORKERS) -> str:
+    """把一页的正文译成英文,结构原样保留.
+
+    先**按顺序**把整页切成"原样保留"与"要译"两种片段,再一次性并发送译后者,
+    最后照原顺序拼回来——故并发不影响段落次序.只剩占位符/标点的那一份不送.
+    """
+    units = _units(text)
+    stores: list[list[str] | None] = []
+    payloads: list[str] = []
+    todo: list[int] = []
+    for unit in units:
         if unit.keep:
-            out.extend(unit.lines)
+            stores.append(None)
+            payloads.append("")
             continue
         store: list[str] = []
-        prepared = [_protect(line, store) for line in unit.lines]
-        payload = "\n".join(prepared)
+        payload = "\n".join(_protect(line, store) for line in unit.lines)
+        stores.append(store)
+        payloads.append(payload)
         if _translatable(payload):
-            sent.append(len(payload))
-            translated = _translate(payload, source_lang="zh", target_lang="en")
-        else:
-            translated = payload
-        out.extend(_restore(line, store) for line in translated.splitlines())
+            todo.append(len(stores) - 1)
+    sent.extend(len(payloads[at]) for at in todo)
+    fresh = _translate_all([payloads[at] for at in todo], jobs=jobs)
+    for at, translated in zip(todo, fresh, strict=True):
+        payloads[at] = translated
+    out: list[str] = []
+    for unit, tokens, payload in zip(units, stores, payloads, strict=True):
+        if tokens is None:
+            out.extend(unit.lines)
+            continue
+        out.extend(_restore(line, tokens) for line in payload.splitlines())
     return "\n".join(out) + "\n"
 
 
@@ -487,6 +526,12 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="自检：只送两个字符并打印原始响应（排查凭证 / 签名 / 端点用，几乎不耗额度）",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=_WORKERS,
+        help=f"并发送译的线程数（默认 {_WORKERS}；接口 QPS 上限 50，调高前先看额度与限流）",
+    )
     parser.add_argument("pages", nargs="*", help="只处理这些页（仓库相对路径，可省）")
     args = parser.parse_args(argv)
 
@@ -520,7 +565,7 @@ def main(argv: list[str]) -> int:
 
     sent: list[int] = []
     for page in planned:
-        translated = _translate_page(page.text, sent=sent)
+        translated = _translate_page(page.text, sent=sent, jobs=args.jobs)
         page.target.write_text(_with_header(page, translated), encoding="utf-8")
         _say(f"[translate] 已生成 {page.target.relative_to(ROOT).as_posix()}")
     _say(f"[translate] {len(planned)} 页完成，送译 {sum(sent)} 字符（免费额度 100 万/月）。")
