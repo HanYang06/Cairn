@@ -194,6 +194,11 @@ jobs:
           git add docs
           git commit -m "docs(i18n): 补机器翻译的英文译文"
           git push origin "$branch"
+          # 推完分支**别立刻开 PR**：实测有一次 PR 事件在创建那一秒就失败，GitHub 给的理由是
+          # "workflow file issue"，而那次 `jobs` 数是 **0**（run 38005731459 / 38005731431，
+          # head 正是刚推上去的那个提交）——同一个分支下一次 push 再跑就全绿。等一会儿，
+          # 让 GitHub 先索引到分支上的工作流文件，免得机器人开出的 PR 头一次检查是红的。
+          sleep 20
           body="由 \`scripts/translate.py\`（阿里云机器翻译通用版）生成。"
           body="$body"$'\n\n'"**请人工过一遍术语**：块 / 槽 / 载体 / 摘要 / 落点 这几个词在任何语境下都必须是同一个译法（对照 \`docs/reference/glossary.md\`）。"
           body="$body"$'\n\n'"机翻只译正文；代码块、链接路径与导航标签原样保留。"
