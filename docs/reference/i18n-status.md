@@ -77,9 +77,11 @@
 ```powershell
 uv run python scripts/translate.py --list      # 报账：哪些页待译、多少字符
 uv run python scripts/translate.py --check     # 门禁：英文落后于中文即非零退出
+uv run python scripts/translate.py --report    # 报账：与 --check 同判据，但不判失败
 uv run python scripts/translate.py             # 译"缺失或落后"的页
 uv run python scripts/translate.py --stamp     # 只给手写英文页补摘要行（不重译）
 uv run python scripts/translate.py --force     # 全部重译（连已一致的）
+uv run python scripts/translate.py --probe     # 端点自检：只送两个字符，验凭证 / 签名 / 端点
 ```
 
 **额度与设置**：机器翻译通用版对**主账号每月 100 万字符**免费，超出 50 元/百万字符。
@@ -89,8 +91,15 @@ CI 需要一对**只授 `alimt:TranslateGeneral` 的 RAM AK**（不要用主账�
 没配就整个跳过补译，`merge` 不受影响。
 
 **漂移怎么判**：英文文件头有一条 `<!-- translation-source-hash: … -->`，内容是中文原文的摘要。
-`--check` 拿它对；对不上即"英文落后"。当前还有 14 页未译，故该检查在
-`.github/workflows/translate.yml` 里先设 `continue-on-error`——**译文补齐后删掉那一行即成门禁**。
+`--check` 拿它对；对不上即"英文落后"。当前还有 14 页未译，故工作流里跑的是 `--report`
+（**判据与 `--check` 完全同一套，只是不判失败**）——14 页译完后把 `--report` 换回 `--check`
+即成真门禁。**不要改用 `continue-on-error`**：写在 step 上与 job 级**都不改 job 结论**，实测两次仍报失败。
+
+**端点自检**：`--probe` 只送两个字符，一次说清"凭证对不对、签名认不认、端点通不通"。它跑在两处——
+`translate` job 里（花额度之前先自检），以及 PR 上的 `probe` job。后者限**同仓库分支**，
+fork 的 PR 事件拿不到 secret。**为什么单拉一个 job**：`translate` 在 PR 上被 `if` 跳过
+（它要建分支、开 PR，PR 上不该有第二个写者），若探针只住在它里面，"请求装配改对了没有"
+在分支上就永远没有答案，只能等合并后在主干上第一次真跑——红过两次都是这么来的。
 
 动配置之前先知道两条构建口径：
 

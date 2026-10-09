@@ -4,9 +4,12 @@
 # 英文译文：中文是事实基础（作者亲手写），英文是**机器翻译的产物**。
 # 口径见 `docs/reference/i18n-status.md` 与 `.agents/skills/rules/references/docs.md`「多语言文档」。
 #
-# 两件事分开跑，因为它们的前提不同：
+# 三件事分开跑，因为它们的前提不同：
 #
 # - **`drift`（不需要凭证）**：中文改了、英文没跟上就红。这是门禁，可在分支上立刻看到。
+# - **`probe`（需要凭证，只读）**：同仓库分支的 PR 上只送两个字符验端点。单拉一 job 的
+#   理由是下面那条：`translate` 在 PR 上被 `if` 跳过，若探针只住在它里面，"请求装配改对了
+#   没有"在分支上就永远没有答案——只能等合并后在主干上第一次真跑（红过两次就是这么来的）。
 # - **`translate`（需要阿里云凭证）**：补译缺失的页，**开 PR** 交人工校术语，不直推 `main`。
 #
 # 凭证（仓库 secret，二选一的名字都对不上就整个跳过）：
@@ -72,6 +75,46 @@ jobs:
 
       - name: Pending pages (always visible in the log)
         run: uv run python scripts/translate.py --list
+
+  probe:
+    name: probe (端点自检)
+    # 只跑同仓库分支的 PR：fork 的 PR 事件拿不到 secret（拿不到时那一步本来也会跳过，
+    # 这里只是把意图写明，并省下一次空转的 runner）。
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Check credentials
+        id: creds
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$ALIBABA_CLOUD_ACCESS_KEY_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::未配置 ALIBABA_CLOUD_ACCESS_KEY_ID，跳过探针。"
+          fi
+
+      # 与 `translate` job 里那一步同一命令：只送两个字符，不写任何文件、不开 PR。
+      - name: Probe the endpoint
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: uv run python scripts/translate.py --probe
 
   translate:
     name: translate (补译 → 开 PR)
