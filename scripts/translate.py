@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,8 +56,9 @@ from tools._iosafe import _say  # noqa: E402 — 见上:先补路径再导入
 DOCS = ROOT / "docs"
 SUFFIX = ".en.md"
 
-#: 阿里云机器翻译通用版的区域与端点(国内站)
-REGION = "cn-hangzhou"
+#: 阿里云机器翻译通用版的端点(国内站,杭州).
+#: **不带 `RegionId` 参数**:它属公共请求参数,但 `TranslateGeneral`(2018-10-12)
+#: 不认它;带上会拿到一个既非 200 码,又没有 `Data` 的响应,白花一次调用.
 ENDPOINT = "mt.cn-hangzhou.aliyuncs.com"
 
 #: 单次请求的字符上限(官方文档:5000);留余量,占位符与标点也要算进去
@@ -273,7 +274,6 @@ def _request(source_text: str, *, source_lang: str, target_lang: str) -> dict[st
         "SignatureVersion": "1.0",
         "SignatureNonce": str(uuid.uuid4()),
         "Timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "RegionId": REGION,
         "FormatType": "text",
         "Scene": "general",
         "SourceLanguage": _LANGS[source_lang],
@@ -281,16 +281,29 @@ def _request(source_text: str, *, source_lang: str, target_lang: str) -> dict[st
         "SourceText": source_text,
     }
     params["Signature"] = _signature(params, key_secret)
-    url = f"https://{ENDPOINT}/?{urlencode(params)}"
+    # **自己拼查询串,不走 `urlencode`**:签名里的百分号编码按 RFC3986(空格 = `%20`),
+    # 而 `urlencode` 默认把空格写成 `+`.
+    # 且 **`Signature` 本身不再编码**:阿里云文档给的是
+    # `url += "&Signature=" + percentEncode(signature)` 之后又原样拼进链接的写法,
+    # 而 SDK 的等价做法是"值不编码".实测把 `+` `/` `=` 再编码会让服务端验签失败——
+    # 表现为 HTTP 200 却没有 `Data.Translated`(线上就是这么红的).
+    query = "&".join(
+        f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in params.items() if k != "Signature"
+    )
+    url = f"https://{ENDPOINT}/?{query}&Signature={params['Signature']}"
     try:
         # 端点是本模块的常量(`https://mt.cn-hangzhou.aliyuncs.com/`),不由外部输入决定.
         with urlopen(url, timeout=30) as response:
-            payload: dict[str, object] = json.loads(response.read().decode("utf-8"))
+            raw = response.read().decode("utf-8")
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")[:300]
         raise RuntimeError(f"翻译接口 HTTP {error.code}：{detail}") from error
     except URLError as error:
         raise RuntimeError(f"翻译接口连不上：{error.reason}") from error
+    try:
+        payload: dict[str, object] = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"翻译接口返回的不是 JSON：{raw[:300]}") from error
     return payload
 
 
@@ -298,13 +311,16 @@ def _translate(source: str, *, source_lang: str, target_lang: str) -> str:
     """调一次通用版翻译;返回译文.失败即抛,由调用方决定怎么报."""
     payload = _request(source, source_lang=source_lang, target_lang=target_lang)
     if payload.get("Code") != 200:
-        raise RuntimeError(
-            f"翻译接口返回异常：code={payload.get('Code')} message={payload.get('Message')}"
-        )
+        raise RuntimeError(f"翻译接口返回异常：{_brief(payload)}")
     data = payload.get("Data")
     if not isinstance(data, dict) or not data.get("Translated"):
-        raise RuntimeError(f"翻译接口返回异常：{json.dumps(payload, ensure_ascii=False)[:300]}")
+        raise RuntimeError(f"翻译接口返回异常：{_brief(payload)}")
     return str(data["Translated"])
+
+
+def _brief(payload: dict[str, object]) -> str:
+    """把响应压成一行便于看日志(完整 JSON 可能很长,且含不了什么机密)."""
+    return json.dumps(payload, ensure_ascii=False)[:500]
 
 
 def _translate_page(text: str, *, sent: list[int]) -> str:
@@ -381,8 +397,13 @@ def _stamp(pages: list[Doc]) -> int:
     return count
 
 
-def _check(pages: list[Doc]) -> int:
-    """门禁:英文缺失或落后于中文即失败."""
+def _check(pages: list[Doc], *, strict: bool = True) -> int:
+    """门禁:英文缺失或落后于中文即失败;`strict=False` 时只报账,不失败.
+
+    `strict=False` 是给 CI 用的过渡态:译文还没补齐时,工作流**不能红**
+    (`continue-on-error` 在 job 级也只改展示,不改结论,实测无效),
+    故先跑非阻断的报账;等 14 页译完,把工作流那一步换成默认(strict)即成真门禁.
+    """
     stale: list[str] = []
     for page in pages:
         target = page.target
@@ -397,8 +418,9 @@ def _check(pages: list[Doc]) -> int:
     for item in stale:
         _say(f"[translate] {item}")
     if stale:
-        _say(f"[translate] 共 {len(stale)} 页待译/待更新:跑 `uv run python scripts/translate.py`。")
-        return 1
+        tail = "跑 `uv run python scripts/translate.py`。" if strict else "（报账模式，不判失败）"
+        _say(f"[translate] 共 {len(stale)} 页待译/待更新：{tail}")
+        return 1 if strict else 0
     _say(f"[translate] {len(pages)} 页译文与原文一致。")
     return 0
 
@@ -408,11 +430,21 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="英文译文生成器（阿里云机器翻译）")
     parser.add_argument("--list", action="store_true", help="只列出待译页与字符量")
     parser.add_argument("--check", action="store_true", help="门禁：英文落后于中文即非零退出")
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="报账：与 --check 同判据，但**不判失败**（译文补齐前的过渡态用）",
+    )
     parser.add_argument("--force", action="store_true", help="连已一致的英文页一起重译")
     parser.add_argument(
         "--stamp",
         action="store_true",
         help="只给已有的手写英文页补摘要行（不重译正文），让它纳入漂移追踪",
+    )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="自检：只送两个字符并打印原始响应（排查凭证 / 签名 / 端点用，几乎不耗额度）",
     )
     parser.add_argument("pages", nargs="*", help="只处理这些页（仓库相对路径，可省）")
     args = parser.parse_args(argv)
@@ -422,12 +454,19 @@ def main(argv: list[str]) -> int:
         wanted = {p.replace("\\", "/") for p in args.pages}
         pages = [p for p in pages if p.rel in wanted]
 
-    if args.check:
-        return _check(_source_pages())
+    if args.check or args.report:
+        return _check(_source_pages(), strict=not args.report)
     if args.stamp:
         count = _stamp(pages)
         _say(f"[translate] 共补 {count} 页摘要行。")
         return 0
+    if args.probe:
+        # 只送两个字符:足以验明"凭证对不对,签名认不认,端点通不通",几乎不耗额度.
+        payload = _request("你好", source_lang="zh", target_lang="en")
+        _say(f"[translate] 探针响应：{_brief(payload)}")
+        data = payload.get("Data")
+        ok = payload.get("Code") == 200 and isinstance(data, dict) and data.get("Translated")
+        return 0 if ok else 1
 
     planned = _planned(pages, force=args.force)
     if args.list or not planned:

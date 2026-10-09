@@ -63,11 +63,12 @@ jobs:
       - name: Sync dependencies
         run: uv sync
 
-      # 现在还有 14 页没译，故这一步先不阻断（`continue-on-error`）：
-      # 等译文补齐、`--check` 转绿之后，把这一行删掉即成门禁。
+      # 还有 14 页没译，故这一步先跑**报账模式**（与 `--check` 同一判据，但不判失败）。
+      # 为什么不写 `continue-on-error`：写在 step 上与 job 级**都不改 job 结论**
+      # ——两次实测都仍报 failure。故改由脚本提供一个"报账不失败"的模式。
+      # 等 14 页译完，把 `--report` 换成 `--check` 即成真门禁。
       - name: Translation drift
-        continue-on-error: true
-        run: uv run python scripts/translate.py --check
+        run: uv run python scripts/translate.py --report
 
       - name: Pending pages (always visible in the log)
         run: uv run python scripts/translate.py --list
@@ -103,6 +104,15 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "::notice::未配置 ALIBABA_CLOUD_ACCESS_KEY_ID，跳过补译。"
           fi
+
+      # 先探针后翻译：探针只送两个字符，却能一次说清"凭证对不对、签名认不认、端点通不通"。
+      # 它失败即整个 job 失败（这正是想要的：带着诊断信息的红，比译到一半炸更好查）。
+      - name: Probe the endpoint
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: uv run python scripts/translate.py --probe
 
       - name: Translate
         id: run
