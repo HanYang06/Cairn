@@ -307,10 +307,22 @@ def _request(source_text: str, *, source_lang: str, target_lang: str) -> dict[st
     return payload
 
 
+def _succeeded(payload: dict[str, object]) -> bool:
+    """这个响应算不算成功.
+
+    **`Code` 要按字符串比**:本接口把 `Code` 当字符串返回(实测 `"Code": "200"`,
+    不是整数 `200`),而 `Data.WordCount` 也是字符串.按整数比会把成功的响应当成失败
+    ——探针与 `_translate` 都踩在同一处,线上表现为"探针里译文都拿到了却仍退出 1".
+    先归一成字符串再比,整数写法与字符串写法都认,免得接口哪天改回去时又坏一次.
+    """
+    code = payload.get("Code")
+    return str(code) == "200"
+
+
 def _translate(source: str, *, source_lang: str, target_lang: str) -> str:
     """调一次通用版翻译;返回译文.失败即抛,由调用方决定怎么报."""
     payload = _request(source, source_lang=source_lang, target_lang=target_lang)
-    if payload.get("Code") != 200:
+    if not _succeeded(payload):
         raise RuntimeError(f"翻译接口返回异常：{_brief(payload)}")
     data = payload.get("Data")
     if not isinstance(data, dict) or not data.get("Translated"):
@@ -465,7 +477,7 @@ def main(argv: list[str]) -> int:
         payload = _request("你好", source_lang="zh", target_lang="en")
         _say(f"[translate] 探针响应：{_brief(payload)}")
         data = payload.get("Data")
-        ok = payload.get("Code") == 200 and isinstance(data, dict) and data.get("Translated")
+        ok = _succeeded(payload) and isinstance(data, dict) and bool(data.get("Translated"))
         return 0 if ok else 1
 
     planned = _planned(pages, force=args.force)
