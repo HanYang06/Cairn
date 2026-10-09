@@ -91,9 +91,11 @@ and the page carries no marker saying so. Treat the table above as the marker.
 ```powershell
 uv run python scripts/translate.py --list      # report: which pages are pending, how many characters
 uv run python scripts/translate.py --check     # gate: a stale English page exits non-zero
+uv run python scripts/translate.py --report    # same test as --check, but never fails
 uv run python scripts/translate.py             # translate the missing or stale pages
 uv run python scripts/translate.py --stamp     # add the digest line to hand-written pages only
 uv run python scripts/translate.py --force     # re-translate everything, matched pages included
+uv run python scripts/translate.py --probe     # endpoint self-check: two characters, credentials / signature / endpoint
 ```
 
 **Quota and setup**: the general-purpose edition gives the **main account 1,000,000 free characters
@@ -105,9 +107,20 @@ are absent the whole translation job is skipped and merging is unaffected.
 
 **How drift is detected**: the head of every English file carries
 `<!-- translation-source-hash: … -->`, a digest of the Chinese source. `--check` compares the two and
-reports a stale page when they differ. Fourteen pages are still untranslated, so that check runs with
-`continue-on-error` in `.github/workflows/translate.yml` for now — **removing that one line turns it
-into a gate** once the translations are in.
+reports a stale page when they differ. Fourteen pages are still untranslated, so the workflow runs
+`--report` instead — **the very same test as `--check`, only it does not fail the job** — and putting
+`--check` back turns it into a real gate once the translations are in. Do **not** reach for
+`continue-on-error`: on the step and on the job alike it leaves the job's conclusion unchanged, and was
+measured twice still reporting failure.
+
+**Endpoint self-check**: `--probe` sends two characters and answers "are the credentials right, does the
+signature pass, is the endpoint reachable" in one call. It runs in two places — inside the `translate`
+job, before any quota is spent, and in a dedicated `probe` job on pull requests, limited to **branches in
+this repository** because a fork's pull request never receives the secrets. **Why a job of its own**: the
+`translate` job is skipped on pull requests by an `if` (it creates a branch and opens a pull request, and
+a pull request should not have a second writer), so if the probe lived only inside it, "did the request
+assembly get fixed?" would never have an answer on a branch — the first real run would be on `main` after
+the merge, which is exactly how both red runs happened.
 
 Two build details worth knowing before touching the config:
 
