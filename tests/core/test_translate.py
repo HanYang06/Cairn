@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import threading
+import time
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
@@ -125,3 +127,59 @@ def test_translate_page_roundtrip_keeps_structure(monkeypatch: pytest.MonkeyPatc
         "| a | b |\n|---|---|\n| 1 | 2 |\n"
     )
     assert TOOL._translate_page(text, sent=[]) == text
+
+
+def test_markup_only_unit_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """只剩占位符/标点的那一行不送译:送了会被机翻吐成 `?`,许可头就是这么失效的.
+
+    2026-10-10 那批 14 页全带同一个疤——英文页第 4 行一个 `?`,第 5 行多出一条
+    `SPDX-License-Identifier`,根因就是中文页开头那两行 SPDX 注释被整行送了译.
+    """
+    seen: list[str] = []
+
+    def fake(text: str, **_kwargs: object) -> str:
+        seen.append(text)
+        return text
+
+    monkeypatch.setattr(TOOL, "_translate", fake)
+    source = (
+        "<!-- SPDX-FileCopyrightText: 2026 HanYang06 -->\n"
+        "<!-- SPDX-License-Identifier: Apache-2.0 -->\n"
+        "\n"
+        "# 标题\n"
+    )
+    body = TOOL._translate_page(source, sent=[])
+
+    assert body == source, "不送译的那一份必须原样放过"
+    assert all("SPDX" not in text for text in seen), "许可注释那两行不该出现在送译的文本里"
+    assert any("标题" in text for text in seen), "该译的正文仍要送"
+
+    page = TOOL.Doc(path=Path("docs/x.md"), text=source)
+    written = TOOL._with_header(page, body)
+    assert written.count("SPDX-") == 2, "只留头部那两行"
+    assert "?" not in written
+    assert written.endswith("# 标题\n")
+
+
+def test_translate_all_is_concurrent_and_ordered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """并发要真并发,顺序要真顺序.
+
+    顺序错了不是慢,是**错文**——译文按段落拼回页面,`map` 必须把结果放回原位.
+    并发与否用"有没有用到多个线程"来判,不算墙钟(计时用例在 CI 上飘).
+    """
+    threads: set[str] = set()
+
+    def fake(text: str, **_kwargs: object) -> str:
+        threads.add(threading.current_thread().name)
+        time.sleep(0.02)
+        return text.upper()
+
+    monkeypatch.setattr(TOOL, "_translate", fake)
+    payloads = [f"第{i}段" for i in range(32)]
+
+    assert TOOL._translate_all(payloads, jobs=1) == [p.upper() for p in payloads]
+    assert len(threads) == 1, "jobs=1 该是串行"
+    threads.clear()
+
+    assert TOOL._translate_all(payloads, jobs=8) == [p.upper() for p in payloads]
+    assert len(threads) > 1, "jobs=8 却只用了一个线程,说明没并起来"
