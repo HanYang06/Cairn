@@ -63,9 +63,10 @@ and the page carries no marker saying so. Treat the table above as the marker.
 1. Write or update the **Chinese** page (`docs/path/page.md`). **It is the original**, and the
    terminology is coined there.
 2. English is produced as `docs/path/page.en.md` by `scripts/translate.py` using **machine
-   translation** (Alibaba Cloud Machine Translation, `TranslateGeneral`; the RPC signature is
-   computed with the standard library, so **no SDK is pulled in**). Three hard constraints are
-   enforced in the script:
+   translation** (Alibaba Cloud Machine Translation, `TranslateGeneral`; **both the signature and the
+   request shape are copied from the official SDK**, which is not pulled in: `POST` with a form body,
+   so the prose never enters the URL, and the signature itself is percent-encoded once). Three hard
+   constraints are enforced in the script:
    - **translate the prose only**: fenced code blocks are kept whole, and inline code, links, images
      and bare URLs are lifted into placeholders and put back afterwards (translating them breaks
      links and anchors); table separator rows are left alone;
@@ -121,6 +122,18 @@ this repository** because a fork's pull request never receives the secrets. **Wh
 a pull request should not have a second writer), so if the probe lived only inside it, "did the request
 assembly get fixed?" would never have an answer on a branch — the first real run would be on `main` after
 the merge, which is exactly how both red runs happened.
+
+**Two triggers, one job each** (so the same tree is not scanned twice): `drift` and `probe` run **on pull
+requests only** — they are the checks that must be visible before a merge — while a `push` to `main` runs
+the **writer** alone (translate → open a pull request), because that is the one that changes the
+repository. How many pages are still pending on `main` is in the writer's own log, so there is nothing to
+scan again. Touching the workflow file itself does not trigger a `main` translation either (it is absent
+from the `push` `paths`; the pull-request side keeps it, so a change to it is still exercised before the
+merge).
+
+**How to exercise the whole path before merging**: `workflow_dispatch` with `dry=true` really calls the
+API for the whole batch but **commits nothing and opens no pull request** — the writer only runs on a
+`main` push, so this is the one place where the translation path can be run for real before the merge.
 
 Two build details worth knowing before touching the config:
 

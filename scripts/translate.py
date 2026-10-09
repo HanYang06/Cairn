@@ -225,11 +225,15 @@ def _units(text: str) -> list[Unit]:
 
 
 # ---- 翻译 ----
-# 阿里云 RPC 风格接口的签名**自己算**,不引官方 SDK:
-# ① 签名算法就三步(HMAC-SHA1 + RFC3986 百分号编码),官方给了纯标准库的示例;
-# ② SDK 会拖进三十来个传递依赖,而这里只需要"一个 HTTPS GET";
-# ③ 引了它还得在 deptry / mypy 上开豁免(dev 依赖被产品代码 import,tea 是传递依赖),
-#    而那两条规则本来是对的——不该为了让一个开发脚本进来就放宽它们.
+# 阿里云 RPC 风格接口**自己发请求,不引官方 SDK**:`alibabacloud_alimt20181012` 实测拖进
+# 三十来个传递依赖,且会被 deptry / mypy 正确判成"dev 依赖被产品代码 import"与
+# "用了传递依赖却没声明"——那两条规则本来是对的,不该为一个开发脚本放宽.
+# 照抄的是 SDK 的两件事(2026-10-10 读 `alibabacloud_tea_openapi` 与
+# `alibabacloud_openapi_util` 的源码得来):
+# ① **请求形状**:`method='POST'`,`req_body_type='formData'`,业务参数(含正文)进表单 body;
+# ② **签名三步**(HMAC-SHA1 + RFC3986 百分号编码):参数名与值各编一次,排序拼串,
+#    再整体编一次——`alibabacloud_openapi_util.get_rpcsignature` 就是这么写的,
+#    与本模块的 `_signature` 逐字等价.
 # 算法依据:https://help.aliyun.com/zh/ocr/developer-reference/signature-method
 
 
@@ -238,7 +242,7 @@ def _percent_encode(value: str) -> str:
     return quote(value, safe="~")
 
 
-def _signature(params: dict[str, str], secret: str, method: str = "GET") -> str:
+def _signature(params: dict[str, str], secret: str, method: str = "POST") -> str:
     """按阿里云 RPC 规则算签名(参数名与值各编一次,再整体编一次).
 
     这里用 HMAC-SHA1 **是接口规范规定的,不是可选的强度选择**:`SignatureMethod`
@@ -280,24 +284,35 @@ def _request(source_text: str, *, source_lang: str, target_lang: str) -> dict[st
         "TargetLanguage": _LANGS[target_lang],
         "SourceText": source_text,
     }
-    params["Signature"] = _signature(params, key_secret)
-    # **自己拼查询串,不走 `urlencode`**:签名里的百分号编码按 RFC3986(空格 = `%20`),
-    # 而 `urlencode` 默认把空格写成 `+`.
-    # 且 **`Signature` 本身不再编码**:阿里云文档给的是
-    # `url += "&Signature=" + percentEncode(signature)` 之后又原样拼进链接的写法,
-    # 而 SDK 的等价做法是"值不编码".实测把 `+` `/` `=` 再编码会让服务端验签失败——
-    # 表现为 HTTP 200 却没有 `Data.Translated`(线上就是这么红的).
-    query = "&".join(
+    params["Signature"] = _signature(params, key_secret, method="POST")
+    # **请求形状照官方 SDK 来**:`TranslateGeneral` 在 SDK 里是
+    # `method='POST'`,`req_body_type='formData'`,业务参数(含 `SourceText`)进**表单 body**.
+    # 这一点很要紧:此前把整段正文 GET 到查询串里,最长的一条请求行 17 KB,
+    # 而正文只该出现在 body 里.
+    #
+    # `Signature` 放查询串(老式 RPC 规范),且**必须按值编码一次**:base64 里会出现
+    # `+` / `/` / `=`,而裸 `+` 到服务端会被表单式解码还原成空格,验签随即失败——
+    # 报 `HTTP 400 Specified signature is not matched with our calculation`.
+    # 这个坑**只在签名恰好带 `+` 时发作**(实测 64 个签名里 16 个带),故两个字符的探针
+    # 常常蒙对,而一整页几十次调用必踩:2026-10-10 主干上"一页都没译成"即此.
+    # 官方示例是 `url += "&Signature=" + percentEncode(signature)`,**编一次**;别编两次.
+    form = "&".join(
         f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in params.items() if k != "Signature"
     )
-    url = f"https://{ENDPOINT}/?{query}&Signature={params['Signature']}"
+    url = f"https://{ENDPOINT}/?Signature={_percent_encode(params['Signature'])}"
     try:
-        # 端点是本模块的常量(`https://mt.cn-hangzhou.aliyuncs.com/`),不由外部输入决定.
-        with urlopen(url, timeout=30) as response:
+        # `urlopen` 带 `data` 即 POST(方法不必显式给),`Content-Type` 由它按惯例补成
+        # `application/x-www-form-urlencoded`;端点是本模块的常量,不由外部输入决定.
+        with urlopen(url, data=form.encode("utf-8"), timeout=30) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"翻译接口 HTTP {error.code}：{detail}") from error
+        # 验签类失败最难查:把表单长度与"签名里有哪些要编码的字符"一并记下
+        # (只记字符与个数,不记签名原文).
+        marks = "".join(f"{ch}×{params['Signature'].count(ch)}" for ch in "+/=")
+        raise RuntimeError(
+            f"翻译接口 HTTP {error.code}（表单 {len(form)} 字节；签名含 {marks}）：{detail}"
+        ) from error
     except URLError as error:
         raise RuntimeError(f"翻译接口连不上：{error.reason}") from error
     try:

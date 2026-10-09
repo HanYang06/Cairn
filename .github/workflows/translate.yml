@@ -29,19 +29,24 @@ on:
       - "docs/**"
       - "scripts/translate.py"
       - ".github/workflows/translate.yml"
-  # 主干上补译 → 开 PR
+  # 主干上补译 → 开 PR。
+  # **不含工作流自己那条路径**：改 CI 不该花额度去补译（PR 那侧仍含它，好让改动在合并前被跑到）。
   push:
     branches: [main]
     paths:
       - "docs/**"
       - "scripts/translate.py"
-      - ".github/workflows/translate.yml"
   workflow_dispatch:
     inputs:
       base:
         description: "译文的 PR 目标分支（留空 = 触发这份工作流的分支）"
         required: false
         type: string
+      dry:
+        description: "只跑补译、不提交不开 PR（在分支上验装配用；真调接口，会耗额度）"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,6 +58,10 @@ concurrency:
 jobs:
   drift:
     name: drift (译文是否落后)
+    # **只在 PR 上扫**：合入 main 的那次 push 与 PR 上那次是同一棵树（merge 与 squash 都是），
+    # 再扫一遍是纯重复；主干上"还差几页"的信号由 `translate` job 的日志给（它会打印待译页数）。
+    # 若哪天改成 rebase 合并、或允许直推 main，PR 那次就不再覆盖 main，那时把这一行去掉即可。
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -165,8 +174,10 @@ jobs:
           ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
         run: uv run python scripts/translate.py
 
+      # `dry`（手动触发才有）：真调接口把整批译一遍，但**不改版本库**——用来在分支上
+      # 把"补译这条路"整条走通（主线只有 push 才跑它，故这是合并前唯一能真跑的场合）。
       - name: Open a pull request
-        if: steps.creds.outputs.ready == 'true'
+        if: steps.creds.outputs.ready == 'true' && inputs.dry != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 译文**不推回触发它的分支**：那会让工作流变成第二个写者。
