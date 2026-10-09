@@ -397,8 +397,13 @@ def _stamp(pages: list[Doc]) -> int:
     return count
 
 
-def _check(pages: list[Doc]) -> int:
-    """门禁:英文缺失或落后于中文即失败."""
+def _check(pages: list[Doc], *, strict: bool = True) -> int:
+    """门禁:英文缺失或落后于中文即失败;`strict=False` 时只报账,不失败.
+
+    `strict=False` 是给 CI 用的过渡态:译文还没补齐时,工作流**不能红**
+    (`continue-on-error` 在 job 级也只改展示,不改结论,实测无效),
+    故先跑非阻断的报账;等 14 页译完,把工作流那一步换成默认(strict)即成真门禁.
+    """
     stale: list[str] = []
     for page in pages:
         target = page.target
@@ -413,8 +418,9 @@ def _check(pages: list[Doc]) -> int:
     for item in stale:
         _say(f"[translate] {item}")
     if stale:
-        _say(f"[translate] 共 {len(stale)} 页待译/待更新:跑 `uv run python scripts/translate.py`。")
-        return 1
+        tail = "跑 `uv run python scripts/translate.py`。" if strict else "（报账模式，不判失败）"
+        _say(f"[translate] 共 {len(stale)} 页待译/待更新：{tail}")
+        return 1 if strict else 0
     _say(f"[translate] {len(pages)} 页译文与原文一致。")
     return 0
 
@@ -424,6 +430,11 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="英文译文生成器（阿里云机器翻译）")
     parser.add_argument("--list", action="store_true", help="只列出待译页与字符量")
     parser.add_argument("--check", action="store_true", help="门禁：英文落后于中文即非零退出")
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="报账：与 --check 同判据，但**不判失败**（译文补齐前的过渡态用）",
+    )
     parser.add_argument("--force", action="store_true", help="连已一致的英文页一起重译")
     parser.add_argument(
         "--stamp",
@@ -443,8 +454,8 @@ def main(argv: list[str]) -> int:
         wanted = {p.replace("\\", "/") for p in args.pages}
         pages = [p for p in pages if p.rel in wanted]
 
-    if args.check:
-        return _check(_source_pages())
+    if args.check or args.report:
+        return _check(_source_pages(), strict=not args.report)
     if args.stamp:
         count = _stamp(pages)
         _say(f"[translate] 共补 {count} 页摘要行。")

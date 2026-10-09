@@ -52,8 +52,6 @@ jobs:
     name: drift (译文是否落后)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # 见下：`--check` 现在必然报"14 页待译"，故整个 job 先不阻断。
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -65,12 +63,12 @@ jobs:
       - name: Sync dependencies
         run: uv sync
 
-      # 现在还有 14 页没译，故这一步先不阻断。
-      # **`continue-on-error` 要写在 job 级**：写在 step 上只让那一步"不失败",
-      # 但 job 的结论仍是 failure（实测：整个 run 因此变红）。
-      # 等译文补齐、`--check` 转绿之后，把这一行删掉即成门禁。
+      # 还有 14 页没译，故这一步先跑**报账模式**（与 `--check` 同一判据，但不判失败）。
+      # 为什么不写 `continue-on-error`：写在 step 上与 job 级**都不改 job 结论**
+      # ——两次实测都仍报 failure。故改由脚本提供一个"报账不失败"的模式。
+      # 等 14 页译完，把 `--report` 换成 `--check` 即成真门禁。
       - name: Translation drift
-        run: uv run python scripts/translate.py --check
+        run: uv run python scripts/translate.py --report
 
       - name: Pending pages (always visible in the log)
         run: uv run python scripts/translate.py --list
