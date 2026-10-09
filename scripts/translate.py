@@ -244,6 +244,7 @@ def _signature(params: dict[str, str], secret: str, method: str = "GET") -> str:
         f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in sorted(params.items())
     )
     string_to_sign = f"{method}&{_percent_encode('/')}&{_percent_encode(canonical)}"
+    # codeql[py/weak-sensitive-data-hashing] 协议强制 HMAC-SHA1,理由见 docstring
     digest = hmac.new(f"{secret}&".encode(), string_to_sign.encode(), hashlib.sha1).digest()
     return base64.b64encode(digest).decode()
 
