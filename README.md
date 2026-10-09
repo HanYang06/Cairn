@@ -8,6 +8,12 @@
 > **本地优先的内容寻址对象池** —— 笔记、资产、项目，一台工作台。
 > 一块块往上堆。
 
+> **English** — Cairn is a local-first, content-addressed object pool (notes, assets, projects).
+> The documentation site is bilingual: **Chinese is the source language and English is a partial
+> translation** — the translated pages are listed in
+> [译文状态 / Translation status](docs/reference/i18n-status.md).
+> 文档站为双语：**中文是原文，英文是部分译文**，已译清单见同一页。
+
 ## 架构
 
 [![Architecture diagram of hanyang06/cairn](https://gitdiagram.com/hanyang06/cairn/diagram.png)](https://gitdiagram.com/hanyang06/cairn?utm_source=readme&utm_medium=picture)

@@ -31,6 +31,7 @@ dev = [
     "pre-commit>=4.6.2",
     "modelscope>=1.40.1",
     "mkdocs-material>=9.7",
+    "mkdocs-static-i18n>=1.3",
     "mkdocstrings[python]>=1.0.6",
     "deptry>=0.25.1",
     "import-linter>=2.15",

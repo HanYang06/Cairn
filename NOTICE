@@ -4,6 +4,18 @@ Copyright 2026 HanYang06
 
 This product includes software developed by HanYang06.
 
+The documentation site is built with the following build-time dependencies (not shipped with the
+product), each under its own licence:
+
+  - MkDocs — BSD-2-Clause
+  - Material for MkDocs — MIT
+  - mkdocstrings / mkdocstrings-python / Griffe — ISC
+  - mkdocs-static-i18n — MIT
+
+The English translations of the documentation are produced by Alibaba Cloud Machine Translation
+(`alimt` 2018-10-12, `TranslateGeneral`). The request signature is computed with the Python standard
+library, so no vendor SDK is bundled or required.
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
