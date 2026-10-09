@@ -350,6 +350,17 @@ def _brief(payload: dict[str, object]) -> str:
     return json.dumps(payload, ensure_ascii=False)[:500]
 
 
+def _translatable(payload: str) -> bool:
+    """这一份还有没有"词"可译:只剩占位符与标点的那一行**不送**.
+
+    送了的代价不是多花字符,而是**坏**:整行只有私有区占位符时,机翻会把它当成怪字符
+    吐成 `?`,占位符随之丢失——于是中文页开头那两行 SPDX 注释在英文页里变成
+    第 4 行一个 `?`,第 5 行多出一条 `SPDX-License-Identifier`(2026-10-10 那批 14 页全带这个疤).
+    判据取"有没有 `\\w`":中英文字,数字都算词,`-` / `|` / 空行这类都不算.
+    """
+    return re.search(r"\w", payload) is not None
+
+
 def _translate_page(text: str, *, sent: list[int]) -> str:
     """把一页的正文译成英文,结构原样保留."""
     out: list[str] = []
@@ -360,8 +371,11 @@ def _translate_page(text: str, *, sent: list[int]) -> str:
         store: list[str] = []
         prepared = [_protect(line, store) for line in unit.lines]
         payload = "\n".join(prepared)
-        sent.append(len(payload))
-        translated = _translate(payload, source_lang="zh", target_lang="en")
+        if _translatable(payload):
+            sent.append(len(payload))
+            translated = _translate(payload, source_lang="zh", target_lang="en")
+        else:
+            translated = payload
         out.extend(_restore(line, store) for line in translated.splitlines())
     return "\n".join(out) + "\n"
 

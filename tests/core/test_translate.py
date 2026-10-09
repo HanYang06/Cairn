@@ -125,3 +125,35 @@ def test_translate_page_roundtrip_keeps_structure(monkeypatch: pytest.MonkeyPatc
         "| a | b |\n|---|---|\n| 1 | 2 |\n"
     )
     assert TOOL._translate_page(text, sent=[]) == text
+
+
+def test_markup_only_unit_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """只剩占位符/标点的那一行不送译:送了会被机翻吐成 `?`,许可头就是这么失效的.
+
+    2026-10-10 那批 14 页全带同一个疤——英文页第 4 行一个 `?`,第 5 行多出一条
+    `SPDX-License-Identifier`,根因就是中文页开头那两行 SPDX 注释被整行送了译.
+    """
+    seen: list[str] = []
+
+    def fake(text: str, **_kwargs: object) -> str:
+        seen.append(text)
+        return text
+
+    monkeypatch.setattr(TOOL, "_translate", fake)
+    source = (
+        "<!-- SPDX-FileCopyrightText: 2026 HanYang06 -->\n"
+        "<!-- SPDX-License-Identifier: Apache-2.0 -->\n"
+        "\n"
+        "# 标题\n"
+    )
+    body = TOOL._translate_page(source, sent=[])
+
+    assert body == source, "不送译的那一份必须原样放过"
+    assert all("SPDX" not in text for text in seen), "许可注释那两行不该出现在送译的文本里"
+    assert any("标题" in text for text in seen), "该译的正文仍要送"
+
+    page = TOOL.Doc(path=Path("docs/x.md"), text=source)
+    written = TOOL._with_header(page, body)
+    assert written.count("SPDX-") == 2, "只留头部那两行"
+    assert "?" not in written
+    assert written.endswith("# 标题\n")
