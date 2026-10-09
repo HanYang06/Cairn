@@ -30,13 +30,13 @@ explicitly by the caller:
 from core.init import Kernel
 from model.note.types import NoteGroup
 
-with Kernel.create("vault") as kernel:  # create and assemble a vault; use Kernel.open for an existing one
+with Kernel.create("vault") as kernel:  # create a vault; Kernel.open for an existing one
     group = NoteGroup()  # zero-argument construction: the block signs its own identity
     group.title = "todo"
     group.notes.extend(["n1", "n2"])
 
     ident = group.save()  # persist; returns the block identity
-    print(ident.value_uuid, ident.in_pack_slot)  # uuid4 is the identity / the segment list is which slots it occupies
+    print(ident.value_uuid, ident.in_pack_slot)  # uuid4 / the slots it occupies
 
     fetched = NoteGroup.fetch(ident)  # read the same class back by identity
     print(fetched.title, fetched.notes)

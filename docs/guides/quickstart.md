@@ -34,7 +34,7 @@ with Kernel.create("vault") as kernel:  # 建库并装配；已有库改用 Kern
     group.notes.extend(["n1", "n2"])
 
     ident = group.save()  # 落盘，返回块身份 ID
-    print(ident.value_uuid, ident.in_pack_slot)  # uuid4 是这个身份 / 段列表是它占的槽
+    print(ident.value_uuid, ident.in_pack_slot)  # uuid4 是身份 / 段列表是它占的槽
 
     fetched = NoteGroup.fetch(ident)  # 按身份读回同一个类
     print(fetched.title, fetched.notes)
