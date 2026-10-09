@@ -75,12 +75,11 @@ jobs:
       - name: Sync dependencies
         run: uv sync
 
-      # 还有 14 页没译，故这一步先跑**报账模式**（与 `--check` 同一判据，但不判失败）。
-      # 为什么不写 `continue-on-error`：写在 step 上与 job 级**都不改 job 结论**
-      # ——两次实测都仍报 failure。故改由脚本提供一个"报账不失败"的模式。
-      # 等 14 页译完，把 `--report` 换成 `--check` 即成真门禁。
+      # 20 页全部译完（2026-10-10），故这里就是**真门禁**：中文改了而英文没跟上即红。
+      # `--report` 是"译文还没补齐"时的过渡态（同判据、不判失败），现已不用。
+      # 也别改用 `continue-on-error`：写在 step 上与 job 级都不改 job 结论，实测两次仍报 failure。
       - name: Translation drift
-        run: uv run python scripts/translate.py --report
+        run: uv run python scripts/translate.py --check
 
       - name: Pending pages (always visible in the log)
         run: uv run python scripts/translate.py --list

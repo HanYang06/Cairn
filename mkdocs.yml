@@ -65,7 +65,8 @@ theme:
     alternate: material/translate
 
 nav:
-  # nav 用**默认语言（中文）**的条目名；英文档的条目名由插件的 `nav_translations.en` 给。
+  # nav 用**默认语言（中文）**的条目名；英文档的条目名在下面 `i18n` 插件的
+  # `languages[en].nav` 里另给一份，两边的**分组结构与顺序一一对应**。
   # 页面路径**不带语言后缀**——插件按后缀找译文（`guides/quickstart.en.md` ↔ `.md`）。
   - 首页: index.md
   - 向导:
@@ -116,10 +117,10 @@ plugins:
       # 语言口径（2026-10-10 作者定，见 `docs/reference/i18n-status.md`）：
       # **中文是事实基础**——它是作者亲手写的；**英文是机器翻译的产物**（`docs/**/*.en.md`）。
       # 判定因此只看扩展名：**带 `.<locale>` 后缀的是译文，不带后缀的归默认语言**。
-      # 默认语言取 `zh` 还有一条构建理由：`mkdocs build --strict` 的"nav 指向不存在的页"
-      # 只在**默认语言**里判定，而英文现在只译 6 页；把 `en` 设为默认就得给 14 个未译页
-      # 各补一个英文占位页。反过来（中文默认），未译页由 `fallback_to_default` 落到中文正文，
-      # 两边站点都完整。英文读者的入口优先级由语言选择器的**第一项**承担。
+      # 默认语言取 `zh` 有一条构建理由：`mkdocs build --strict` 的"nav 指向不存在的页"
+      # 只在**默认语言**里判定；若把 `en` 设为默认，任何一个还没译的页都得先补英文占位页。
+      # 反过来（中文默认）由 `fallback_to_default` 兜底——**2026-10-10 起 20 页全部有英文**，
+      # 这一层当下没有页面用到，留着是给"新页先落中文"的那段时间用。
       languages:
         - locale: zh
           name: 中文
@@ -130,19 +131,35 @@ plugins:
           name: English
           site_name: Cairn
           site_description: Local-first content-addressed object pool for notes, assets and projects
-          # 英文档**只列已译的页**：未译的页若留在英文 nav 里，插件会把中文正文渲染出第二份
-          # URL（`/en/architecture/…`），`mkdocs-autorefs` 立刻报"同一标识有两个主 URL"，
-          # `--strict` 因此失败（实测）。拿掉那些条目后，`/en/` 只含真正的英文页，
-          # 其余页面通过语言选择器回到默认语言（`fallback_to_default`）。
-          # 待译清单与判定见 `docs/reference/i18n-status.md`。
+          # 全部 20 页都已译，故英文 nav 与中文 nav **一一对应**（分组、顺序都相同）。
+          # 未译的页**不要**列进来：插件会把中文正文渲染出第二份 URL（`/en/architecture/…`），
+          # `mkdocs-autorefs` 立刻报"同一标识有两个主 URL"，`--strict` 因此失败（实测）。
+          # 新页先落中文时，等它译完再往这里加一行。
           nav:
             - Home: index.md
             - Guides:
                 - Quickstart: guides/quickstart.md
                 - Development: guides/development.md
-                - Conventions: guides/conventions.md
-            - Reference:
-                - Translation status: reference/i18n-status.md
+                - Conventions and red lines: guides/conventions.md
+            - Architecture:
+                - Index and status: architecture/index.md
+                - L0 storage design: architecture/storage-design.md
+                - Block paradigm: architecture/block-model.md
+                - Storage sublayers:
+                    - Block composition and landing point: architecture/py_core/storage/block-parts.md
+                    - Carrier byte layout: architecture/py_core/storage/pack-format.md
+                    - Query path: architecture/py_core/storage/query-path.md
+                - Configuration engine: architecture/py_core/config.md
+                - UI theme: architecture/ui_design/ui-theme.md
+            - Roadmap:
+                - 1.x: roadmap/1.x.md
+                - Structure: roadmap/index.md
+            - API reference:
+                - api/index.md
+                - core (base): api/core.md
+            - Glossary: reference/glossary.md
+            - Configuration reference: reference/config.md
+            - Translation status: reference/i18n-status.md
             - Contributing and licensing: contributing.md
   - search:
       lang:

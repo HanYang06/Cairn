@@ -19,44 +19,47 @@ the author writes in their mother tongue.** What it trades away is the root URL 
 lands on the Chinese page at `/` and switches with the language selector in the header. The
 selector **stays on the current page**, so switching never drops you back to the homepage.
 
-> **Six English pages are hand-written today** (this page, the home page, the three guides and the
-> contributing page); the machine-translation flow is not wired up yet. Once it is, it **will not
-> overwrite an existing English page by default** — it fills in the missing ones only, unless a
-> re-translation is requested explicitly.
+> **All 20 Chinese pages now have an English version** (2026-10-10). Six of them — this page, the home
+> page, the three guides and the contributing page — are **hand-written**, from before the
+> machine-translation flow was wired up: their heads carry no digest line, so the generator leaves them
+> alone by default (run `--stamp` to bring one under drift tracking). The other 14 are produced by
+> machine translation in CI and carry a `translation-source-hash`, so "the Chinese changed and the
+> English did not follow" is caught by `--check`.
 
 ## What is translated
 
 | Page | Chinese (source) | English |
 |---|---|---|
-| `index` | ✅ | ✅ |
-| `guides/quickstart` | ✅ | ✅ |
-| `guides/development` | ✅ | ✅ |
-| `guides/conventions` | ✅ | ✅ |
-| `contributing` | ✅ | ✅ |
-| `reference/i18n-status` | ✅ (this page) | ✅ |
-| `reference/glossary` | ✅ | — |
-| `reference/config` | ✅ (generated) | — |
-| `architecture/index` | ✅ | — |
-| `architecture/storage-design` | ✅ | — |
-| `architecture/block-model` | ✅ | — |
-| `architecture/py_core/config` | ✅ | — |
-| `architecture/py_core/storage/block-parts` | ✅ | — |
-| `architecture/py_core/storage/pack-format` | ✅ | — |
-| `architecture/py_core/storage/query-path` | ✅ | — |
-| `architecture/ui_design/ui-theme` | ✅ | — |
-| `roadmap/1.x` | ✅ | — |
-| `roadmap/index` | ✅ | — |
-| `api/index` | ✅ | — |
-| `api/core` | ✅ (generated) | — |
+| `index` | ✅ | ✅ (hand-written) |
+| `guides/quickstart` | ✅ | ✅ (hand-written) |
+| `guides/development` | ✅ | ✅ (hand-written) |
+| `guides/conventions` | ✅ | ✅ (hand-written) |
+| `contributing` | ✅ | ✅ (hand-written) |
+| `reference/i18n-status` | ✅ (this page) | ✅ (hand-written) |
+| `reference/glossary` | ✅ | ✅ (machine) |
+| `reference/config` | ✅ (generated) | ✅ (machine) |
+| `architecture/index` | ✅ | ✅ (machine) |
+| `architecture/storage-design` | ✅ | ✅ (machine) |
+| `architecture/block-model` | ✅ | ✅ (machine) |
+| `architecture/py_core/config` | ✅ | ✅ (machine) |
+| `architecture/py_core/storage/block-parts` | ✅ | ✅ (machine) |
+| `architecture/py_core/storage/pack-format` | ✅ | ✅ (machine) |
+| `architecture/py_core/storage/query-path` | ✅ | ✅ (machine) |
+| `architecture/ui_design/ui-theme` | ✅ | ✅ (machine) |
+| `roadmap/1.x` | ✅ | ✅ (machine) |
+| `roadmap/index` | ✅ | ✅ (machine) |
+| `api/index` | ✅ | ✅ (machine) |
+| `api/core` | ✅ | ✅ (machine) |
 
-The **architecture, roadmap and API reference pages are deliberately last**: their wording is still
-moving, and a translation of a page that is about to be rewritten has to be written twice. The
-architecture and API pages are also mostly code-adjacent, where an English reader can follow the
-original with the [glossary](glossary.md) at hand.
+The architecture, roadmap and API reference pages were deliberately last (their wording was still
+moving, and translating a page that is about to be rewritten means writing it twice); they were all
+translated on 2026-10-10. **This table should carry no `—` from now on**: a newly added page simply
+goes through "How a page gets translated" below.
 
-A page without an English counterpart is **rendered from the Chinese source** under `/en/` (that is
-`fallback_to_default`). Nothing is missing from the English site; some of it is simply still Chinese,
-and the page carries no marker saying so. Treat the table above as the marker.
+`fallback_to_default` is still on, but **no page uses it right now**: a page without an English
+counterpart is rendered from the Chinese source under `/en/`, and the English site is currently
+complete. While a new page exists only in Chinese, `/en/` shows the Chinese text and the page carries
+no marker saying so — treat the table above as the marker then.
 
 ## How a page gets translated
 
@@ -65,14 +68,18 @@ and the page carries no marker saying so. Treat the table above as the marker.
 2. English is produced as `docs/path/page.en.md` by `scripts/translate.py` using **machine
    translation** (Alibaba Cloud Machine Translation, `TranslateGeneral`; **both the signature and the
    request shape are copied from the official SDK**, which is not pulled in: `POST` with a form body,
-   so the prose never enters the URL, and the signature itself is percent-encoded once). Three hard
+   so the prose never enters the URL, and the signature itself is percent-encoded once). Four hard
    constraints are enforced in the script:
    - **translate the prose only**: fenced code blocks are kept whole, and inline code, links, images
      and bare URLs are lifted into placeholders and put back afterwards (translating them breaks
-     links and anchors); table separator rows are left alone;
+     links and anchors); table separator rows are left alone; and **a line that is nothing but
+     placeholders and punctuation is not sent at all** — sending it makes the model emit `?`, which is
+     how the licence header got mangled once;
    - **translate incrementally, never from scratch**: each run only touches pages whose English
      counterpart is **missing** or **stale**, and pages that already match are **not sent at all**.
      Once a translation is committed, later runs cost only the delta;
+   - **translate concurrently** (8 in flight by default, `--jobs` to change it): one round trip takes
+     about 1.1 seconds, so 20 pages take a dozen minutes serially and two or three concurrently;
    - the API accepts at most 5000 characters per request, so documents are split by line. The result
      **lands as a pull request**, so the terminology pass has a human in the loop.
 
@@ -108,9 +115,9 @@ are absent the whole translation job is skipped and merging is unaffected.
 
 **How drift is detected**: the head of every English file carries
 `<!-- translation-source-hash: … -->`, a digest of the Chinese source. `--check` compares the two and
-reports a stale page when they differ. Fourteen pages are still untranslated, so the workflow runs
-`--report` instead — **the very same test as `--check`, only it does not fail the job** — and putting
-`--check` back turns it into a real gate once the translations are in. Do **not** reach for
+reports a stale page when they differ. **That check is now the real gate** in the `drift` job (it went
+back from `--report` to the default once all 20 pages were translated on 2026-10-10) — the six
+hand-written pages carry no digest line and take no part in it. Do **not** reach for
 `continue-on-error`: on the step and on the job alike it leaves the job's conclusion unchanged, and was
 measured twice still reporting failure.
 
