@@ -83,8 +83,6 @@ _NAMED_STYLES: dict[str, str] = {
     ".gitattributes": _HASH,
     "Makefile": _HASH,
     "Dockerfile": _HASH,
-    # 停用态的 workflow(靠非 `.yml` 后缀让 GitHub 不自动跑),内容仍是 yml
-    "ocr-review.yml.on-run": _HASH,
 }
 
 

@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # 提交门禁：SPDX 头 -> 书面语 -> 标点 -> 魔法用量 -> 配置声明 -> ruff -> deptry -> 架构 -> mypy -> 锁文件 -> 测试 -> 前端。
-# 提交信息另由 commit-msg 钩子校验（Conventional Commits）。
+# **只管 `pre-commit` 一个阶段**：提交信息不再设本地钩子（2026-10-10 撤掉），
+# 格式约定（Conventional Commits + 中文）仍写在 `.agents/skills/rules/references/commit.md`，靠自觉。
 # 覆盖率门禁与文档站构建留在 CI（见 `.github/workflows/ci.yml`）。
-#
-# `default_stages` 是必须的：**不写 `stages` 的钩子在每个阶段都跑**，于是 commit-msg 阶段
-# 它们会拿到 `.git/COMMIT_EDITMSG` 当"待检文件"——SPDX 钩子当场报"这个文件装不下内联头"。
-default_install_hook_types: [pre-commit, commit-msg]
+default_install_hook_types: [pre-commit]
 default_stages: [pre-commit]
 repos:
   - repo: local
@@ -121,12 +119,4 @@ repos:
         language: system
         files: ^app/
         pass_filenames: false
-        require_serial: true
-
-      # 提交信息：Conventional Commits（`type(scope): 描述`）。
-      - id: commit-msg
-        name: commit-msg (Conventional Commits)
-        entry: uv run python scripts/commitmsg.py
-        language: system
-        stages: [commit-msg]
         require_serial: true

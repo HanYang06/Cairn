@@ -94,12 +94,13 @@
 
 - **测试**：`pytest --strict-markers --strict-config`；`filterwarnings = ["error"]`（warning 零容忍）。
 - **覆盖率**：行 + 分支 ≥ 80%（CI 门禁 `--cov-fail-under=80`）。
-- **提交前**（`.pre-commit-config.yaml`，共 13 个钩子；**须先 `uv run pre-commit install
-  --hook-type pre-commit --hook-type commit-msg`**，否则一个都不跑）：
+- **提交前**（`.pre-commit-config.yaml`，共 13 个钩子；**须先 `uv run pre-commit install`**，
+  否则一个都不跑）：
   SPDX → 书面语 → 标点（报告模式）→ 魔法用量 → `onconf check --strict`（配置声明）→
   `ruff check --fix` → `ruff format` → `deptry` →
-  `lint-imports` → `mypy` → `uv lock --check` → `pytest` → 前端 `pnpm check`；
-  提交信息另由 commit-msg 钩子校验 Conventional Commits。
+  `lint-imports` → `mypy` → `uv lock --check` → `pytest` → 前端 `pnpm check`。
+  **提交信息不再由本地钩子校验**（2026-10-10 撤掉 `commit-msg` 钩子与 `scripts/commitmsg.py`）：
+  Conventional Commits 仍是成文约定，但写偏不会被拦下。
 - **CI**（`.github/workflows/ci.yml`，Python 侧十四步 + 前端一组 `pnpm check`）：
   SPDX → 书面语 → 标点 → 魔法用量 → 配置声明 → 文档防漂移 → docstring 覆盖（报告）→ ruff → deptry →
   import-linter → `uv lock --check` → mypy → pytest + 覆盖率门禁。
@@ -176,8 +177,9 @@
 **`pull_request_target` 是本仓的一条红线**：它能在 fork PR 上拿到 secret，
 而"不执行 PR 代码"这条保证**只在 composite action 内部成立**——一旦那个 action 变了、
 或有人在工作流里加一句 `checkout` PR 分支，密钥即泄露。
-故**用它的工作流一律不放进 `.github/workflows/*.yml`**（当前 `ocr-review` 就停在
-`.on-run` 后缀上，等于停用），要用须先写清"为什么不执行 PR 代码"。
+故**用它的工作流一律不放进 `.github/workflows/*.yml`**。曾按此做过两件事：`ocr-review` 先改名
+`.on-run` 停用、后又改回 `.yml`，直到 2026-10-10 **整个工作流删除**（作者口径：个人资产有限，
+玩不起按调用次数计的 LLM 额度）。要用 AI 评审须先写清"为什么不执行 PR 代码"，并接受额度成本。
 
 **仓库设置里还应打开（不在文件里，故记此处）**：
 
