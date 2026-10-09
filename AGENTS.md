@@ -30,8 +30,7 @@ uv run deptry .                           # 依赖盘点（声明了没用 / 用
 uv run lint-imports                       # 架构校验（契约在 pyproject 的 [tool.importlinter]）
 uv lock --check                           # 锁文件是否与声明同步
 
-uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
-                                          # **先装钩子**，否则下面这条与提交时的门禁都不跑
+uv run pre-commit install                 # **先装钩子**，否则下面这条与提交时的门禁都不跑
 uv run pre-commit run --all-files         # 提交前全量门禁（13 个钩子；清单见 quality.md §4）
 
 uv run mkdocs serve                       # 文档站本地预览 -> http://127.0.0.1:8000
@@ -39,6 +38,9 @@ uv run mkdocs build --strict              # 文档站构建门禁（坏链接/�
 uv run python scripts/docgen.py --check   # 生成页防漂移（配置参考 vs 入库词表 + AST 扫的声明处）
 uv run python scripts/docgen.py --write   # 重新生成配置参考页（改了配置声明后跑）
 uv run python scripts/docgen.py --coverage # docstring 覆盖报告（没写的公共成员会从 API 页消失）
+uv run python scripts/translate.py --list  # 英文译文报账（哪些页待译、多少字符；机翻走阿里云）
+uv run python scripts/translate.py --check # 译文漂移门禁（英文落后于中文即失败）
+uv run python scripts/translate_chars.py   # 量要送进翻译 API 的字符量（算额度用）
 uv run onconf check --home config --strict # 配置声明门禁（**--home 必给**：CLI 缺省是 ./conf）
 uv run onconf build --home config          # 按声明完整重建 config/ 下那两份入库产物
 

@@ -46,7 +46,10 @@ import core.params  # noqa: E402
 import core.storage.conf  # noqa: E402,F401
 from tools._iosafe import _say  # noqa: E402 — 见上:先补路径再导入
 
-#: 生成出来的参考页
+#: 生成出来的参考页.
+#: 不带语言后缀的文件归**默认语言**(`mkdocs.yml` 的 `i18n` 插件,默认 `zh`),
+#: 故这一页写 `.md` 即可;英文译文另存 `docs/reference/config.en.md`
+#: (口径见 `.agents/skills/rules/references/docs.md`「多语言文档」).
 CONFIG_PAGE = ROOT / "docs" / "reference" / "config.md"
 
 #: 入库的词表(参考页"键 / 默认值 / 说明"那一半的事实来源)

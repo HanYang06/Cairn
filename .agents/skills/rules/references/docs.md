@@ -31,12 +31,65 @@
 | docstring 覆盖报告 | `scripts/docgen.py`（AST 统计） | `uv run python scripts/docgen.py --coverage` |
 
 - 依赖在 `pyproject.toml` 的 `[dependency-groups] dev`：`mkdocs-material`（**MIT**）、
-  `mkdocstrings[python]`（**ISC**）。**构建期依赖**，不进运行期、不进 wheel。
+  `mkdocstrings[python]`（**ISC**）、`mkdocs-static-i18n`（**MIT**）。**构建期依赖**，不进运行期、不进 wheel。
 - 取包路径由 `mkdocs.yml` 的 `plugins.mkdocstrings.handlers.python.paths: [src]` 提供，
   故指令直接写顶层包名（`::: core`），**不带 `cairn.` 前缀**。
 - `site/` 是构建产物、不入库；生成页（`docs/reference/config.md`）**入库**，好让 GitHub 上也能读。
 - 部署：`.github/workflows/docs.yml` —— `main` 的文档变更 → 防漂移 + strict 构建 → GitHub Pages；
-  PR 只做门禁、不发布。
+  PR 只做门禁、不发布。触发面里的 `docs/**` 已覆盖下面的自定义样式，改主题即重建。
+
+## 文档站自己的外观
+
+文档站与桌面界面**共用一套设计语言**：主题本体在 `docs/stylesheets/cairn.css`，
+由 `mkdocs.yml` 的 `extra_css` 引入。本仓库不覆盖模板，故不设 `custom_dir`——
+这里只覆盖主题自带的 CSS。
+
+- **令牌的取向以 `config/theme/tokens.json` 为准**（那是外观的唯一手写处，判据见
+  `docs/architecture/ui_design/ui-theme.md` §3）。`cairn.css` 只是**投影**：
+  文件顶部把令牌按同名搬到 `--cairn-*`，再映射到 Material 的 `--md-*` 变量。
+- **改令牌要同步这里**：纸面 / 面板 / 暖金 / 圆角 / 字号 / 阴影任一档改值，同一改动里改
+  `cairn.css`。两处不一致时页面会出现"半套暖金、半套冷蓝"。
+- **两档都要写全**：Material 只按 `default` 与 `slate` 分档，漏写的那档会退回它自带的色。
+- 站点不用 Google Fonts：`--md-text-font-family` / `--md-code-font-family` 指向前端的字体链。
+- **站点图标必须是自己的**（`mkdocs.yml` 的 `theme.logo` / `theme.favicon`，素材在
+  `docs/assets/brand/`，由 `assets/logo/` 缩出）。不得留主题自带的占位图标。
+- **Material 取 `--md-primary-fg-color` 的地方要显式覆盖**：本主题把那两个变量给了纸面，
+  故顶栏 / 页脚底色与 `.md-button--primary` 都得自己写；不写就会出现"浅底深字的主按钮"。
+  按钮形态照前端 `.pill`：胶囊 · 实心 accent 底 · 一屏最多一个主操作。
+- **图标短码（`:octicons-…:`）要在 `markdown_extensions` 里开 `pymdownx.emoji`**，
+  否则原样显示成字面文本；按钮里的图标还需覆盖 `svg path` 的固定 `fill`（否则深灰落在 accent 底上）。
+
+## 多语言文档（中文原文 + 英文机翻）
+
+站点是双语的，**中文是事实基础（作者亲手写），英文是机器翻译的产物**。判定由
+`mkdocs-static-i18n` 的 suffix 模式给出：**带 `.<locale>` 后缀的文件是译文，不带后缀的归默认语言**。
+"谁是事实源"因此只看扩展名——**不带后缀的那一份就是**。
+
+| 语言 | 文件 | 线上路径 | 谁写的 |
+|---|---|---|---|
+| 中文（默认，**事实基础**） | `docs/**/*.md` | `/` | 作者 |
+| 英文（**机翻产物**） | `docs/**/*.en.md` | `/en/` | CI 的翻译模型（当前 6 页为手写） |
+
+- **默认语言必须是内容齐全的那一边**：`mkdocs build --strict` 的"nav 指向不存在的页"只在
+  默认语言里判定，英文当前只译 6 页，故默认只能是中文。反过来做（英文默认）就得给 14 个
+  未译页各补一个英文占位页。
+- **英文导航只列已译页**（插件 `languages[en].nav`）：未译页若留在英文 nav 里，插件会把中文
+  正文渲染出第二份 URL，`mkdocs-autorefs` 报"同一标识多个主 URL"，`--strict` 即失败。
+- **`resolve_closest: true` 必须开着**（`mkdocs.yml` 的 `autorefs` 插件）：`fallback_to_default`
+  会把未译页渲染第二份，该开关让每个页面指回离自己最近的那一份，而不是逐条告警。
+- **`navigation.instant` 与语言选择器不兼容**，故不启用（切语言要整页跳转）。
+- **机翻只译正文**：围栏代码块整块保留，行内代码、链接、图片、裸 URL 先摘成占位符再放回。
+  **增量译**：每次只处理"缺英文页"或"英文页落后"的，**已一致的页一个字符都不送**——
+  这是"译过就落库、不必每次从 0 翻"的机制保障；**手写页**（无摘要行）默认不动，
+  `--stamp` 可补摘要行纳入追踪。
+  生成器 `scripts/translate.py`（阿里云机器翻译通用版，`TranslateGeneral`），
+  `--check` 靠英文页头的 `translation-source-hash` 判漂移，`--list` 报账。
+  工作流 `.github/workflows/translate.yml`（`drift` 无凭证即可跑；`translate` 需要
+  只授 `alimt:TranslateGeneral` 的 RAM AK，**补译后自动提交到独立分支并开 PR**——
+  译文进 `main` 才算持久化）。额度：主账号每月 100 万字符免费，本站全译一遍不到 10%。
+  字符量用 `scripts/translate_chars.py` 量。
+- 改中文页就要重译英文页；**两边不得停在两版**。已译清单与判定在
+  `docs/reference/i18n-status.md`（那一页本身也是双语的）。
 
 ## 硬性约定
 

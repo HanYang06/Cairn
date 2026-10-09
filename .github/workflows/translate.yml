@@ -1,0 +1,141 @@
+# SPDX-FileCopyrightText: 2026 HanYang06
+# SPDX-License-Identifier: Apache-2.0
+#
+# 英文译文：中文是事实基础（作者亲手写），英文是**机器翻译的产物**。
+# 口径见 `docs/reference/i18n-status.md` 与 `.agents/skills/rules/references/docs.md`「多语言文档」。
+#
+# 两件事分开跑，因为它们的前提不同：
+#
+# - **`drift`（不需要凭证）**：中文改了、英文没跟上就红。这是门禁，可在分支上立刻看到。
+# - **`translate`（需要阿里云凭证）**：补译缺失的页，**开 PR** 交人工校术语，不直推 `main`。
+#
+# 凭证（仓库 secret，二选一的名字都对不上就整个跳过）：
+#   ALIBABA_CLOUD_ACCESS_KEY_ID / ALIBABA_CLOUD_ACCESS_KEY_SECRET
+# 建议给这对 AK 只授 `alimt:TranslateGeneral`（RAM 最小权限），不要用主账号 AK。
+#
+# 额度：机器翻译通用版对**主账号每月 100 万字符**免费，超出 50 元/百万字符。
+# 本站中文原文约 9.5 万字符，全部译一遍只占免费额度的 10%。
+# 参考：https://help.aliyun.com/zh/machine-translation/product-overview/pricing-of-machine-translation-general-purpose-edition
+
+name: translate
+
+on:
+  # PR 上只做漂移检查（无凭证也能跑）
+  pull_request:
+    paths:
+      - "docs/**"
+      - "scripts/translate.py"
+      - ".github/workflows/translate.yml"
+  # 主干上补译 → 开 PR
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "scripts/translate.py"
+      - ".github/workflows/translate.yml"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "译文的 PR 目标分支（留空 = 触发这份工作流的分支）"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: drift (译文是否落后)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      # 现在还有 14 页没译，故这一步先不阻断（`continue-on-error`）：
+      # 等译文补齐、`--check` 转绿之后，把这一行删掉即成门禁。
+      - name: Translation drift
+        continue-on-error: true
+        run: uv run python scripts/translate.py --check
+
+      - name: Pending pages (always visible in the log)
+        run: uv run python scripts/translate.py --list
+
+  translate:
+    name: translate (补译 → 开 PR)
+    # 只在主干推送或手动触发上跑：PR 上不产生新的提交，免得来回打架
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Check credentials
+        id: creds
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$ALIBABA_CLOUD_ACCESS_KEY_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::未配置 ALIBABA_CLOUD_ACCESS_KEY_ID，跳过补译。"
+          fi
+
+      - name: Translate
+        id: run
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: uv run python scripts/translate.py
+
+      - name: Open a pull request
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 译文**不推回触发它的分支**：那会让工作流变成第二个写者。
+          # 产出永远落在自己的 i18n 分支上，PR 的目标取"当前 ref"（或手动指定）。
+          BASE_REF: ${{ inputs.base || github.ref_name }}
+        run: |
+          if [ -z "$(git status --porcelain docs)" ]; then
+            echo "::notice::没有新译文，无需开 PR。"
+            exit 0
+          fi
+          branch="i18n/machine-translation-${GITHUB_RUN_NUMBER}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add docs
+          git commit -m "docs(i18n): 补机器翻译的英文译文"
+          git push origin "$branch"
+          body="由 \`scripts/translate.py\`（阿里云机器翻译通用版）生成。"
+          body="$body"$'\n\n'"**请人工过一遍术语**：块 / 槽 / 载体 / 摘要 / 落点 这几个词在任何语境下都必须是同一个译法（对照 \`docs/reference/glossary.md\`）。"
+          body="$body"$'\n\n'"机翻只译正文；代码块、链接路径与导航标签原样保留。"
+          gh pr create \
+            --base "$BASE_REF" \
+            --head "$branch" \
+            --title "docs(i18n): 补机器翻译的英文译文" \
+            --body "$body"

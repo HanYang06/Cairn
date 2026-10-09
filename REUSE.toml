@@ -43,8 +43,9 @@ path = [".fileTemplates.json"]
 SPDX-FileCopyrightText = "2026 HanYang06"
 SPDX-License-Identifier = "Apache-2.0"
 
-# —— 文档里的截图（装不下内联头）——
-# 手写文档在 `docs/**/*.md`，走内联头；文档配的位图（如窗口截图）走这里。
+# —— 文档里的截图与品牌素材（装不下内联头）——
+# 手写文档在 `docs/**/*.md`，走内联头；文档配的位图（如窗口截图）与
+# 站点用的品牌 mark（`docs/assets/brand/**`，源头是项目自有图形）走这里。
 [[annotations]]
 # `scripts/spdx.py` 用 `PurePosixPath.match` 判路径，那里 `**` 等同 `*`（不跨层）——
 # 故每种深度各列一条：文档目录再深一层，照此补一条同形的。
