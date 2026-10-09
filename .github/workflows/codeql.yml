@@ -59,11 +59,38 @@ jobs:
       # 3.38.2 抬到 4.38.2，`analyze` 留在 3.38.2。）
       # 故这两行**共用同一个 SHA**，改动时一起改；Dependabot 侧另有 `codeql` 分组兜底
       # （见 `.github/dependabot.yml`）。
+      # CodeQL 配置：**排除一条已判明的误报**，其余查询面不动。
+      # 写在这里而不是仓库里多一个 `.github/codeql/codeql-config.yml`：配置只有这一处用途，
+      # 放在用它的人眼皮底下才读得到（与大文件不同，它不到十行）。
+      #
+      # 豁免的那条：`py/weak-sensitive-data-hashing` 命中了 `scripts/translate.py` 里的
+      # **HMAC-SHA1**——阿里云 RPC 的 `SignatureMethod` 只支持 HMAC-SHA1，换 SHA-256
+      # 服务端直接拒签；而且那是**消息认证码**，不是拿哈希保护明文或口令，
+      # 与"用 SHA1 存口令"是两回事。故按查询 id + 路径精确排除，不设 `paths-ignore`
+      # （那会把整个文件排除出**所有**查询，代价远大于收益）。
+      # 语法见 https://github.com/github/codeql-action 的 query-filters（`exclude.id` + `paths`）。
+      - name: Write CodeQL config
+        run: |
+          mkdir -p .codeql
+          cat > .codeql/config.yml <<'YAML'
+          name: cairn-codeql
+          # 默认查询套件不写会丢：本文件一旦给出 `queries`，就由这里决定跑哪些。
+          queries:
+            - uses: security-and-quality
+          query-filters:
+            - exclude:
+                id:
+                  - py/weak-sensitive-data-hashing
+                paths:
+                  - scripts/translate.py
+          YAML
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          config-file: .codeql/config.yml
 
       - name: Analyze
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2

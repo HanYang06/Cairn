@@ -237,14 +237,13 @@ def _signature(params: dict[str, str], secret: str, method: str = "GET") -> str:
 
     这里用 HMAC-SHA1 **是接口规范规定的,不是可选的强度选择**:`SignatureMethod`
     只支持 `HMAC-SHA1`,换 SHA-256 会被服务端拒签;而且它是**消息认证码**,
-    不是拿哈希保护明文或口令(CodeQL `py/weak-sensitive-data-hashing` 命中的是后者).
-    故按 CodeQL 的就地抑制语法标明"已知且有意为之",不把这条告警留在 PR 上.
+    不是拿哈希保护明文或口令. CodeQL 的 `py/weak-sensitive-data-hashing` 命中的是后者,
+    故这条按配置式过滤排除(理由与写法见 `.github/workflows/codeql.yml`).
     """
     canonical = "&".join(
         f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in sorted(params.items())
     )
     string_to_sign = f"{method}&{_percent_encode('/')}&{_percent_encode(canonical)}"
-    # codeql[py/weak-sensitive-data-hashing] 协议强制 HMAC-SHA1,见 docstring
     digest = hmac.new(f"{secret}&".encode(), string_to_sign.encode(), hashlib.sha1).digest()
     return base64.b64encode(digest).decode()
 
