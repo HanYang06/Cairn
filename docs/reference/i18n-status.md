@@ -59,8 +59,16 @@
    （阿里云机器翻译通用版，`TranslateGeneral`；RPC 签名用标准库自己算，**不引 SDK**）。三条硬约束写在脚本里：
    - **只译正文**：围栏代码块整块保留，行内代码、链接、图片与裸 URL 先摘成占位符再放回
      （一译就断链、坏锚点）；表格分隔行不动；
-   - **默认只补缺失的页**，已有英文页不覆盖（当前数页是手写的），除非 `--force`；
+   - **增量译，不从头来**：每次只处理"**缺英文页**"或"**英文页落后**"的那些页，
+     已一致的页**一个字符都不送**。故译文一旦落库，后续运行只花增量；
    - 单次请求上限 5000 字符，故按行分段；**产出开 PR**，术语那一轮由人过一遍。
+
+> **"落库"是这一步的目的**：译文只有进了 `main` 才算持久化。`translate.yml` 补译后
+> **自动提交到独立分支并开 PR**——PR 一合，那些 `.en.md` 就是版本库里的事实，
+> 下一次运行会跳过它们。**没有"每次从 0 翻"这回事**，前提是 PR 要合。
+> 中文改了而英文没跟上时，生成器会**只重译那一页**（判据与 `--check` 同一套）。
+> 手写的那几页（没有摘要行）默认不动；想让它们也纳入漂移追踪，跑一次 `--stamp`
+> 补上摘要行（只补行，不重译正文）。
 3. 在 `mkdocs.yml` 的 `nav:` 里登记一次（**不写语言后缀**）；英文导航另在
    `i18n` 插件的 `languages[en].nav` 下加一条。
 4. 跑 `uv run mkdocs build --strict`。语言选择器与 `hreflang` 链接由 `i18n` 插件生成，
@@ -69,8 +77,9 @@
 ```powershell
 uv run python scripts/translate.py --list      # 报账：哪些页待译、多少字符
 uv run python scripts/translate.py --check     # 门禁：英文落后于中文即非零退出
-uv run python scripts/translate.py             # 补译缺失的页
-uv run python scripts/translate.py --force     # 连已有英文页一起重译
+uv run python scripts/translate.py             # 译"缺失或落后"的页
+uv run python scripts/translate.py --stamp     # 只给手写英文页补摘要行（不重译）
+uv run python scripts/translate.py --force     # 全部重译（连已一致的）
 ```
 
 **额度与设置**：机器翻译通用版对**主账号每月 100 万字符**免费，超出 50 元/百万字符。

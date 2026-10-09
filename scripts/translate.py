@@ -10,15 +10,20 @@
   `--check` 靠它判"英文是否落后于中文".
 - **只译正文**:围栏代码块整块保留;行内代码 / 链接 / 图片 / 裸露 URL 先摘出成占位符,
   译完原样放回(一译就断链,坏锚点);表格分隔行不动.
-- **默认只补缺失的页**;已有英文页除非 `--force`,否则不覆盖——当前那几页是手写的.
+- **增量译,不从头来**:每次只处理"**缺英文页**"或"**英文页落后**"的那些页——
+  已一致的页一个字符都不送.故译文一旦落库,后续运行只花增量.
+- **手写页默认不动**:已有英文页若**没有**摘要行(即手写的),默认不覆盖;
+  要让它纳入漂移追踪,用 `--stamp` 补上摘要行(只补行,不重译正文).
 - 单次上限 5000 字符(阿里云文档),故按行分段;尾随空行归段落,不与正文一起送.
 
 用法::
 
     uv run python scripts/translate.py --list            # 只报账:哪些页待译,多少字符
     uv run python scripts/translate.py --check           # 门禁:英文落后于中文即非零退出
-    uv run python scripts/translate.py                   # 补译缺失的页
-    uv run python scripts/translate.py --force 页面...   # 重译指定页(或全部)
+    uv run python scripts/translate.py                   # 译"缺失或落后"的页
+    uv run python scripts/translate.py --stamp           # 只给手写英文页补摘要行(不重译)
+    uv run python scripts/translate.py --force           # 全部重译(连已一致的)
+    uv run python scripts/translate.py --force 页面...   # 重译指定页
 
 需要环境变量(CI 里由 secret 给):
 ``ALIBABA_CLOUD_ACCESS_KEY_ID`` 与 ``ALIBABA_CLOUD_ACCESS_KEY_SECRET``.
@@ -337,11 +342,43 @@ def _with_header(source: Doc, translated: str) -> str:
 
 
 # ---- 入口 ----
+def needs_translation(page: Doc) -> bool:
+    """这一页该不该(重新)译:**缺英文页**,或**英文页落后于中文**.
+
+    判据与 `--check` 同一套(都是拿头部那条 `translation-source-hash` 比),
+    故"门禁报落后"与"生成器会去重译"永远是同一件事.
+    已有英文页但**没有摘要行**的算"手写页"——默认不动它(`--stamp` 可纳入追踪).
+    """
+    if not page.target.is_file():
+        return True
+    recorded = _existing_hash(page.target)
+    return recorded is not None and recorded != page.source_hash
+
+
 def _planned(pages: list[Doc], *, force: bool) -> list[Doc]:
-    """该动手的页:缺失的,或 `--force` 下的全部."""
+    """该动手的页:缺失或落后的那些;`--force` 下是全部."""
     if force:
         return pages
-    return [page for page in pages if not page.target.is_file()]
+    return [page for page in pages if needs_translation(page)]
+
+
+def _stamp(pages: list[Doc]) -> int:
+    """给**已有的手写英文页**补上摘要行(不重译其正文);返回补了几页."""
+    count = 0
+    for page in pages:
+        if not page.target.is_file() or _existing_hash(page.target) is not None:
+            continue
+        text = page.target.read_text(encoding="utf-8")
+        head = _HASH_LINE.format(digest=page.source_hash)
+        lines = text.splitlines(keepends=True)
+        # 插在 SPDX 头之后(与 `_with_header` 的位置一致)
+        at = 0
+        while at < len(lines) and lines[at].lstrip().startswith("<!-- SPDX-"):
+            at += 1
+        page.target.write_text("".join([*lines[:at], f"{head}\n", *lines[at:]]), encoding="utf-8")
+        _say(f"[translate] 已补摘要行 {page.target.relative_to(ROOT).as_posix()}")
+        count += 1
+    return count
 
 
 def _check(pages: list[Doc]) -> int:
@@ -367,11 +404,16 @@ def _check(pages: list[Doc]) -> int:
 
 
 def main(argv: list[str]) -> int:
-    """按参数执行:报账 / 门禁 / 翻译."""
+    """按参数执行:报账 / 门禁 / 补摘要 / 翻译."""
     parser = argparse.ArgumentParser(description="英文译文生成器（阿里云机器翻译）")
     parser.add_argument("--list", action="store_true", help="只列出待译页与字符量")
     parser.add_argument("--check", action="store_true", help="门禁：英文落后于中文即非零退出")
-    parser.add_argument("--force", action="store_true", help="连已有英文页一起重译")
+    parser.add_argument("--force", action="store_true", help="连已一致的英文页一起重译")
+    parser.add_argument(
+        "--stamp",
+        action="store_true",
+        help="只给已有的手写英文页补摘要行（不重译正文），让它纳入漂移追踪",
+    )
     parser.add_argument("pages", nargs="*", help="只处理这些页（仓库相对路径，可省）")
     args = parser.parse_args(argv)
 
@@ -382,6 +424,10 @@ def main(argv: list[str]) -> int:
 
     if args.check:
         return _check(_source_pages())
+    if args.stamp:
+        count = _stamp(pages)
+        _say(f"[translate] 共补 {count} 页摘要行。")
+        return 0
 
     planned = _planned(pages, force=args.force)
     if args.list or not planned:

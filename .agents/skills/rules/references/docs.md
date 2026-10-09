@@ -78,13 +78,16 @@
 - **`resolve_closest: true` 必须开着**（`mkdocs.yml` 的 `autorefs` 插件）：`fallback_to_default`
   会把未译页渲染第二份，该开关让每个页面指回离自己最近的那一份，而不是逐条告警。
 - **`navigation.instant` 与语言选择器不兼容**，故不启用（切语言要整页跳转）。
-- **机翻只译正文**：围栏代码块整块保留，行内代码、链接、图片、裸 URL 先摘成占位符再放回；
-  **已有的英文页默认不覆盖**；产出**开 PR** 供人工校术语。
+- **机翻只译正文**：围栏代码块整块保留，行内代码、链接、图片、裸 URL 先摘成占位符再放回。
+  **增量译**：每次只处理"缺英文页"或"英文页落后"的，**已一致的页一个字符都不送**——
+  这是"译过就落库、不必每次从 0 翻"的机制保障；**手写页**（无摘要行）默认不动，
+  `--stamp` 可补摘要行纳入追踪。
   生成器 `scripts/translate.py`（阿里云机器翻译通用版，`TranslateGeneral`），
   `--check` 靠英文页头的 `translation-source-hash` 判漂移，`--list` 报账。
   工作流 `.github/workflows/translate.yml`（`drift` 无凭证即可跑；`translate` 需要
-  只授 `alimt:TranslateGeneral` 的 RAM AK）。额度：主账号每月 100 万字符免费，
-  本站全译一遍不到 10%。字符量用 `scripts/translate_chars.py` 量。
+  只授 `alimt:TranslateGeneral` 的 RAM AK，**补译后自动提交到独立分支并开 PR**——
+  译文进 `main` 才算持久化）。额度：主账号每月 100 万字符免费，本站全译一遍不到 10%。
+  字符量用 `scripts/translate_chars.py` 量。
 - 改中文页就要重译英文页；**两边不得停在两版**。已译清单与判定在
   `docs/reference/i18n-status.md`（那一页本身也是双语的）。
 

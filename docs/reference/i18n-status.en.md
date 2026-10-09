@@ -69,10 +69,20 @@ and the page carries no marker saying so. Treat the table above as the marker.
    - **translate the prose only**: fenced code blocks are kept whole, and inline code, links, images
      and bare URLs are lifted into placeholders and put back afterwards (translating them breaks
      links and anchors); table separator rows are left alone;
-   - **only missing pages are filled in by default** — an existing English page is not overwritten
-     (several are hand-written), unless `--force`;
+   - **translate incrementally, never from scratch**: each run only touches pages whose English
+     counterpart is **missing** or **stale**, and pages that already match are **not sent at all**.
+     Once a translation is committed, later runs cost only the delta;
    - the API accepts at most 5000 characters per request, so documents are split by line. The result
      **lands as a pull request**, so the terminology pass has a human in the loop.
+
+> **Committing is the point of that step**: a translation is only durable once it is on `main`.
+> `translate.yml` commits the output to its own branch and opens a pull request — merging it makes
+> those `.en.md` files part of the repository, and the next run skips them. **There is no "translate
+> everything again every time"**, as long as the pull request is merged. When a Chinese page changes
+> and its English counterpart has not followed, the generator re-translates **that page alone**
+> (using the same test as `--check`). The hand-written pages (no digest line) are left untouched by
+> default; run `--stamp` once to add the digest line and bring them under drift tracking (it writes
+> the line only, never the prose).
 3. Register the page once in `mkdocs.yml` under `nav:` (the suffix is not written there); for the
    English navigation, add the entry under the `i18n` plugin's `languages[en].nav`.
 4. Run `uv run mkdocs build --strict`. The language selector and the `hreflang` links are generated
@@ -81,8 +91,9 @@ and the page carries no marker saying so. Treat the table above as the marker.
 ```powershell
 uv run python scripts/translate.py --list      # report: which pages are pending, how many characters
 uv run python scripts/translate.py --check     # gate: a stale English page exits non-zero
-uv run python scripts/translate.py             # translate the missing pages
-uv run python scripts/translate.py --force     # re-translate existing English pages too
+uv run python scripts/translate.py             # translate the missing or stale pages
+uv run python scripts/translate.py --stamp     # add the digest line to hand-written pages only
+uv run python scripts/translate.py --force     # re-translate everything, matched pages included
 ```
 
 **Quota and setup**: the general-purpose edition gives the **main account 1,000,000 free characters
