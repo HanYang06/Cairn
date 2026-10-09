@@ -73,7 +73,7 @@ _INLINE_PATTERN = re.compile(
             r"!\[[^\]]*\]\([^)]*\)",  # 图片(连文字一起摘)
             r"\[[^\]]*\]\([^)]*\)",  # 链接(连文字一起摘:URL 与目标文件都不该译)
             r"<?https?://\S+>?",  # 裸露 URL
-            r"<!--.*?-->",  # HTML 注释
+            r"<!--[\s\S]*?-->",  # HTML 注释(用 [\s\S] 而非 .:跨行注释也要整段摘掉)
         ),
     ),
 )
@@ -233,11 +233,18 @@ def _percent_encode(value: str) -> str:
 
 
 def _signature(params: dict[str, str], secret: str, method: str = "GET") -> str:
-    """按阿里云 RPC 规则算签名(参数名与值各编一次,再整体编一次)."""
+    """按阿里云 RPC 规则算签名(参数名与值各编一次,再整体编一次).
+
+    这里用 HMAC-SHA1 **是接口规范规定的,不是可选的强度选择**:`SignatureMethod`
+    只支持 `HMAC-SHA1`,换 SHA-256 会被服务端拒签;而且它是**消息认证码**,
+    不是拿哈希保护明文或口令(CodeQL `py/weak-sensitive-data-hashing` 命中的是后者).
+    故按 CodeQL 的就地抑制语法标明"已知且有意为之",不把这条告警留在 PR 上.
+    """
     canonical = "&".join(
         f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in sorted(params.items())
     )
     string_to_sign = f"{method}&{_percent_encode('/')}&{_percent_encode(canonical)}"
+    # codeql[py/weak-sensitive-data-hashing] 协议强制 HMAC-SHA1,见 docstring
     digest = hmac.new(f"{secret}&".encode(), string_to_sign.encode(), hashlib.sha1).digest()
     return base64.b64encode(digest).decode()
 

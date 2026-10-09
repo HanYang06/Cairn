@@ -31,8 +31,10 @@ DOCS = ROOT / "docs"
 _FENCE = re.compile(r"^\s*(?:```|~~~)")
 #: 行内代码
 _INLINE_CODE = re.compile(r"`[^`]*`")
-#: HTML 注释(含 SPDX 头)
-_HTML_COMMENT = re.compile(r"<!--.*?-->")
+#: HTML 注释(含 SPDX 头).用 `[\s\S]` 而不是 `.`:后者默认不吃换行,
+#: 跨行注释会只匹配掉第一行,剩下的正文被当成要送译的内容(CodeQL `py/bad-tag-filter`
+#: 命中的正是这个形状,按其建议改成"任意字符含换行").
+_HTML_COMMENT = re.compile(r"<!--[\s\S]*?-->")
 #: Markdown 链接与图片的 URL 部分:保留链接文字,去掉 `(…)`
 _LINK_URL = re.compile(r"\]\([^)]*\)")
 #: 裸 URL
