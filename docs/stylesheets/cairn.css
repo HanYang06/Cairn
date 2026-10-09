@@ -1,0 +1,592 @@
+/*
+ * SPDX-FileCopyrightText: 2026 HanYang06
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Cairn 文档站主题：把前端令牌搬到 `mkdocs-material` 上，两处共用一套设计语言。
+ *
+ * 取值与判据见 `docs/architecture/ui_design/ui-theme.md`（§3.1 色板、§3.2 字号阶梯、
+ * §3.3 阴影与圆角），令牌本体是 `config/theme/tokens.json`——**色调、档位一律以那份为准**。
+ * 本文件是**投影**，不是第二份事实源；令牌改名或改值时，这里同步（规则见
+ * `rules/references/docs.md`「文档站自己的外观」）。
+ *
+ * 三个选择器族，改动方向只此三条：
+ *
+ * 1. `:root` —— 与前端同名同值的令牌（最外层 `cairn` 前缀，避免与站点内其它 CSS 相撞）；
+ * 2. `[data-md-color-scheme="default"]` / `["slate"]` —— 把令牌映射到 Material 的
+ *    `--md-*` 变量。**每一档都要写全**：Material 只按 `default` 与 `slate` 分档，
+ *    漏写的档会退回它自带的 GitHub 色，页面就会半套暖金、半套冷蓝；
+ * 3. 组件微调 —— 圆角随尺寸走、边界弱、阴影柔（`ui-theme.md` §3.3 的冻结口径）。
+ *
+ * **两处必须显式写、不能靠 Material 的默认**（它们都取 `--md-primary-fg-color`，
+ * 而本主题把那两个变量给了纸面）：
+ *
+ * - 顶栏与页脚的底色（`.md-header` / `.md-footer`）；
+ * - 主操作按钮（`.md-button--primary`）——默认会渲染成"浅底深字"，看着像没生效的按钮。
+ */
+
+/* ---------------------------------------------------------------- 令牌（与前端同名同值） */
+
+:root {
+  /* 色：浅色是默认档，深色由下面的 `slate` 覆盖（与 `tokens.css` 的纸面 / 面板三级明度一致） */
+  --cairn-bg: #f7f5f2;
+  --cairn-surface: #ffffff;
+  --cairn-elevated: #ffffff;
+  --cairn-border: #d8d5d0;
+  --cairn-border-faint: #e6e3de;
+  --cairn-text: #1f2328;
+  --cairn-muted: #57606a;
+  --cairn-faint: #6e7781;
+  --cairn-accent: #8a5f22;
+  --cairn-accent-hover: #a9752b;
+  --cairn-accent-alt: #1a7f37;
+  --cairn-accent-text: #ffffff;
+  --cairn-selection: #f3e7cf;
+  --cairn-hover: #efece7;
+  --cairn-danger: #cf222e;
+
+  /* 圆角：五档 + 胶囊，随尺寸走（小元素小圆角、大卡片大圆角） */
+  --cairn-radius-xs: 3px;
+  --cairn-radius-sm: 6px;
+  --cairn-radius: 8px;
+  --cairn-radius-lg: 10px;
+  --cairn-radius-xl: 12px;
+  --cairn-radius-pill: 999px;
+
+  /* 间距：与前端同一组档位，故"留白宽"是可核对的数，不是手调的 */
+  --cairn-space-xs: 4px;
+  --cairn-space-sm: 8px;
+  --cairn-space-md: 12px;
+  --cairn-space-lg: 16px;
+  --cairn-space-xl: 24px;
+
+  /* 字体：三层角色与前端一致；文档正文用阅读档，代码 / 表格用等宽档 */
+  --cairn-font-sans: system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC",
+    "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+  --cairn-font-mono: "Sarasa Mono SC", "Cascadia Mono", Consolas, "Source Han Mono SC",
+    "Noto Sans Mono CJK SC", monospace;
+
+  /* 字号：阶距照 §3.2，故文档站与界面在同一页里不出现"两套层级" */
+  --cairn-font-2xs: 11px;
+  --cairn-font-xs: 12px;
+  --cairn-font-sm: 14px;
+  --cairn-font-md: 17px;
+  --cairn-font-lg: 20px;
+  --cairn-font-xl: 26px;
+  --cairn-font-2xl: 36px;
+
+  /* 行高：文档是长文，故正文取 `snug`（1.65）那一档，比界面的 1.5 松 */
+  --cairn-leading-tight: 1.2;
+  --cairn-leading: 1.5;
+  --cairn-leading-snug: 1.65;
+  --cairn-leading-loose: 1.9;
+
+  /* 阴影：两层（贴边小偏移 + 大模糊），深色另给一档更重的黑（§3.3） */
+  --cairn-shadow-sm: 0 1px 2px rgb(0 0 0 / 8%), 0 1px 3px rgb(0 0 0 / 6%);
+  --cairn-shadow: 0 4px 12px rgb(0 0 0 / 10%), 0 1px 3px rgb(0 0 0 / 8%);
+}
+
+/* ------------------------------------------------------------------- 浅色：Material `default` */
+
+[data-md-color-scheme="default"] {
+  /* 侧栏与抽屉同用纸面，正文区用面板——与前端"外壳与工作区连成一片"同一条判据 */
+  --md-default-bg-color: var(--cairn-bg);
+  --md-default-fg-color: var(--cairn-text);
+  --md-default-fg-color--light: var(--cairn-muted);
+  --md-default-fg-color--lighter: var(--cairn-faint);
+  --md-default-fg-color--lightest: var(--cairn-border-faint);
+
+  --md-primary-fg-color: var(--cairn-surface);
+  --md-primary-fg-color--light: var(--cairn-elevated);
+  --md-primary-fg-color--dark: var(--cairn-surface);
+  --md-primary-bg-color: var(--cairn-text);
+  --md-primary-bg-color--light: var(--cairn-muted);
+
+  --md-accent-fg-color: var(--cairn-accent);
+  --md-accent-fg-color--transparent: rgb(138 95 34 / 10%);
+  --md-accent-bg-color: var(--cairn-accent-text);
+  --md-accent-bg-color--light: var(--cairn-accent-text);
+
+  --md-typeset-color: var(--cairn-text);
+  --md-typeset-a-color: var(--cairn-accent);
+
+  --md-code-fg-color: var(--cairn-text);
+  --md-code-bg-color: var(--cairn-hover);
+  --md-code-hl-color: rgb(138 95 34 / 16%);
+
+  --md-footer-bg-color: var(--cairn-surface);
+  --md-footer-bg-color--dark: var(--cairn-surface);
+  --md-footer-fg-color: var(--cairn-muted);
+  --md-footer-fg-color--light: var(--cairn-faint);
+  --md-footer-fg-color--lighter: var(--cairn-faint);
+
+  --md-shadow-z1: var(--cairn-shadow-sm);
+  --md-shadow-z2: var(--cairn-shadow);
+  --md-shadow-z3: var(--cairn-shadow);
+
+  /* 站点自有：侧栏 / 抽屉 / 正文 / 代码块四处底色（组件微调直接用） */
+  --cairn-chrome: var(--cairn-bg);
+  --cairn-code-bg: var(--cairn-hover);
+}
+
+/* --------------------------------------------------------------------- 深色：Material `slate` */
+
+[data-md-color-scheme="slate"] {
+  --cairn-bg: #0d1117;
+  --cairn-surface: #0d1117;
+  --cairn-elevated: #161b22;
+  --cairn-border: #30363d;
+  --cairn-border-faint: #21262d;
+  --cairn-text: #e6edf3;
+  --cairn-muted: #8b949e;
+  --cairn-faint: #6e7681;
+  --cairn-accent: #edb761;
+  --cairn-accent-hover: #f4c87e;
+  --cairn-accent-alt: #3fb950;
+  --cairn-accent-text: #241a08;
+  --cairn-selection: #3b2c13;
+  --cairn-hover: #161b22;
+  --cairn-danger: #f85149;
+
+  /* 深色底的阴影要比浅色更重，否则浮层与纸张连成一片（§3.3） */
+  --cairn-shadow-sm: 0 1px 2px rgb(0 0 0 / 40%), 0 1px 3px rgb(0 0 0 / 28%);
+  --cairn-shadow: 0 4px 12px rgb(0 0 0 / 48%), 0 1px 3px rgb(0 0 0 / 32%);
+
+  --md-hue: 212;
+  --md-default-bg-color: var(--cairn-bg);
+  --md-default-fg-color: var(--cairn-text);
+  --md-default-fg-color--light: var(--cairn-muted);
+  --md-default-fg-color--lighter: var(--cairn-faint);
+  --md-default-fg-color--lightest: var(--cairn-border-faint);
+
+  --md-primary-fg-color: var(--cairn-surface);
+  --md-primary-fg-color--light: var(--cairn-elevated);
+  --md-primary-fg-color--dark: var(--cairn-bg);
+  --md-primary-bg-color: var(--cairn-text);
+  --md-primary-bg-color--light: var(--cairn-muted);
+
+  --md-accent-fg-color: var(--cairn-accent);
+  --md-accent-fg-color--transparent: rgb(237 183 97 / 14%);
+  --md-accent-bg-color: var(--cairn-accent-text);
+  --md-accent-bg-color--light: var(--cairn-accent-text);
+
+  --md-typeset-color: var(--cairn-text);
+  --md-typeset-a-color: var(--cairn-accent);
+
+  --md-code-fg-color: var(--cairn-text);
+  --md-code-bg-color: var(--cairn-elevated);
+  --md-code-hl-color: rgb(237 183 97 / 18%);
+
+  --md-footer-bg-color: var(--cairn-surface);
+  --md-footer-bg-color--dark: var(--cairn-bg);
+  --md-footer-fg-color: var(--cairn-muted);
+  --md-footer-fg-color--light: var(--cairn-faint);
+  --md-footer-fg-color--lighter: var(--cairn-faint);
+
+  --md-shadow-z1: var(--cairn-shadow-sm);
+  --md-shadow-z2: var(--cairn-shadow);
+  --md-shadow-z3: var(--cairn-shadow);
+
+  --cairn-chrome: var(--cairn-bg);
+  --cairn-code-bg: var(--cairn-elevated);
+}
+
+/* ------------------------------------------------------------------------------ 版式与正文 */
+
+/*
+ * 字体从 Material 的 Roboto 换成前端那三层角色里的界面档 + 等宽档（§3.7）：
+ * Material 的默认字体由 `theme.font` 声明，`mkdocs.yml` 里不给时它仍会拉 Roboto，
+ * 而 Roboto 不含中文字形——不换就会出现"拉丁字 Roboto、汉字回退"的混排。
+ */
+:root {
+  --md-text-font-family: var(--cairn-font-sans);
+  --md-code-font-family: var(--cairn-font-mono);
+}
+
+/*
+ * 界面文字 14px；`.md-typeset` 抬到 17px（`ui-theme.md` §3.2 的"内容正文"档）。
+ * 正文颜色刻意不取纯黑：字号大、对比过强时阅读疲劳（同 §3.1"纸面不取纯白"一条的镜像）。
+ */
+.md-typeset {
+  font-family: var(--cairn-font-sans);
+  font-size: var(--cairn-font-md);
+  line-height: var(--cairn-leading-snug);
+  -webkit-font-smoothing: antialiased;
+}
+
+.md-typeset p,
+.md-typeset li {
+  line-height: var(--cairn-leading-snug);
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-typeset h5 {
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--cairn-text);
+}
+
+.md-typeset h1 {
+  margin-bottom: var(--cairn-space-lg);
+  font-size: var(--cairn-font-xl);
+  line-height: var(--cairn-leading-tight);
+}
+
+.md-typeset h2 {
+  margin-top: var(--cairn-space-xl);
+  font-size: var(--cairn-font-lg);
+  line-height: var(--cairn-leading-tight);
+}
+
+.md-typeset h3 {
+  margin-top: var(--cairn-space-xl);
+  font-size: var(--cairn-font-md);
+  line-height: var(--cairn-leading-tight);
+}
+
+/* 标题自带的分隔线由"弱边界"承担，不抢注意力（§3.1 的 `borderFaint`） */
+.md-typeset h2 {
+  padding-bottom: var(--cairn-space-xs);
+  border-bottom: 1px solid var(--cairn-border-faint);
+}
+
+.md-typeset a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.md-typeset hr {
+  border-bottom: 1px solid var(--cairn-border-faint);
+}
+
+.md-typeset blockquote {
+  padding-left: var(--cairn-space-md);
+  border-left: 3px solid var(--cairn-border);
+  color: var(--cairn-muted);
+}
+
+.md-typeset ::selection {
+  background: var(--cairn-selection);
+}
+
+/* ---------------------------------------------------------------------------------- 顶栏 */
+
+/*
+ * 顶栏用纸面色 + 一条弱边界：前端的外壳与工作区连成一片，顶栏不该是"另一块板"。
+ * 分界交给边界线，不靠底色差。
+ */
+.md-header {
+  background: var(--cairn-chrome);
+  border-bottom: 1px solid var(--cairn-border-faint);
+  box-shadow: none;
+  color: var(--cairn-text);
+}
+
+.md-header__title {
+  font-weight: 600;
+}
+
+/* 顶栏里的次要文字（仓库名、版本）用次要色，避免整条顶栏都在"喊" */
+.md-header__topic,
+.md-header__ellipsis {
+  color: var(--cairn-muted);
+}
+
+.md-header__button.md-icon {
+  color: var(--cairn-muted);
+  border-radius: var(--cairn-radius-sm);
+}
+
+.md-header__button.md-icon:hover {
+  background: var(--cairn-hover);
+  color: var(--cairn-text);
+}
+
+.md-header__button:focus-visible {
+  outline: 2px solid var(--cairn-accent);
+  outline-offset: 1px;
+}
+
+/* 标签页（导航 tabs）当胶囊：动作可以圆，容器不圆（§3.4） */
+.md-tabs {
+  background: var(--cairn-chrome);
+  border-bottom: 1px solid var(--cairn-border-faint);
+  color: var(--cairn-muted);
+}
+
+.md-tabs__link {
+  margin-top: var(--cairn-space-xs);
+  padding: 2px var(--cairn-space-md);
+  border-radius: var(--cairn-radius-pill);
+  font-size: var(--cairn-font-sm);
+  opacity: 1;
+}
+
+.md-tabs__link:hover {
+  background: var(--cairn-hover);
+  color: var(--cairn-text);
+}
+
+.md-tabs__item--active .md-tabs__link {
+  background: var(--cairn-selection);
+  color: var(--cairn-accent);
+}
+
+/* ------------------------------------------------------------------------------ 搜索框 */
+
+.md-search__form {
+  background: var(--cairn-surface);
+  border: 1px solid var(--cairn-border);
+  border-radius: var(--cairn-radius-lg);
+  box-shadow: none;
+}
+
+.md-search__form:hover {
+  background: var(--cairn-surface);
+  border-color: var(--cairn-accent);
+}
+
+.md-search__input {
+  color: var(--cairn-text);
+}
+
+.md-search__input::placeholder {
+  color: var(--cairn-faint);
+}
+
+.md-search__icon[for="__search"] {
+  color: var(--cairn-faint);
+}
+
+/* -------------------------------------------------------------------- 侧栏、抽屉与目录 */
+
+.md-sidebar {
+  color: var(--cairn-muted);
+}
+
+.md-nav {
+  font-size: var(--cairn-font-sm);
+  line-height: var(--cairn-leading);
+}
+
+.md-nav__title {
+  font-weight: 600;
+  color: var(--cairn-text);
+  box-shadow: none;
+}
+
+/*
+ * 悬停胶囊的**底色**要占满一行，但**文字位置不能动**：
+ * Material 的 lifted 导航已按"链接无内边距"算好了各层的对接
+ * （`[dir=ltr] .md-nav--lifted … > .md-nav { margin-left: -.6rem }` 抵掉父级 `.md-nav__title`
+ * 的 `.6rem`）。给链接加内边距会改盒模型，子项文字随之整体偏移——
+ * 那样"节标题比子项更靠右"，比不齐更难看（实测：标题 x=16、子项 x=8）。
+ * 故这里**只用负外边距把底色往外扩**，文字位置一动不动；
+ * 被包裹在 `.md-nav__container` 里的那条链接（节标题自成链接时）不参与——
+ * 它的外层 div 才是盒子，再往外扩会与左侧对齐打架。
+ */
+.md-nav__link {
+  padding: var(--cairn-space-xs) 0;
+  border-radius: var(--cairn-radius-sm);
+}
+
+.md-nav__link:not(.md-nav__container > .md-nav__link) {
+  margin-inline: calc(-1 * var(--cairn-space-sm));
+}
+
+/* 侧栏标题是容器、不是动作：没有悬停底色，故不跟着往外扩。 */
+.md-nav__title {
+  margin-inline: var(--cairn-space-sm);
+}
+
+.md-nav__link:hover {
+  background: var(--cairn-hover);
+  color: var(--cairn-text);
+}
+
+.md-nav__link--active,
+.md-nav__item--active > .md-nav__link,
+.md-nav__link--passed {
+  color: var(--cairn-accent);
+}
+
+.md-nav--secondary .md-nav__title {
+  border-bottom: 1px solid var(--cairn-border-faint);
+}
+
+/* 抽屉与侧栏对齐：Material 的抽屉默认带自己的底色，不回填就会露出它自带的色 */
+.md-sidebar--primary,
+.md-sidebar--secondary,
+.md-nav--primary .md-nav__title[for="__drawer"] {
+  background: var(--cairn-bg);
+}
+
+/* ------------------------------------------------------------------------------ 正文面 */
+
+.md-main__inner {
+  margin-top: var(--cairn-space-lg);
+}
+
+.md-content__inner {
+  padding-bottom: var(--cairn-space-xl);
+}
+
+/* ---------------------------------------------------------- 代码、表格、提示块与页脚 */
+
+.md-typeset code,
+.md-typeset kbd,
+.md-typeset pre {
+  font-family: var(--cairn-font-mono);
+}
+
+.md-typeset :not(pre) > code {
+  padding: 0.15em 0.4em;
+  border: 1px solid var(--cairn-border-faint);
+  border-radius: var(--cairn-radius-xs);
+  background: var(--cairn-code-bg);
+  font-size: 0.85em;
+  box-shadow: none;
+}
+
+.md-typeset pre > code {
+  border: 1px solid var(--cairn-border-faint);
+  border-radius: var(--cairn-radius);
+  background: var(--cairn-code-bg);
+  font-size: 0.85em;
+  line-height: var(--cairn-leading);
+  box-shadow: none;
+}
+
+.md-typeset .highlight span.filename {
+  border-radius: var(--cairn-radius) var(--cairn-radius) 0 0;
+  background: var(--cairn-elevated);
+  font-family: var(--cairn-font-mono);
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-width: 1px;
+  border-radius: var(--cairn-radius-lg);
+  background: var(--cairn-surface);
+  font-size: var(--cairn-font-sm);
+  box-shadow: var(--cairn-shadow-sm);
+}
+
+.md-typeset .admonition > .admonition-title,
+.md-typeset details > summary {
+  border-radius: var(--cairn-radius-lg) var(--cairn-radius-lg) 0 0;
+}
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--cairn-border-faint);
+  border-radius: var(--cairn-radius-lg);
+  font-size: var(--cairn-font-sm);
+  box-shadow: none;
+}
+
+.md-typeset table:not([class]) th {
+  background: var(--cairn-hover);
+  font-weight: 600;
+  color: var(--cairn-text);
+}
+
+.md-typeset table:not([class]) td {
+  border-top: 1px solid var(--cairn-border-faint);
+}
+
+.md-typeset table:not([class]) tr:hover {
+  background: var(--cairn-hover);
+}
+
+.md-footer {
+  border-top: 1px solid var(--cairn-border-faint);
+}
+
+.md-copyright {
+  color: var(--cairn-faint);
+  font-size: var(--cairn-font-xs);
+}
+
+/* 回到顶部：只给一个圆形浮层，不做常驻装饰 */
+.md-top {
+  border-radius: var(--cairn-radius-pill);
+  background: var(--cairn-elevated);
+  border: 1px solid var(--cairn-border-faint);
+  box-shadow: var(--cairn-shadow-sm);
+  font-size: var(--cairn-font-xs);
+}
+
+/* ------------------------------------------------------------------------------ 动作按钮 */
+
+/*
+ * 动作按钮照前端 `.pill`（`app/src/atoms/pill/pill.css`）：**胶囊 · 实心 accent 底**
+ * = 一屏最多一个主操作（§3.4）。
+ *
+ * 必须显式写：Material 的 `.md-button--primary` 取的是 `--md-primary-fg-color`，
+ * 而本主题把那个变量给了**纸面**（顶栏用的就是它），于是默认渲染成"浅底深字"——
+ * 一个看着像没生效的按钮（正是观感不对劲的来源）。
+ * 悬停同理：Material 走 `--md-accent-fg-color`，那正是 accent 色，一悬停就与常态撞色。
+ */
+.md-typeset .md-button {
+  padding: var(--cairn-space-xs) var(--cairn-space-md);
+  border: 1px solid var(--cairn-border);
+  border-radius: var(--cairn-radius-pill);
+  background: transparent;
+  color: var(--cairn-muted);
+  font-size: var(--cairn-font-sm);
+  font-weight: 500;
+  line-height: var(--cairn-leading-tight);
+}
+
+.md-typeset .md-button:hover,
+.md-typeset .md-button:focus {
+  border-color: var(--cairn-border);
+  background: var(--cairn-hover);
+  color: var(--cairn-text);
+}
+
+.md-typeset .md-button--primary {
+  border-color: var(--cairn-accent);
+  background: var(--cairn-accent);
+  color: var(--cairn-accent-text);
+}
+
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus {
+  border-color: var(--cairn-accent-hover);
+  background: var(--cairn-accent-hover);
+  color: var(--cairn-accent-text);
+}
+
+/* 按钮里的图标短码要与字对齐、且不随字号被放大 */
+.md-typeset .md-button .twemoji,
+.md-typeset .md-button svg {
+  height: 1.1em;
+  width: 1.1em;
+  vertical-align: -0.15em;
+}
+
+/*
+ * 图标随文字色：短码生成的 SVG **在 `path` 上写死 `fill`（深灰 #1C1E21）**，
+ * 元素上的呈现属性比任何 CSS 声明都硬，故图标在 accent 底上会看不见。
+ * 只对按钮里的图标覆盖（`!important` 专治呈现属性），别处的图标仍保留自带的彩色 fill。
+ */
+.md-typeset .md-button .twemoji svg path {
+  fill: currentcolor !important;
+}
+
+/* --------------------------------------------------------------------------- 动效与焦点 */
+
+/*
+ * 只做功能性过渡（§3.5）：悬停 / 选中一律即时，避免相邻项交叉淡入被看成同时高亮。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}

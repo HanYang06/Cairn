@@ -15,15 +15,30 @@ edit_uri: edit/main/docs/
 
 copyright: Copyright &copy; 2026 HanYang06 · Apache-2.0
 
+# 站点主题与前端主题（`config/theme/tokens.json`）共用一套设计语言：
+# 纸面底、暖金强调、弱边界、柔阴影、圆角随尺寸走。取值与判据见
+# `docs/architecture/ui_design/ui-theme.md` §3，投影在 `docs/stylesheets/cairn.css`
+# （只覆盖主题自带的 CSS，不用 `custom_dir` 覆盖模板）。
+extra_css:
+  - stylesheets/cairn.css
+
 theme:
   name: material
-  language: zh
+  # 语言不由这里定：**按 locale 分档**由 i18n 插件的 `reconfigure_material` 逐个重建
+  # （英文档取 `en`、中文档取 `zh`），故这里不写 `language`——写了会把两档压成同一个。
+  # 站点图标用自己的品牌 mark（`docs/assets/brand/cairn-256.png` 由 `assets/logo/cairn-icon.png`
+  # 缩到 256px 得到，源头是项目自有图形）。**不得留主题自带的占位图标**：
+  # 那是别人的商标，与"这个站在讲谁"直接冲突。
+  logo: assets/brand/cairn-256.png
+  favicon: assets/brand/cairn-256.png
   features:
     - content.action.edit
     - content.code.copy
     - content.tabs.link
     - navigation.indexes
-    - navigation.instant
+    # `navigation.instant` **故意不开**：它与插件的**逐页**语言选择器不兼容
+    # （`mkdocs-static-i18n` 的警告：instant 是 SPA 式替换，切语言需要整页跳转）。
+    # 取舍：宁可少一层无刷新导航，也要"切语言停在当前页"。
     - navigation.sections
     - navigation.tabs
     - navigation.top
@@ -33,7 +48,8 @@ theme:
     - search.suggest
     - toc.follow
   palette:
-    # 色盘照 GitHub（与 `config/theme/*.json` 同源），先浅后深、跟随系统
+    # Material 只有 `default`（浅）与 `slate`（深）两档版式；两档都按 `cairn.css`
+    # 的同名令牌重新上色，故浅色是纸面而非纯白、深色是石面而非纯黑。
     - media: "(prefers-color-scheme: light)"
       scheme: default
       toggle:
@@ -46,8 +62,11 @@ theme:
         name: 切换到浅色
   icon:
     repo: fontawesome/brands/github
+    alternate: material/translate
 
 nav:
+  # nav 用**默认语言（中文）**的条目名；英文档的条目名由插件的 `nav_translations.en` 给。
+  # 页面路径**不带语言后缀**——插件按后缀找译文（`guides/quickstart.en.md` ↔ `.md`）。
   - 首页: index.md
   - 向导:
       - 快速开始: guides/quickstart.md
@@ -74,19 +93,68 @@ nav:
       - UI 主题: architecture/ui_design/ui-theme.md
   - 路线图:
       - 1.x: roadmap/1.x.md
-      - 结构说明: roadmap/README.md
+      - 结构说明: roadmap/index.md
   - API 参考:
       - api/index.md
       - core（底座）: api/core.md
   - 术语: reference/glossary.md
   - 配置项参考: reference/config.md
+  - 译文状态: reference/i18n-status.md
   - 贡献与许可: contributing.md
 
 plugins:
+  # 多语言（Static i18n，MIT，**构建期依赖**）：默认语言 `en`，中文为译文（`docs/**/*.zh.md`）。
+  # 判定规则由插件的 suffix 模式给出——**带 `.<locale>` 后缀的算译文，不带后缀的归默认语言**，
+  # 故中文源文件必须带 `.zh`。英文是默认语言 → 挂在站点根 `/`，中文在 `/zh/`。
+  # 语言选择器由插件注入 `extra.alternate`（`extra` 里那份 `alternate` 会被它覆盖，故只在
+  # 这里配 `name`，链接由它按页面路径自动对齐——"切语言留在同一页"由此成立）。
+  # 未译的页面走 `fallback_to_default`：中文链接落到英文正文，故**译文要逐页补齐**。
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      # 语言口径（2026-10-10 作者定，见 `docs/reference/i18n-status.md`）：
+      # **中文是事实基础**——它是作者亲手写的；**英文是机器翻译的产物**（`docs/**/*.en.md`）。
+      # 判定因此只看扩展名：**带 `.<locale>` 后缀的是译文，不带后缀的归默认语言**。
+      # 默认语言取 `zh` 还有一条构建理由：`mkdocs build --strict` 的"nav 指向不存在的页"
+      # 只在**默认语言**里判定，而英文现在只译 6 页；把 `en` 设为默认就得给 14 个未译页
+      # 各补一个英文占位页。反过来（中文默认），未译页由 `fallback_to_default` 落到中文正文，
+      # 两边站点都完整。英文读者的入口优先级由语言选择器的**第一项**承担。
+      languages:
+        - locale: zh
+          name: 中文
+          default: true
+          site_name: Cairn · 巨石堆
+          site_description: 本地优先的内容寻址对象池 / 笔记 · 资产 · 项目工作台
+        - locale: en
+          name: English
+          site_name: Cairn
+          site_description: Local-first content-addressed object pool for notes, assets and projects
+          # 英文档**只列已译的页**：未译的页若留在英文 nav 里，插件会把中文正文渲染出第二份
+          # URL（`/en/architecture/…`），`mkdocs-autorefs` 立刻报"同一标识有两个主 URL"，
+          # `--strict` 因此失败（实测）。拿掉那些条目后，`/en/` 只含真正的英文页，
+          # 其余页面通过语言选择器回到默认语言（`fallback_to_default`）。
+          # 待译清单与判定见 `docs/reference/i18n-status.md`。
+          nav:
+            - Home: index.md
+            - Guides:
+                - Quickstart: guides/quickstart.md
+                - Development: guides/development.md
+                - Conventions: guides/conventions.md
+            - Reference:
+                - Translation status: reference/i18n-status.md
+            - Contributing and licensing: contributing.md
   - search:
       lang:
         - zh
         - en
+  # 交叉引用解析（`mkdocstrings` 依赖它）。**必须显式开 `resolve_closest`**：
+  # 多语言下同一标识会有两个主 URL（`api/core/#…` 与 `en/api/core/#…`，后者是
+  # `fallback_to_default` 把未译页渲染出的第二份），`mkdocs-autorefs` 默认对此
+  # **每条发一次 warning**（实测 89 条），`--strict` 下即失败。
+  # 开了之后它按"离当前页最近"选 URL，不再告警；两种语言各自指回自己那一份。
+  - autorefs:
+      resolve_closest: true
   - mkdocstrings:
       handlers:
         python:
@@ -115,6 +183,13 @@ markdown_extensions:
   - footnotes
   - md_in_html
   - tables
+
+  # 图标 / emoji 短码（`docs/index.md` 的「快速开始」按钮用 `:octicons-rocket-24:`）。
+  # 不配这一节时短码会**原样显示成字面文本**；图标集由 Material 自带（Material Design /
+  # FontAwesome / Octicons / Simple Icons），故不引外部图标依赖。
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - toc:
       # 保留中文字符做锚点（默认 slugify 会把中文剥成 `_1`，页内链接失效）
       slugify: !!python/object/apply:pymdownx.slugs.slugify
@@ -142,6 +217,14 @@ markdown_extensions:
       custom_checkbox: true
 
 extra:
+  # 语言选择器：`extra.alternate` 是 Material 的入口（顶栏下拉 ＋ 每页 `<link rel="alternate">`）。
+  # 这里的 `name` / `lang` 是**给插件补链接用的**——每个语言构建一遍时，`i18n` 插件会把
+  # `link` 换成本页在那一语言下的路径，于是"切语言留在同一页"由它保证，不写死任何 URL。
+  alternate:
+    - name: English
+      lang: en
+    - name: 中文
+      lang: zh
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/HanYang06/cairn

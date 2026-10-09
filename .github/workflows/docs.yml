@@ -8,6 +8,8 @@
 
 name: docs
 
+# 触发面里 `docs/**` 已覆盖文档站的自定义样式（`docs/stylesheets/cairn.css`）：
+# 改主题即重建，不需要为样式单列一条 path 过滤。
 on:
   push:
     branches: [main]
@@ -33,7 +35,6 @@ on:
       - "NOTICE"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
-
 permissions:
   contents: read
 
