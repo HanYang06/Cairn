@@ -199,9 +199,15 @@ jobs:
       # 前端依赖的 CVE。**必须显式指官方 registry**：本仓 npm 源配的是
       # registry.npmmirror.com，它没实现 audit 端点，裸跑 `pnpm audit` 会直接报
       # ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS（实测）。
+      #
+      # `--ignore` 里**只放一条**：`braces <=3.0.3`（GHSA-vfj7-8cjw-p6xm，经
+      # `stylelint → micromatch` 进来的传递依赖）**上游还没有补丁**（`Patched versions: None`，
+      # 2026-10-10 实测），顶不了版本；另一条 `source-map-js` 已在 `app/pnpm-workspace.yaml`
+      # 用 override 顶到 `^1.2.2`，不走豁免。**只豁免这一个 GHSA**：任何新公告照样让这一步红。
+      # 理由与到期条件：`quality.md` 的安全扫描一节 + 记忆 `仓库治理.md`。
       - name: Frontend dependency audit (pnpm audit)
         working-directory: app
-        run: pnpm audit --registry https://registry.npmjs.org --audit-level low
+        run: pnpm audit --registry https://registry.npmjs.org --audit-level low --ignore GHSA-vfj7-8cjw-p6xm
 
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
