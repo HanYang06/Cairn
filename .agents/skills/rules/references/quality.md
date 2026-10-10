@@ -152,7 +152,7 @@
 | **CodeQL**（`codeql.yml`） | push/PR 到 main · 每周一 | **跨文件污点传播**（Python / JS-TS） | ✅ |
 | **dependency-review**（`ci.yml`） | **每个 PR** | 本次改动**新增**的有漏洞依赖 | ✅（moderate 起） |
 | **pip-audit**（`ci.yml`） | push 到 main · 手动 | Python 依赖的已知 CVE | ✅（实测零命中） |
-| **pnpm audit**（`ci.yml`） | push 到 main · 手动 | 前端依赖的已知 CVE | ✅（实测零命中） |
+| **pnpm audit**（`ci.yml`） | push 到 main · 手动 | 前端依赖的已知 CVE | ✅（命中即处理：能顶版本就顶，**无补丁的按单条 GHSA 豁免**并写明到期条件） |
 | **gitleaks**（`ci.yml`） | push 到 main · 手动 | 提交历史里的密钥 / 令牌 | ✅ |
 | **ruff `S` 族**（`ci.yml`） | 每个 PR | 单文件里的危险写法 | ✅ |
 
@@ -160,10 +160,16 @@
 主分支上跑**全量**（audit / gitleaks）。反过来会让一堆历史遗留问题把无关的 PR 卡死，
 而门禁一旦常年红，人就会开始绕它——那比没有门禁更糟。
 
-**两条实现要点（都是踩过的）**：
+**五条实现要点（都是踩过的）**：
 
 - **`pnpm audit` 必须显式指官方 registry**：本仓 npm 源配的是 `registry.npmmirror.com`，
   它没实现 audit 端点，裸跑直接报 `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`。
+- **pnpm 10 起不再读 `package.json` 的 `pnpm` 字段**：想加 `overrides` 得写
+  `app/pnpm-workspace.yaml`（实测 pnpm 12.8.1：写在 `package.json` 里只回一条
+  `[WARN] ... no longer read by pnpm ... ignored: "pnpm.overrides"`，然后**什么都不做**）。
+- **无补丁的漏洞按单条 GHSA 豁免，不用 `--ignore-unfixable`**：后者把"所有没有补丁的漏洞"
+  一次性闭眼放过，将来真出现必须处理的也不会有人发现。当前那一条（`braces`）的理由与
+  到期条件写在 `ci.yml` 的审计步骤旁，裁定记在记忆 `仓库治理.md`。
 - **`pip-audit` 断言的是"已装环境"**：本仓 `pip-audit` 报 `cairn ... not found on PyPI` 是
   **正常**的（自身未发布 PyPI），不是失败；它扫的是依赖树。
 - **要按 CI 的路径验，别只看本机**：本机 `.venv` 往往是旧的，会漏掉"锁文件里已经有的 CVE"。
