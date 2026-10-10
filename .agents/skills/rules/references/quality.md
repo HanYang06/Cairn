@@ -160,10 +160,14 @@
 主分支上跑**全量**（audit / gitleaks）。反过来会让一堆历史遗留问题把无关的 PR 卡死，
 而门禁一旦常年红，人就会开始绕它——那比没有门禁更糟。
 
-**五条实现要点（都是踩过的）**：
+**六条实现要点（都是踩过的）**：
 
 - **`pnpm audit` 必须显式指官方 registry**：本仓 npm 源配的是 `registry.npmmirror.com`，
   它没实现 audit 端点，裸跑直接报 `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`。
+- **`setup-node` 的 `cache: pnpm` 只给真正 `pnpm install` 的 job**：`security-scan` 只跑
+  `pnpm audit`（读锁文件问 registry，不装依赖），pnpm store 目录因此不存在，而收尾步骤要拿它
+  存缓存 → 报 `Path Validation Error: Path(s) specified in the action for caching do(es) not exist`
+  并让 job 变红（实测 run 38010260690）。此前它一直藏在"审计先红、收尾步骤被跳过"后面。
 - **pnpm 10 起不再读 `package.json` 的 `pnpm` 字段**：想加 `overrides` 得写
   `app/pnpm-workspace.yaml`（实测 pnpm 12.8.1：写在 `package.json` 里只回一条
   `[WARN] ... no longer read by pnpm ... ignored: "pnpm.overrides"`，然后**什么都不做**）。
